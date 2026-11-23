@@ -17,7 +17,7 @@ class CloudVoiceLimits(BaseModel):
 
 
 class CloudVoiceUsage(BaseModel):
-    """The caller's audio transcribed today (UTC) against the daily limit."""
+    """The caller's audio transcribed today (UTC). ``limit_seconds`` 0: no daily limit."""
 
     used_seconds: int
     limit_seconds: int

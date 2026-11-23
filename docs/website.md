@@ -519,7 +519,7 @@ answer and the shared footer; the sitemap lists it.
   `test_marketing.py` pins all of it, plus the voice facts the page states.
   The page never says what runs the Mobaide Cloud speech service; it names only
   what the user can check (no install, the audio is not kept, the text is kept up
-  to 14 days, a daily allowance).
+  to 14 days).
 - **Where the numbers come from.** Change the page when any of these changes:
 
   | Source | Supplies |

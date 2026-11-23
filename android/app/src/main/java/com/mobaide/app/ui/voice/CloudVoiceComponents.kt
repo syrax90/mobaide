@@ -372,9 +372,11 @@ fun CloudVoicePanel(
         }
         if (settings) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                PanelNote(
-                    "Used today: " + VoiceRouting.formatUsage(cloud.usage.used_seconds, cloud.usage.limit_seconds),
-                )
+                if (CloudVoiceCopy.hasDailyLimit(cloud)) {
+                    PanelNote(
+                        "Used today: " + VoiceRouting.formatUsage(cloud.usage.used_seconds, cloud.usage.limit_seconds),
+                    )
+                }
                 PanelNote("Recording: Up to ${VoiceRouting.formatAllowance(cloud.limits.max_seconds)} each")
             }
             Column {

@@ -201,7 +201,9 @@ struct CloudVoicePanel: View {
             stateContent
             if settings {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Used today: \(usage)")
+                    if CloudVoiceCopy.hasDailyLimit(cloud) {
+                        Text("Used today: \(usage)")
+                    }
                     Text("Recording: Up to \(CloudVoiceCopy.formatAllowance(seconds: cloud.limits.max_seconds)) each")
                 }
                 .font(.caption)

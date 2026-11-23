@@ -14,11 +14,19 @@ object CloudVoiceCopy {
 
     const val CLOUD_SUMMARY = "Works right away. Nothing to install on your computer."
 
-    fun cloudDetails(cloud: CloudVoiceStatus): String =
-        "Your recording goes over an encrypted connection to Mobaide’s speech service, which " +
+    fun cloudDetails(cloud: CloudVoiceStatus): String {
+        val perDay = if (hasDailyLimit(cloud)) {
+            " and ${VoiceRouting.formatAllowance(cloud.usage.limit_seconds)} per day"
+        } else {
+            ""
+        }
+        return "Your recording goes over an encrypted connection to Mobaide’s speech service, which " +
             "turns it into text. The audio is not kept. The text is kept for a short time to " +
-            "prevent abuse. Up to ${VoiceRouting.formatAllowance(cloud.limits.max_seconds)} per recording and " +
-            "${VoiceRouting.formatAllowance(cloud.usage.limit_seconds)} per day."
+            "prevent abuse. Up to ${VoiceRouting.formatAllowance(cloud.limits.max_seconds)} per recording$perDay."
+    }
+
+    /** A `limit_seconds` of 0 means the server sets no daily limit. */
+    fun hasDailyLimit(cloud: CloudVoiceStatus): Boolean = cloud.usage.limit_seconds > 0
 
     fun localSummary(agentName: String): String =
         "Private: $agentName turns your speech into text itself."

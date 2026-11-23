@@ -135,7 +135,7 @@ All routes take the user token (`Authorization: Bearer`, the same token as `/api
 
 #### Cloud voice status
 
-`GET /api/voice/cloud` → `CloudVoiceStatus {"state", "limits": {"sample_rate", "max_seconds", "max_chunk_bytes"}, "usage": {"used_seconds", "limit_seconds", "resets_at"}, "engines": {"<agent_id>": "cloud" | "local"}}`, every key always present.
+`GET /api/voice/cloud` → `CloudVoiceStatus {"state", "limits": {"sample_rate", "max_seconds", "max_chunk_bytes"}, "usage": {"used_seconds", "limit_seconds", "resets_at"}, "engines": {"<agent_id>": "cloud" | "local"}}`, every key always present. `usage.limit_seconds` is `0` when the server sets no daily limit for an account (the default); clients then show no daily allowance and no "Used today" row.
 
 | `state` | Meaning |
 |---|---|

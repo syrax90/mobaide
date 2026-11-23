@@ -1434,7 +1434,7 @@ export interface components {
         };
         /**
          * CloudVoiceUsage
-         * @description The caller's audio transcribed today (UTC) against the daily limit.
+         * @description The caller's audio transcribed today (UTC). ``limit_seconds`` 0: no daily limit.
          */
         CloudVoiceUsage: {
             /** Limit Seconds */
