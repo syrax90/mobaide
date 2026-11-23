@@ -73,6 +73,7 @@ private struct SessionListContent: View {
                     model.clearError()
                 }
             }
+            .onDisappear { model.endAutoResume() }
             .onChange(of: model.notice) { _, newValue in
                 if let newValue {
                     toast = ToastMessage(text: newValue)

@@ -19,7 +19,8 @@ struct NWWebSocketTransportFactory: WebSocketTransportFactory {
 ///
 /// - Network.framework has no built-in ping interval (OkHttp's
 ///   `pingInterval(30s)` equivalent), so a client-driven ping task sends a
-///   ping frame every `pingInterval`.
+///   ping frame every `pingInterval` and fails the connection when the
+///   previous ping got no pong.
 /// - Server close frames can arrive either as receive-loop metadata
 ///   (`opcode == .close`) or as a connection failure; both paths emit exactly
 ///   one terminal event on the stream.
@@ -43,6 +44,7 @@ final class NWWebSocketConnection: WebSocketTransportConnection, @unchecked Send
     private let lock = NSLock()
     private var pingTask: Task<Void, Never>?
     private var finished = false
+    private var awaitingPong = false
 
     init(url: URL, pingInterval: Duration, sleeper: any Sleeper) {
         self.pingInterval = pingInterval
@@ -175,9 +177,25 @@ final class NWWebSocketConnection: WebSocketTransportConnection, @unchecked Send
         lock.withLock { pingTask = task }
     }
 
+    /// A ping still unanswered at the next tick means the peer is gone even
+    /// though TCP keeps taking bytes (a half-open socket), so the connection
+    /// fails and `WebSocketCore` reconnects (OkHttp `pingInterval` parity).
     private func sendPing() {
+        let missedPong = lock.withLock {
+            let missed = awaitingPong
+            awaitingPong = true
+            return missed
+        }
+        if missedPong {
+            emitFailureAndFinish(.posix(.ETIMEDOUT))
+            connection.cancel()
+            return
+        }
         let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
-        metadata.setPongHandler(queue) { _ in }
+        metadata.setPongHandler(queue) { [weak self] error in
+            guard let self, error == nil else { return }
+            self.lock.withLock { self.awaitingPong = false }
+        }
         let context = NWConnection.ContentContext(identifier: "ping", metadata: [metadata])
         connection.send(content: nil, contentContext: context, isComplete: true, completion: .contentProcessed { _ in })
     }

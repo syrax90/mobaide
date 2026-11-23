@@ -56,6 +56,14 @@ final class SessionListModel {
     /// navigated, so returning to the list does not replay the cached id.
     func clearAutoResume() { navBroadcaster.clearReplay() }
 
+    /// Auto-resume reopens the last session only for a list the user is still
+    /// looking at. Once the list is covered it never fires: a session the user
+    /// creates from it would otherwise be pushed a second time on top of itself.
+    func endAutoResume() {
+        didAttemptAutoResume = true
+        navBroadcaster.clearReplay()
+    }
+
     func observeSessions() async {
         for await list in repository.sessions() {
             sessions = list

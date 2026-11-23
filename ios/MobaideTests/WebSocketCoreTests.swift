@@ -23,6 +23,51 @@ final class WebSocketCoreTests: XCTestCase {
         }
     }
 
+    /// A URL lookup that stays suspended until the test opens it, so a test can
+    /// run other core calls while a connect waits inside `urlProvider`.
+    private final class URLGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var isOpen = false
+        private var passing: Int
+        private var callCount = 0
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        /// The first `passing` lookups return at once.
+        init(passing: Int = 0) { self.passing = passing }
+
+        var calls: Int { lock.withLock { callCount } }
+
+        func url() async -> String? {
+            await withCheckedContinuation { continuation in
+                let resumeNow = lock.withLock { () -> Bool in
+                    callCount += 1
+                    if isOpen || callCount <= passing { return true }
+                    waiters.append(continuation)
+                    return false
+                }
+                if resumeNow { continuation.resume() }
+            }
+            return "ws://host/ws/events?token=t"
+        }
+
+        func open() {
+            let pending = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+                isOpen = true
+                defer { waiters.removeAll() }
+                return waiters
+            }
+            pending.forEach { $0.resume() }
+        }
+
+        func waitForCalls(_ count: Int, timeout: Duration = .seconds(5)) async throws {
+            let deadline = ContinuousClock.now.advanced(by: timeout)
+            while calls < count {
+                guard ContinuousClock.now < deadline else { throw CollectorTimeout() }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+        }
+    }
+
     private func makeCore(
         factory: FakeWebSocketTransportFactory,
         sleeper: RecordingSleeper = RecordingSleeper(),
@@ -272,6 +317,52 @@ final class WebSocketCoreTests: XCTestCase {
 
         let suppressed = await factory.assertNoConnection(beyond: 1)
         XCTAssertTrue(suppressed)
+    }
+
+    func testDisconnectDuringASlowURLLookupOpensNoSocket() async throws {
+        let factory = FakeWebSocketTransportFactory()
+        let gate = URLGate()
+        let (core, collector) = makeCore(factory: factory, url: { await gate.url() })
+
+        let connecting = Task { await core.connect() }
+        try await gate.waitForCalls(1)
+        await core.disconnect()
+        gate.open()
+        await connecting.value
+
+        XCTAssertTrue(factory.connections.isEmpty, "a connect that lost to a disconnect must not open a socket")
+        let clean = await collector.noPendingEvents()
+        XCTAssertTrue(clean, "a cancelled connect must not emit events: \(collector.all)")
+    }
+
+    func testConcurrentForceReconnectsOpenOneSocket() async throws {
+        let factory = FakeWebSocketTransportFactory()
+        let gate = URLGate(passing: 1)
+        let (core, collector) = makeCore(factory: factory, url: { await gate.url() })
+        await core.connect()
+        let first = try await factory.connection(1)
+        first.emit(.opened)
+        let opened = try await collector.next()
+        XCTAssertEqual(opened, .connected)
+
+        // Both reconnects wait in the URL lookup before either opens a socket.
+        let older = Task { await core.forceReconnect() }
+        try await gate.waitForCalls(2)
+        let newer = Task { await core.forceReconnect() }
+        try await gate.waitForCalls(3)
+        gate.open()
+        await older.value
+        await newer.value
+
+        let single = await factory.assertNoConnection(beyond: 2)
+        XCTAssertTrue(single, "the superseded reconnect must not open a second socket: \(factory.connections.count)")
+        XCTAssertEqual(first.closeCalls.map(\.reason), ["Force reconnect"])
+        let second = try await factory.connection(2)
+        second.emit(.opened)
+        let reopened = try await collector.next()
+        XCTAssertEqual(reopened, .connected)
+        let clean = await collector.noPendingEvents()
+        XCTAssertTrue(clean, "one socket means one set of events: \(collector.all)")
     }
 
     func testSendWithoutConnectionEmitsErrorAndReturnsFalse() async throws {

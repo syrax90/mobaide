@@ -35,6 +35,9 @@ struct ChatScreen: View {
     @Environment(DeepLinkCoordinator.self) private var deepLink
     @Environment(\.mobaideColors) private var colors
     @Environment(\.scenePhase) private var scenePhase
+    /// The model counts the screens showing it, and SwiftUI can fire `onAppear`
+    /// again without an `onDisappear`, so each instance counts once per visit.
+    @State private var countedVisible = false
 
     init(
         container: AppContainer,
@@ -226,11 +229,17 @@ struct ChatScreen: View {
         }
         .onAppear {
             model.setAppActive(scenePhase != .background)
-            model.markVisible()
+            if !countedVisible {
+                countedVisible = true
+                model.markVisible()
+            }
             container.notificationService.remove(sessionId: sessionId)
         }
         .onDisappear {
-            model.markHidden()
+            if countedVisible {
+                countedVisible = false
+                model.markHidden()
+            }
             voice.leave()
             UIApplication.shared.isIdleTimerDisabled = false
         }
