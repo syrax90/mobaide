@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.32](https://github.com/syrax90/mobaide/compare/server-v0.2.31...server-v0.2.32) (2026-11-23)
+
+
+### Documentation
+
+* **server:** list the Mobaide Cloud voice languages ([#952](https://github.com/syrax90/mobaide/issues/952)) ([94a6875](https://github.com/syrax90/mobaide/commit/94a6875bc9b9ccab8bd4377cb8431a27e33f75a0))
+
 ## [0.2.31](https://github.com/syrax90/mobaide/compare/server-v0.2.30...server-v0.2.31) (2026-11-23)
 
 
