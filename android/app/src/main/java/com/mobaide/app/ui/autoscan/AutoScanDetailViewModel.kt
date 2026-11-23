@@ -5,6 +5,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.events.ScanProgressPayload
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.AutoScanWsClient
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.repository.AutoScanRepository
@@ -142,9 +143,10 @@ class AutoScanDetailViewModel @Inject constructor(
                         instance = instance,
                         nextScanAt = instance?.next_scan_at,
                         cycleNumber = instance?.cycle_number ?: it.cycleNumber,
+                        activePhase = if (instance == null) null else it.activePhase,
                         connection = ConnectionState.Replaying,
-                        // A scan started again elsewhere is listed again.
-                        stopped = it.stopped && instance == null,
+                        // Not listed: the PC no longer runs it. Listed again: started elsewhere.
+                        stopped = instance == null,
                     )
                 }
                 frame.events[workspaceName]?.forEach { reduceEvent(it) }
@@ -219,8 +221,21 @@ class AutoScanDetailViewModel @Inject constructor(
                     )
                 }
             }
+            "scan_failed" -> {
+                _ui.update {
+                    it.copy(
+                        nextScanAt = p.nextScanAt,
+                        activePhase = null,
+                        phases = it.phases.mapValues { (_, v) ->
+                            if (v.status == "active") v.copy(status = "failed") else v
+                        },
+                        lastSeq = newSeq,
+                    )
+                }
+                appendLog("--- Scan #${p.cycleNumber} failed ---", newSeq)
+            }
             "scan_stopped" -> {
-                _ui.update { it.copy(activePhase = null, lastSeq = newSeq) }
+                markStopped()
                 appendLog("--- Scan stopped ---", newSeq)
             }
         }
@@ -275,6 +290,8 @@ class AutoScanDetailViewModel @Inject constructor(
                 val response = repository.runNow(workspaceName)
                 // Update immediately from REST so the UI resets before the bus event arrives.
                 _ui.update { it.copy(nextScanAt = response.next_scan_at) }
+            } catch (e: ApiException) {
+                if (e.code == 404) markStopped()
             } catch (_: Exception) {
                 // Repository already emitted an AutoScanUiEvent.Error.
             }
@@ -285,11 +302,17 @@ class AutoScanDetailViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 repository.stopScan(workspaceName)
-                _ui.update { it.copy(stopped = true, nextScanAt = null) }
+                markStopped()
+            } catch (e: ApiException) {
+                if (e.code == 404) markStopped()
             } catch (_: Exception) {
                 // Repository already emitted an AutoScanUiEvent.Error.
             }
         }
+    }
+
+    private fun markStopped() {
+        _ui.update { it.copy(stopped = true, nextScanAt = null, activePhase = null) }
     }
 
     fun setPaused(paused: Boolean) {

@@ -74,6 +74,8 @@ export interface AutoScanDetailHandle {
   retry: () => void;
   /** A Stop this screen sent succeeded: show the scan stopped even if its event is missed. */
   markStopped: () => void;
+  /** A Run now succeeded: count down to the time the agent answered with. */
+  markRescheduled: (nextScanAt: string | undefined) => void;
 }
 
 export function useAutoScanDetail(agentId: string, workspaceName: string): AutoScanDetailHandle {
@@ -255,7 +257,11 @@ export function useAutoScanDetail(agentId: string, workspaceName: string): AutoS
     dispatch([{ kind: 'stopped' }]);
   }, []);
 
-  return { state, declined, retry, markStopped };
+  const markRescheduled = useCallback((nextScanAt: string | undefined) => {
+    dispatch([{ kind: 'rescheduled', nextScanAt }]);
+  }, []);
+
+  return { state, declined, retry, markStopped, markRescheduled };
 }
 
 /**

@@ -89,13 +89,25 @@ final class AutoScanDetailModel {
     }
 
     func runNow() async {
-        guard let response = try? await repository.runNow(workspaceName: workspaceName) else { return }
-        nextScanAt = response.next_scan_at
+        do {
+            let response = try await repository.runNow(workspaceName: workspaceName)
+            nextScanAt = response.next_scan_at
+        } catch let error as APIError where error.code == 404 {
+            markStopped()
+        } catch {
+            // The repository already showed the error.
+        }
     }
 
     func stopScan() async {
-        guard (try? await repository.stopScan(workspaceName: workspaceName)) != nil else { return }
-        markStopped()
+        do {
+            try await repository.stopScan(workspaceName: workspaceName)
+            markStopped()
+        } catch let error as APIError where error.code == 404 {
+            markStopped()
+        } catch {
+            // The repository already showed the error.
+        }
     }
 
     private func markStopped() {
@@ -125,9 +137,9 @@ final class AutoScanDetailModel {
         case .snapshot(let scans, let events):
             let match = scans.first { $0.workspace_name == workspaceName }
             instance = match
-            // A running instance in the snapshot: started again elsewhere.
-            if match != nil { stopped = false }
             nextScanAt = match?.next_scan_at
+            // Not listed: the PC no longer runs it. Listed again: started elsewhere.
+            if match == nil { markStopped() } else { stopped = false }
             if let cycle = match?.cycle_number { cycleNumber = cycle }
             connection = .replaying
             for event in events[workspaceName] ?? [] {
@@ -190,6 +202,11 @@ final class AutoScanDetailModel {
             if idle {
                 appendLog(AttributedString("no matching issues — skipping remaining stages"))
             }
+        case "scan_failed":
+            nextScanAt = next
+            activePhase = nil
+            phases = phases.mapValues { $0.status == "active" ? PhaseState(status: "failed") : $0 }
+            appendLog(AttributedString("--- Scan #\(cycle) failed ---"))
         case "scan_stopped":
             markStopped()
             appendLog(AttributedString("--- Scan stopped ---"))

@@ -47,7 +47,7 @@ SCAN_EVENT_VERSION = 1
 
 @dataclass
 class ScanPhasePayload:
-    phase: str  # "scan_started" | "scan_completed" | "scan_stopped"
+    phase: str  # "scan_started" | "scan_completed" | "scan_failed" | "scan_stopped"
     cycle_number: int
     next_scan_at: str | None = None  # ISO8601 UTC
     issues_processed: int = 0  # count of issues processed in the just-completed cycle

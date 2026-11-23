@@ -35,7 +35,7 @@ enum AgentEvent: Equatable, Sendable {
 /// payloads. Only the shape lands in this issue — `ScanPayloadParser`
 /// stays a stub until iOS-07.
 enum ScanProgressPayload: Equatable, Sendable {
-    /// `phase` ∈ scan_started | scan_completed | scan_stopped (free-form on the wire).
+    /// `phase` ∈ scan_started | scan_completed | scan_failed | scan_stopped (free-form on the wire).
     case phase(phase: String, cycleNumber: Int, nextScanAt: String?, issuesProcessed: Int)
     /// `step` ∈ state_update | label_removal | worktree_create | session_spawn;
     /// `status` ∈ started | ok | failed (free-form on the wire).

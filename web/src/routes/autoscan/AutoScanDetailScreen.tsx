@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { listAgents } from '../../api/agentRepository';
-import { runAutoScanNow, stopAutoScan } from '../../api/autoscanRepository';
+import { listAutoScans, runAutoScanNow, stopAutoScan } from '../../api/autoscanRepository';
 import {
   autoScanStatusLabel,
   autoScanTone,
@@ -28,10 +29,23 @@ import { scanFailureHandler } from './autoscanMutations';
  */
 export function AutoScanDetailScreen() {
   const { agentId, workspaceName } = useParams();
+  // Bumped when a stopped scan is started again elsewhere: `ws/autoscan` only
+  // streams the scans that ran when it connected, and the new run's `seq`
+  // starts over, so a fresh mount is the one clean way to follow it.
+  const [run, setRun] = useState(0);
   if (agentId === undefined || workspaceName === undefined) {
     return <p className="auth-error">Unknown Auto Scan.</p>;
   }
-  return <AutoScanDetail key={`${agentId}:${workspaceName}`} agentId={agentId} workspaceName={workspaceName} />;
+  return (
+    <AutoScanDetail
+      key={`${agentId}:${workspaceName}:${String(run)}`}
+      agentId={agentId}
+      workspaceName={workspaceName}
+      onRestarted={() => {
+        setRun((n) => n + 1);
+      }}
+    />
+  );
 }
 
 const CONNECTION_LABELS: Readonly<Record<string, string>> = {
@@ -41,9 +55,20 @@ const CONNECTION_LABELS: Readonly<Record<string, string>> = {
   disconnected: 'Reconnecting…',
 };
 
-function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspaceName: string }) {
+function AutoScanDetail({
+  agentId,
+  workspaceName,
+  onRestarted,
+}: {
+  agentId: string;
+  workspaceName: string;
+  onRestarted: () => void;
+}) {
   const queryClient = useQueryClient();
-  const { state, declined, retry, markStopped } = useAutoScanDetail(agentId, workspaceName);
+  const { state, declined, retry, markStopped, markRescheduled } = useAutoScanDetail(
+    agentId,
+    workspaceName,
+  );
 
   // Not for this screen's own state — `state.instance` comes from the
   // `ws/autoscan` snapshot alone, so the chip and counts only move when the
@@ -59,6 +84,27 @@ function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspace
   });
   const online = agents.data?.find((agent) => agent.agentId === agentId)?.online ?? false;
 
+  // The Sessions list cache, which the agent channel above keeps fresh. Only
+  // read to notice a stopped scan running again.
+  const scans = useQuery({
+    queryKey: queryKeys.autoscan(agentId),
+    queryFn: () => listAutoScans(agentId),
+    enabled: online && state.stopped,
+  });
+  const listedStartedAt = scans.data?.scans.find(
+    (scan) => scan.project_name === workspaceName,
+  )?.started_at;
+  // The run that was listed when the scan stopped: the list can still show it
+  // for a moment after a Stop, and that row is no restart.
+  const stoppedRunRef = useRef<number | undefined>(undefined);
+  const wasStoppedRef = useRef(false);
+  if (state.stopped && !wasStoppedRef.current) stoppedRunRef.current = listedStartedAt;
+  wasStoppedRef.current = state.stopped;
+  useEffect(() => {
+    if (!state.stopped || listedStartedAt === undefined) return;
+    if (listedStartedAt !== stoppedRunRef.current) onRestarted();
+  }, [state.stopped, listedStartedAt, onRestarted]);
+
   // Stopped wins over the last instance row, as on iOS and Android: after a
   // Stop the row can linger until the next snapshot.
   const status = state.stopped ? 'stopped' : state.instance?.status;
@@ -68,8 +114,11 @@ function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspace
 
   const runNow = useMutation({
     mutationFn: () => runAutoScanNow(agentId, workspaceName),
-    onSuccess: invalidate,
-    onError: scanFailureHandler('run', invalidate),
+    onSuccess: (response) => {
+      markRescheduled(response.next_scan_at ?? undefined);
+      return invalidate();
+    },
+    onError: scanFailureHandler('run', invalidate, markStopped),
   });
 
   const stop = useMutation({
@@ -80,7 +129,7 @@ function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspace
       markStopped();
       return invalidate();
     },
-    onError: scanFailureHandler('stop', invalidate),
+    onError: scanFailureHandler('stop', invalidate, markStopped),
   });
 
   const busy = runNow.isPending || stop.isPending;
@@ -199,7 +248,7 @@ function AutoScanDetail({ agentId, workspaceName }: { agentId: string; workspace
       )}
 
       <h2 className="autoscan-heading">Output</h2>
-      <AutoScanLogPane lines={state.logLines} />
+      <AutoScanLogPane lines={state.logLines} stopped={state.stopped} />
     </section>
   );
 }

@@ -264,6 +264,35 @@ describe('stopped', () => {
     expect(after.activePhase).toBeUndefined();
   });
 
+  it('starts stopped when the first snapshot does not list the scan', () => {
+    // A reload of a stopped scan's page: no Stop ran here and no scan_stopped
+    // event will come, so the snapshot alone must hide the countdown and controls.
+    const reloaded = reduceAutoScanFrame(initialAutoScanDetailState(WORKSPACE), {
+      kind: 'snapshot',
+      scans: [],
+      events: {},
+    });
+
+    expect(reloaded.stopped).toBe(true);
+    expect(reloaded.nextScanAt).toBeUndefined();
+  });
+
+  it('takes the countdown from a Run now answer, unless the scan is stopped', () => {
+    const rescheduled = reduceAutoScanFrame(scanning(), {
+      kind: 'rescheduled',
+      nextScanAt: '2026-07-08T12:01:00Z',
+    });
+    expect(rescheduled.nextScanAt).toBe('2026-07-08T12:01:00Z');
+
+    // A late answer must not bring a countdown back to a stopped scan.
+    const stopped = reduceAutoScanFrame(rescheduled, { kind: 'stopped' });
+    const late = reduceAutoScanFrame(stopped, {
+      kind: 'rescheduled',
+      nextScanAt: '2026-07-08T12:02:00Z',
+    });
+    expect(late.nextScanAt).toBeUndefined();
+  });
+
   it('is cleared only by a snapshot that lists the scan again', () => {
     const stopped = reduceAutoScanFrame(scanning(), { kind: 'stopped' });
 
@@ -344,6 +373,27 @@ describe('phase timeline', () => {
     ]);
     expect(new Set(state.logLines.map((line) => line.id)).size).toBe(state.logLines.length);
     expect(state.activePhase).toBeUndefined();
+  });
+
+  it('counts down to the next cycle after a failed one', () => {
+    // The agent reschedules a failed cycle too; without this event the screen
+    // counted down to a time already past.
+    const state = drive([
+      frame(event(1n, 'phase', { phase: 'scan_started', cycle_number: 6 })),
+      frame(
+        event(2n, 'phase', {
+          phase: 'scan_failed',
+          cycle_number: 6,
+          next_scan_at: '2026-07-08T12:10:00Z',
+        }),
+      ),
+    ]);
+
+    expect(state.nextScanAt).toBe('2026-07-08T12:10:00Z');
+    expect(state.activePhase).toBeUndefined();
+    expect(state.phases.scan).toBe('failed');
+    expect(state.phases.state).toBe('pending');
+    expect(state.stopped).toBe(false);
   });
 
   it('leaves pending phases alone when the cycle did work', () => {

@@ -123,6 +123,9 @@ final class AutoScanRepository {
         setScans(currentList.scans.filter { $0.workspace_name != workspaceName })
         do {
             try await agentAPI.stopAutoScan(workspaceName: workspaceName)
+        } catch let error as APIError where error.code == 404 {
+            dropNotRunning(previous, workspaceName: workspaceName, verb: "stop")
+            throw error
         } catch {
             rollback(previous, message: "Failed to stop auto scan for \(workspaceName).")
             throw error
@@ -139,10 +142,20 @@ final class AutoScanRepository {
                 $0.workspace_name == workspaceName ? $0.replacingNextScanAt(response.next_scan_at) : $0
             })
             return response
+        } catch let error as APIError where error.code == 404 {
+            dropNotRunning(previous, workspaceName: workspaceName, verb: "run")
+            throw error
         } catch {
             rollback(previous, message: "Failed to run auto scan now for \(workspaceName).")
             throw error
         }
+    }
+
+    /// A 404: the PC no longer runs the scan, so its row goes instead of coming back.
+    private func dropNotRunning(_ list: AutoScanListResponse, workspaceName: String, verb: String) {
+        setList(list)
+        setScans(currentList.scans.filter { $0.workspace_name != workspaceName })
+        errorBroadcaster.emit(AutoScanUiError(message: "Cannot \(verb) the scan: it is no longer running on the PC."))
     }
 
     private func rollback(_ list: AutoScanListResponse, message: String) {

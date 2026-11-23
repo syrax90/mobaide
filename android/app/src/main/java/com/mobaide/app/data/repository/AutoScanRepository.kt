@@ -167,8 +167,8 @@ class AutoScanRepository(
         try {
             restApi.stopAutoScan(workspaceName)
         } catch (e: Exception) {
-            _list.value = prev
-            _events.tryEmit(AutoScanUiEvent.Error(e.message ?: "Failed to stop auto scan"))
+            _list.value = if (e.isNotRunning()) prev.without(workspaceName) else prev
+            _events.tryEmit(AutoScanUiEvent.Error(scanFailureMessage(e, "stop", "Failed to stop auto scan")))
             throw e
         }
     }
@@ -193,11 +193,24 @@ class AutoScanRepository(
             )
             response
         } catch (e: Exception) {
-            _list.value = prev
-            _events.tryEmit(AutoScanUiEvent.Error(e.message ?: "Failed to run scan now"))
+            _list.value = if (e.isNotRunning()) prev.without(workspaceName) else prev
+            _events.tryEmit(AutoScanUiEvent.Error(scanFailureMessage(e, "run", "Failed to run scan now")))
             throw e
         }
     }
+
+    private fun Exception.isNotRunning(): Boolean = this is ApiException && code == 404
+
+    private fun AutoScanListResponse.without(workspaceName: String): AutoScanListResponse =
+        copy(scans = scans.filterNot { it.workspace_name == workspaceName })
+
+    /** A 404 means the PC no longer runs the scan; say so instead of "HTTP 404". */
+    private fun scanFailureMessage(e: Exception, verb: String, fallback: String): String =
+        if (e.isNotRunning()) {
+            "Cannot $verb the scan: it is no longer running on the PC."
+        } else {
+            e.message ?: fallback
+        }
 
     /** `capabilities.autoscan` of the connected agent; null for an agent that predates it. */
     suspend fun capability(): AutoScanCapability? = restApi.getAgentVersion().autoScanCapability()

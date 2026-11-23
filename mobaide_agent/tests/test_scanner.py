@@ -1506,3 +1506,55 @@ class TestReleaseWorktree:
 
         assert await mgr.release_worktree("test-workspace", str(tmp_path / "wt-1")) == 1
         assert await store.read() == []
+
+
+class TestCycleSchedule:
+    """The detail screen counts down from phase events alone, while the
+    Sessions list reads ``autoscan.status``. Each cycle end must give both
+    the same next scan time."""
+
+    @staticmethod
+    async def _first_phase(inst: AutoScanInstance, scan_once) -> dict[str, Any]:
+        inst._config = inst._config.model_copy(update={"scan_interval_seconds": 30})
+        inst._scan_once = scan_once  # type: ignore[assignment]
+        q = inst.subscribe_events()
+        loop_task = asyncio.create_task(inst._poll_loop())
+        try:
+            while True:
+                evt = await asyncio.wait_for(q.get(), timeout=1.0)
+                if evt.type == "phase":
+                    # Let the loop finish the cycle and park in its wait.
+                    await asyncio.sleep(0)
+                    return evt.payload
+        finally:
+            loop_task.cancel()
+            await loop_task
+
+    @pytest.mark.asyncio
+    async def test_failed_cycle_emits_scan_failed_with_the_next_scan_time(self, tmp_path):
+        inst = _make_instance(tmp_path)
+
+        async def failing_scan_once():
+            raise RuntimeError("Linear unreachable")
+
+        phase = await self._first_phase(inst, failing_scan_once)
+
+        assert phase["phase"] == "scan_failed"
+        assert phase["cycle_number"] == 1
+        assert phase["next_scan_at"] is not None
+        assert phase["next_scan_at"] == inst.to_dto()["next_scan_at"]
+
+    @pytest.mark.asyncio
+    async def test_completed_cycle_keeps_the_next_scan_time_its_event_carried(self, tmp_path):
+        inst = _make_instance(tmp_path)
+
+        async def completing_scan_once():
+            inst._schedule_next_scan()
+            inst._emit_phase("scan_completed")
+
+        phase = await self._first_phase(inst, completing_scan_once)
+
+        assert phase["phase"] == "scan_completed"
+        # The loop used to re-stamp next_scan_at after the event, so the list
+        # and the detail screen counted down to different times.
+        assert phase["next_scan_at"] == inst.to_dto()["next_scan_at"]

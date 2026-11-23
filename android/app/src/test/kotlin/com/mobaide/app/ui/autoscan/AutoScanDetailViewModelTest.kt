@@ -2,6 +2,7 @@ package com.mobaide.app.ui.autoscan
 
 import androidx.lifecycle.SavedStateHandle
 import com.mobaide.app.data.events.ScanProgressPayload
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.AutoScanWsClient
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.RunNowResponse
@@ -168,7 +169,63 @@ class AutoScanDetailViewModelTest {
         assertNull(vm.uiState.value.activePhase)
     }
 
+    @Test
+    fun snapshotFrame_notListingTheScan_showsItStopped() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        // The PC no longer runs the scan: no event will come to hide the controls.
+        fx.frames.tryEmit(AutoScanWsClient.Frame.Snapshot(scans = emptyList(), events = emptyMap()))
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.stopped)
+        assertNull(vm.uiState.value.nextScanAt)
+    }
+
     // ---- Phase transitions --------------------------------------------------
+
+    @Test
+    fun phase_scanFailed_takesTheNextScanAt_andFailsTheActivePhase() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        fx.frames.tryEmit(
+            AutoScanWsClient.Frame.Event(event = parsedEvent(seq = 1, payload = phase("scan_started"))),
+        )
+        fx.frames.tryEmit(
+            AutoScanWsClient.Frame.Event(
+                event = parsedEvent(seq = 2, payload = phase("scan_failed", next = "2026-04-11T02:00:00Z")),
+            ),
+        )
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals("2026-04-11T02:00:00Z", s.nextScanAt)
+        assertNull(s.activePhase)
+        assertEquals("failed", s.phases["scan"]?.status)
+        assertEquals("pending", s.phases["state"]?.status)
+        assertFalse(s.stopped)
+    }
+
+    @Test
+    fun phase_scanStopped_showsStopped() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        fx.frames.tryEmit(AutoScanWsClient.Frame.Snapshot(scans = listOf(instance()), events = emptyMap()))
+        advanceUntilIdle()
+
+        // Stopped from another device: this screen sent no Stop.
+        fx.frames.tryEmit(
+            AutoScanWsClient.Frame.Event(event = parsedEvent(seq = 1, payload = phase("scan_stopped"))),
+        )
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.stopped)
+        assertNull(vm.uiState.value.nextScanAt)
+    }
 
     @Test
     fun phase_scanStarted_then_scanCompleted_transitionsActiveToOk_idleMarksPendingSkipped() = runTest {
@@ -425,6 +482,27 @@ class AutoScanDetailViewModelTest {
 
         assertFalse(vm.uiState.value.stopped)
         assertEquals("2026-04-11T01:00:00Z", vm.uiState.value.nextScanAt)
+    }
+
+    @Test
+    fun stopAndRunNow_refusedWith404_showStopped() = runTest {
+        val fx = newFixture()
+        coEvery { fx.repository.stopScan(WORKSPACE) } throws ApiException(404, "{}")
+        coEvery { fx.repository.runNow(WORKSPACE) } throws ApiException(404, "{}")
+
+        for (action in listOf<(AutoScanDetailViewModel) -> Unit>({ it.stop() }, { it.runNow() })) {
+            val vm = fx.buildVm()
+            advanceUntilIdle()
+            fx.frames.tryEmit(AutoScanWsClient.Frame.Snapshot(scans = listOf(instance()), events = emptyMap()))
+            advanceUntilIdle()
+
+            action(vm)
+            advanceUntilIdle()
+
+            // The PC no longer runs the scan, so Run now and Stop must go.
+            assertTrue(vm.uiState.value.stopped)
+            assertNull(vm.uiState.value.nextScanAt)
+        }
     }
 
     companion object {

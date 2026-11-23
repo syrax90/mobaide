@@ -4,6 +4,8 @@ import { AnsiLine } from './AnsiLine';
 
 interface AutoScanLogPaneProps {
   lines: readonly LogLine[];
+  /** No more output will come, so an empty pane must not promise any. */
+  stopped?: boolean;
 }
 
 /**
@@ -35,6 +37,7 @@ const FOLLOW_EPSILON_PX = 24;
  */
 export const AutoScanLogPane = memo(function AutoScanLogPane({
   lines,
+  stopped = false,
 }: AutoScanLogPaneProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
@@ -92,7 +95,7 @@ export const AutoScanLogPane = memo(function AutoScanLogPane({
         tabIndex={0}
       >
         {lines.length === 0 ? (
-          <p className="page-note">Waiting for output…</p>
+          <p className="page-note">{stopped ? 'No output.' : 'Waiting for output…'}</p>
         ) : (
           lines.map((line) => <LogRow key={line.id} line={line} />)
         )}
