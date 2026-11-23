@@ -224,6 +224,17 @@ class ProgramStatusResponder:
         return replies
 
 
+# The session activity a report implies. ``blocked`` is absent: the turn is
+# still underway, parked on a prompt that the attention reports.
+_ACTIVITY_BY_STATE: dict[ProgramState, str] = {
+    ProgramState.WORKING: "working",
+    ProgramState.IDLE: "idle",
+    ProgramState.DONE: "idle",
+    ProgramState.ERROR: "idle",
+    ProgramState.CLEAR: "idle",
+}
+
+
 class ProgramStatusGate:
     """Turns one session's program-status transitions into attention.
 
@@ -242,6 +253,10 @@ class ProgramStatusGate:
       turn was stopped by a user who is present.
     * Alerts are at least ``min_alert_spacing_seconds`` apart (see
       :data:`PROGRAM_STATUS_MIN_ALERT_SPACING_SECONDS`).
+    * Every report also sets the session's activity at once (see
+      :data:`_ACTIVITY_BY_STATE`): ``working`` → ``working``, ``idle``,
+      ``done``, ``error`` and ``clear`` → ``idle``. ``blocked`` keeps it,
+      because the attention already says the turn waits for the user.
 
     A finished turn is otherwise cleared only by client input, as for Claude
     sessions, so a turn another client started on a shared thread cannot alert
@@ -257,6 +272,7 @@ class ProgramStatusGate:
         *,
         on_alert: Callable[[str], None],
         on_clear_permission: Callable[[], None],
+        on_activity: Callable[[str], None] | None = None,
         is_running: Callable[[], bool],
         current_attention: Callable[[], str | None],
         quiet_seconds: float | None = None,
@@ -265,6 +281,7 @@ class ProgramStatusGate:
     ) -> None:
         self._on_alert = on_alert
         self._on_clear_permission = on_clear_permission
+        self._on_activity = on_activity
         self._is_running = is_running
         self._current_attention = current_attention
         self._quiet_seconds = (
@@ -287,6 +304,9 @@ class ProgramStatusGate:
         if status.app:
             self.last_app = status.app
         state = status.state
+        activity = _ACTIVITY_BY_STATE.get(state)
+        if activity is not None and self._on_activity is not None:
+            self._on_activity(activity)
         report = (state, status.kind)
         previous = self._last
         repeated = report == previous
