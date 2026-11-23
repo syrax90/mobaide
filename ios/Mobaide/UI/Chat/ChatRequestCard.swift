@@ -4,36 +4,36 @@ import UIKit
 /// The oldest pending request, raised above the composer: a permission prompt
 /// with the agent's options, or a form question. Never modal — the timeline
 /// stays scrollable behind it. Only the body scrolls, up to `bodyCap`; the
-/// answer buttons stay in view.
+/// answer buttons stay in view. While `collapsed`, only a header line shows,
+/// and a tap on it hides the keyboard so that the whole card comes back.
 struct ChatRequestCard: View {
     let model: ChatSessionModel
     let request: ChatPendingRequest
     let moreWaiting: Int
     let bodyCap: CGFloat
     let signInFieldFocused: FocusState<Bool>.Binding
+    var collapsed = false
 
     @Environment(\.mobaideColors) private var colors
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
-            switch request {
-            case .permission(let permission):
-                ChatPermissionBody(model: model, request: permission, bodyCap: bodyCap)
-            case .form(let form):
-                ChatFormBody(model: model, request: form, bodyCap: bodyCap)
-                    .id(form.id)
-            case .signIn(let signIn):
-                // A new stage starts with an empty field.
-                ChatSignInBody(model: model, request: signIn, bodyCap: bodyCap, fieldFocused: signInFieldFocused)
-                    .id("\(signIn.id):\(signIn.stage)")
-            case .other(_, _, let title):
-                Text(title)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(colors.text)
+        VStack(alignment: .leading, spacing: 0) {
+            if collapsed {
+                showButton
+            } else {
+                headerRow(collapsed: false)
             }
+            // Kept mounted while collapsed, so answers typed into it survive.
+            content
+                .padding(.top, 10)
+                .frame(maxHeight: collapsed ? 0 : nil, alignment: .top)
+                .clipped()
+                .opacity(collapsed ? 0 : 1)
+                .allowsHitTesting(!collapsed)
+                .accessibilityHidden(collapsed)
         }
-        .padding(14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, collapsed ? 0 : 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(colors.bg2)
         .pixelRing(MobaideColorScheme.brand2)
@@ -41,19 +41,69 @@ struct ChatRequestCard: View {
         .accessibilityElement(children: .contain)
     }
 
-    private var header: some View {
+    @ViewBuilder
+    private var content: some View {
+        switch request {
+        case .permission(let permission):
+            ChatPermissionBody(model: model, request: permission, bodyCap: bodyCap)
+        case .form(let form):
+            ChatFormBody(model: model, request: form, bodyCap: bodyCap)
+                .id(form.id)
+        case .signIn(let signIn):
+            // A new stage starts with an empty field.
+            ChatSignInBody(model: model, request: signIn, bodyCap: bodyCap, fieldFocused: signInFieldFocused)
+                .id("\(signIn.id):\(signIn.stage)")
+        case .other(_, _, let title):
+            Text(title)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(colors.text)
+        }
+    }
+
+    /// The whole collapsed card is one tap target.
+    private var showButton: some View {
+        Button {
+            ChatKeyboard.hide()
+        } label: {
+            headerRow(collapsed: true)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(headerTitle). Show")
+        .accessibilityHint("Hides the keyboard and shows the request.")
+        .accessibilityIdentifier("chat-request-show-button")
+    }
+
+    private func headerRow(collapsed: Bool) -> some View {
         HStack(spacing: 8) {
             Image(systemName: headerIcon)
                 .foregroundStyle(colors.accent)
             Text(headerTitle)
                 .chromeText()
                 .foregroundStyle(colors.accent)
+                .lineLimit(collapsed ? 1 : nil)
+                .layoutPriority(collapsed ? 1 : 0)
                 .accessibilityAddTraits(.isHeader)
+            // The chevron says the same, so the hint goes first when room is short.
+            if collapsed, moreWaiting == 0 {
+                Text("· tap to show")
+                    .font(.caption)
+                    .foregroundStyle(colors.textMuted)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 4)
             if moreWaiting > 0 {
                 Text("+\(moreWaiting) more waiting")
                     .font(.caption)
                     .foregroundStyle(colors.textMuted)
+                    .lineLimit(1)
+            }
+            if collapsed {
+                Image(systemName: "chevron.up")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(colors.accent)
             }
         }
     }

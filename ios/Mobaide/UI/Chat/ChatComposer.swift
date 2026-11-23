@@ -8,12 +8,14 @@ import SwiftUI
 struct ChatComposer: View {
     @Bindable var model: ChatSessionModel
     let voice: VoiceInputModel
+    /// Owned by the chat screen, which collapses the request card while the
+    /// field has focus.
+    let focused: FocusState<Bool>.Binding
     let onOpenTemplates: () -> Void
     let onSaveTemplate: () -> Void
     let onExpand: () -> Void
 
     @Environment(\.mobaideColors) private var colors
-    @FocusState private var focused: Bool
     @State private var pickerItems: [PhotosPickerItem] = []
 
     private static let maxSuggestions = 6
@@ -88,7 +90,7 @@ struct ChatComposer: View {
                 selection: $model.composerSelection,
                 cursorRequest: model.composerCursorRequest,
                 style: .inline,
-                focus: $focused
+                focus: focused
             )
             .lineLimit(1...6)
             if let hint = commandHint {
@@ -98,7 +100,7 @@ struct ChatComposer: View {
                     .accessibilityHidden(true)
             }
         }
-        .pixelField(isFocused: focused)
+        .pixelField(isFocused: focused.wrappedValue)
         .disabled(model.sessionClosed)
         .accessibilityLabel(ComposerTextField.defaultPlaceholder)
     }
