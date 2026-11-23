@@ -242,6 +242,24 @@ def _pin_voice_state_prefix(monkeypatch, tmp_path_factory):
     )
     yield
 
+@pytest.fixture(autouse=True)
+def _no_real_sleep_lock(monkeypatch):
+    """No test takes a real OS sleep lock.
+
+    ``create_app`` builds its ``AgentSettingsService`` on the real state
+    prefix, and a lifespan's ``start()`` re-applies a stored
+    ``keep_awake: true`` — on a developer machine that would be the real
+    agent's choice. Without a backend the service can only answer
+    "unsupported". Tests of keep-awake inject a fake backend.
+    """
+    from mobaide.agent.settings import service as agent_settings_service
+
+    monkeypatch.setattr(
+        agent_settings_service, "detect_backend",
+        lambda: (None, "Tests never take a real sleep lock."),
+    )
+    yield
+
 TEST_JWT_SECRET = "test-secret-key-for-jwt-signing-do-not-use-in-prod"
 TEST_USERNAME = "testuser"
 TEST_PASSWORD = "testpass123"

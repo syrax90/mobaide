@@ -79,6 +79,9 @@ from .git.changes_models import GIT_CAPABILITIES
 from .git.router import router as git_router
 from .git.session_router import router as session_git_router
 from .hooks.router import router as hooks_router
+from .settings.models import AGENT_SETTINGS_CAPABILITIES
+from .settings.router import router as agent_settings_router
+from .settings.service import SETTINGS_FILE_NAME, AgentSettingsService
 from .install_paths import (
     default_prefix,
     manifest_url_from_relay_server_url,
@@ -613,6 +616,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         # for the restart; start no voice work in a process that is stopping.
         if not restart_requested():
             await app.state.voice.start()
+            await app.state.agent_settings.start()
         yield
         logger.info("agent.shutting_down")
         models_warmup = getattr(app.state, "cli_models_warmup", None)
@@ -647,6 +651,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         if relay_client is not None:
             await relay_client.stop()
         await app.state.voice.shutdown()
+        await app.state.agent_settings.shutdown()
         autoscan_mgr = getattr(app.state, "autoscan_manager", None)
         if autoscan_mgr is not None:
             await autoscan_mgr.shutdown()
@@ -943,6 +948,11 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             work_dir=voice_cleanup_dir,
         ),
     )
+    # Construction does no I/O; start() applies the stored choice.
+    app.state.agent_settings = AgentSettingsService(
+        state_prefix(test_mode=config.is_test_mode) / SETTINGS_FILE_NAME,
+        publish=app.state.event_bus.publish,
+    )
     app.state.fanouts = {}  # session_id -> SessionEventFanout
 
     def _on_session_created(session) -> None:
@@ -1016,6 +1026,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(autoscan_ws_router)
     app.include_router(updater_router)
     app.include_router(voice_router)
+    app.include_router(agent_settings_router)
 
     # Health endpoint (no auth)
     @app.get("/api/health", tags=["health"])
@@ -1070,6 +1081,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 "chat": await asyncio.to_thread(
                     build_chat_capabilities, app.state.chat_agents
                 ),
+                "agent_settings": AGENT_SETTINGS_CAPABILITIES,
             },
             "latest_agent_version": (manifest or {}).get("version"),
         }

@@ -3663,6 +3663,7 @@ class TestProxyVersionCapabilities:
         hand-rolls the shape instead of calling the shared builder, this fails.
         """
         from mobaide.agent.autoscan.models import AUTOSCAN_CAPABILITIES
+        from mobaide.agent.settings.models import AGENT_SETTINGS_CAPABILITIES
         from mobaide.core.cli_launcher import build_cli_capabilities
         from mobaide.voice.models import VOICE_CAPABILITIES
 
@@ -3700,6 +3701,7 @@ class TestProxyVersionCapabilities:
             "voice": VOICE_CAPABILITIES,
             "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
             "chat": {},
+            "agent_settings": AGENT_SETTINGS_CAPABILITIES,
         }
 
     async def test_version_body_keeps_core_fields(self, client, mock_app_state):

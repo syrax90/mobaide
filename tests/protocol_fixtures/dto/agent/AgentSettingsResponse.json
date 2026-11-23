@@ -1,0 +1,87 @@
+{
+  "type": "AgentSettingsResponse",
+  "cases": [
+    {
+      "name": "off",
+      "wire": {
+        "keep_awake": {
+          "enabled": false,
+          "state": "off",
+          "message": null
+        }
+      },
+      "decoded_canonical": {
+        "keep_awake": {
+          "enabled": false,
+          "state": "off"
+        }
+      }
+    },
+    {
+      "name": "active",
+      "wire": {
+        "keep_awake": {
+          "enabled": true,
+          "state": "active",
+          "message": null
+        }
+      },
+      "decoded_canonical": {
+        "keep_awake": {
+          "enabled": true,
+          "state": "active"
+        }
+      }
+    },
+    {
+      "name": "failed",
+      "wire": {
+        "keep_awake": {
+          "enabled": true,
+          "state": "failed",
+          "message": "systemd-inhibit: Failed to inhibit: Access denied"
+        }
+      },
+      "decoded_canonical": {
+        "keep_awake": {
+          "enabled": true,
+          "state": "failed",
+          "message": "systemd-inhibit: Failed to inhibit: Access denied"
+        }
+      }
+    },
+    {
+      "name": "unsupported",
+      "wire": {
+        "keep_awake": {
+          "enabled": false,
+          "state": "unsupported",
+          "message": "This agent runs inside WSL, and Windows decides when the computer sleeps. Turn this on for a Mobaide agent installed on Windows itself."
+        }
+      },
+      "decoded_canonical": {
+        "keep_awake": {
+          "enabled": false,
+          "state": "unsupported",
+          "message": "This agent runs inside WSL, and Windows decides when the computer sleeps. Turn this on for a Mobaide agent installed on Windows itself."
+        }
+      }
+    },
+    {
+      "name": "unknown_state_kept",
+      "wire": {
+        "keep_awake": {
+          "enabled": true,
+          "state": "paused_by_os",
+          "message": null
+        }
+      },
+      "decoded_canonical": {
+        "keep_awake": {
+          "enabled": true,
+          "state": "paused_by_os"
+        }
+      }
+    }
+  ]
+}

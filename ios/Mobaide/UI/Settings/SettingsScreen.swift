@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Settings (Android `SettingsScreen`): account header, the terminal display
-/// mode, management nav rows, support links, logout, and the danger-zone
-/// delete-account entry.
+/// mode, management nav rows, voice input and keep awake for the connected
+/// agent, support links, logout, and the danger-zone delete-account entry.
 struct SettingsScreen: View {
     @Environment(\.appContainer) private var container
 
@@ -17,6 +17,7 @@ private struct SettingsContent: View {
     @State private var model: SettingsModel
     @State private var deleteModel: DeleteAccountModel
     @State private var voice: VoiceInputModel
+    @State private var keepAwake: KeepAwakeModel
     private let displayStore: TerminalDisplayStore
     private let themeStore: ThemeStore
 
@@ -35,6 +36,7 @@ private struct SettingsContent: View {
             email: container.authRepository.getUserEmail() ?? ""
         ))
         _voice = State(initialValue: VoiceInputModel(container: container, sessionId: nil))
+        _keepAwake = State(initialValue: KeepAwakeModel(container: container))
         displayStore = container.terminalDisplayStore
         themeStore = container.themeStore
     }
@@ -88,6 +90,7 @@ private struct SettingsContent: View {
             }
             .pixelFormSection()
             VoiceSettingsSection(voice: voice)
+            KeepAwakeSection(model: keepAwake)
             Section(header: PixelSectionHeader("Support")) {
                 NavigationLink("Help & Support", value: Route.support)
                 Button("Privacy policy") { model.openPrivacyPolicy() }

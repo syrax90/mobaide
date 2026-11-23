@@ -11,6 +11,7 @@ import {
   gitCapabilities,
   gitCapability,
   hasGitSync,
+  keepAwakeCapability,
   voiceCapability,
   voiceCleanupCapability,
   voiceCleanupKinds,
@@ -365,5 +366,17 @@ describe('voiceCleanupKinds', () => {
   it('lists nothing without cleanup: true, whatever the list says', () => {
     expect(voiceCleanupKinds(undefined)).toEqual([]);
     expect(voiceCleanupKinds(info({ voice: { ...VOICE, cleanup: false, cleanup_kinds: ['codex'] } }))).toEqual([]);
+  });
+});
+
+describe('keepAwakeCapability', () => {
+  it('offers the keep-awake setting only on an explicit keep_awake: true', () => {
+    // An agent predating `/api/agent/settings` would 404 the toggle.
+    expect(keepAwakeCapability(info({ agent_settings: { keep_awake: true } }))).toBe(true);
+    expect(keepAwakeCapability(info({ agent_settings: { keep_awake: 'true' } }))).toBe(false);
+    expect(keepAwakeCapability(info({ agent_settings: { keep_awake: false } }))).toBe(false);
+    expect(keepAwakeCapability(info({ agent_settings: {} }))).toBe(false);
+    expect(keepAwakeCapability(info({ voice: { dictation: true } }))).toBe(false);
+    expect(keepAwakeCapability(undefined)).toBe(false);
   });
 });

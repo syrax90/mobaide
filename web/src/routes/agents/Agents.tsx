@@ -22,6 +22,7 @@ import { useToastStore } from '../../stores/toastStore';
 import { AddAgentDialog } from './AddAgentDialog';
 import { AgentCard } from './AgentCard';
 import { AgentCredentialsPanel } from './AgentCredentialsPanel';
+import { AgentSettingsDialog } from './AgentSettingsDialog';
 import { AgentsEmptyState } from './AgentsEmptyState';
 import { InstallCommandsPanel } from './InstallCommandsPanel';
 import { VoiceSettingsDialog } from './VoiceSettingsDialog';
@@ -34,7 +35,8 @@ type Panel =
   | { kind: 'credentials'; title: string; credentials: AgentCredentials }
   | { kind: 'confirmReregister'; agent: Agent }
   | { kind: 'confirmDelete'; agent: Agent; uninstall: boolean }
-  | { kind: 'voice'; agent: Agent };
+  | { kind: 'voice'; agent: Agent }
+  | { kind: 'settings'; agent: Agent };
 
 /**
  * Everything an account can do to its agents, minus pairing itself (`/pair`).
@@ -174,6 +176,9 @@ export function Agents() {
             onVoice={(target) => {
               setPanel({ kind: 'voice', agent: target });
             }}
+            onSettings={(target) => {
+              setPanel({ kind: 'settings', agent: target });
+            }}
           />
         ))}
       </ul>
@@ -226,6 +231,15 @@ export function Agents() {
         <VoiceSettingsDialog
           // The live row, not the one the dialog opened with: the dialog
           // acts on the agent coming back online.
+          agent={agents.data?.find((row) => row.agentId === panel.agent.agentId) ?? panel.agent}
+          onClose={() => {
+            setPanel({ kind: 'none' });
+          }}
+        />
+      )}
+
+      {panel.kind === 'settings' && (
+        <AgentSettingsDialog
           agent={agents.data?.find((row) => row.agentId === panel.agent.agentId) ?? panel.agent}
           onClose={() => {
             setPanel({ kind: 'none' });

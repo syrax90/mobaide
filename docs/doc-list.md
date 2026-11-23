@@ -16,7 +16,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [PROTOCOL.md](../PROTOCOL.md) | The wire contract: `protocol_version`, WebSocket close codes, the HTTPS-bootstrap update path, agent self-uninstall, voice input API (incl. the opt-in `POST /api/voice/cleanup` transcript cleanup and the central server's Mobaide Cloud voice API with the `cloud_voice.changed` event), and the session and workspace git APIs (status, mutations, jobs, branches, rebase, conflict resolver). Also how to bump the version. |
+| [PROTOCOL.md](../PROTOCOL.md) | The wire contract: `protocol_version`, WebSocket close codes, the HTTPS-bootstrap update path, agent self-uninstall, voice input API (incl. the opt-in `POST /api/voice/cleanup` transcript cleanup and the central server's Mobaide Cloud voice API with the `cloud_voice.changed` event), the agent settings API (keep the computer awake, `agent_settings.changed`), and the session and workspace git APIs (status, mutations, jobs, branches, rebase, conflict resolver). Also how to bump the version. |
 
 ## Clients
 

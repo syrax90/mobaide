@@ -167,6 +167,15 @@ from mobaide.linear.scanner import (
     AutoScanCapacityReached,
 )
 from mobaide.linear.worktree import WorktreeCreationError
+from mobaide.agent.settings.models import (
+    AGENT_SETTINGS_CAPABILITIES,
+    KeepAwakeSettingsRequest,
+)
+from mobaide.agent.settings.service import (
+    EVENT_TYPE as AGENT_SETTINGS_EVENT,
+    AgentSettingsError,
+    AgentSettingsService,
+)
 from mobaide.voice.errors import VoiceError
 from mobaide.voice.errors import http_error_for as voice_http_error_for
 from mobaide.voice.models import (
@@ -283,6 +292,10 @@ MAX_GIT_PROXY_TASKS = 4
 MAX_SESSION_CREATE_TASKS = 8
 _VOICE_ROUTE = re.compile(r"^/api/voice/(status|install|install/cancel|model|dictations|cleanup|cleanup/settings)$")
 _VOICE_DICTATION_ROUTE = re.compile(r"^/api/voice/dictations/([^/]+)(?:/(audio|finish))?$")
+# Applying keep-awake on Linux starts an inhibitor and waits for it to take
+# its lock, so these routes run aside from the tunnel reader too.
+_AGENT_SETTINGS_PATH = "/api/agent/settings"
+MAX_SETTINGS_PROXY_TASKS = 8
 
 # PTY frame type bytes — must stay in sync with agent/ws/session_io.py.
 FRAME_OUTPUT = b"o"
@@ -516,6 +529,7 @@ class RelayClient:
         # (the reply goes out on whichever tunnel is live when they finish)
         # and are cancelled only by ``stop()``.
         self._voice_proxy_tasks: set[asyncio.Task] = set()
+        self._settings_proxy_tasks: set[asyncio.Task] = set()
         # In-flight ``/api/chat/{kind}/sessions`` listings, run aside for the
         # same reason (the first one starts the agent process).
         self._chat_proxy_tasks: set[asyncio.Task] = set()
@@ -566,6 +580,7 @@ class RelayClient:
         self._cancel_all_subtasks()
         for task in [
             *self._voice_proxy_tasks,
+            *self._settings_proxy_tasks,
             *self._chat_proxy_tasks,
             *self._autoscan_proxy_tasks,
             *self._git_proxy_tasks,
@@ -885,6 +900,8 @@ class RelayClient:
             path = str(ctrl.get("path", ""))
             if path.startswith(_VOICE_PATH_PREFIX):
                 self._spawn_voice_proxy(ctrl)
+            elif path == _AGENT_SETTINGS_PATH or path.startswith(_AGENT_SETTINGS_PATH + "/"):
+                self._spawn_settings_proxy(ctrl)
             elif (
                 match_chat_sessions_route(path) is not None
                 or match_chat_session_route(path) is not None
@@ -1018,6 +1035,15 @@ class RelayClient:
                 )
             except Exception:
                 logger.exception("relay.events_snapshot.voice_publish_failed")
+
+        agent_settings = getattr(self._app_state, "agent_settings", None)
+        if isinstance(agent_settings, AgentSettingsService):
+            try:
+                self._event_bus.publish(
+                    AGENT_SETTINGS_EVENT, agent_settings.status().model_dump(mode="json")
+                )
+            except Exception:
+                logger.exception("relay.events_snapshot.agent_settings_publish_failed")
 
         try:
             await ws.send(
@@ -1810,6 +1836,7 @@ class RelayClient:
                             build_chat_capabilities,
                             getattr(self._app_state, "chat_agents", None) or {},
                         ),
+                        "agent_settings": AGENT_SETTINGS_CAPABILITIES,
                     },
                     "latest_agent_version": (manifest or {}).get("version"),
                 },
@@ -2052,6 +2079,10 @@ class RelayClient:
         voice_resp = await self._dispatch_voice(method, path, body)
         if voice_resp is not None:
             return voice_resp
+
+        settings_resp = await self._dispatch_agent_settings(method, path, body)
+        if settings_resp is not None:
+            return settings_resp
 
         if method == "GET" and path == "/api/fs/dirs":
             q = (query or {}).get("q") or None
@@ -2691,6 +2722,63 @@ class RelayClient:
                 "message": "Too many voice requests are in flight.",
             },
         )
+
+    def _spawn_settings_proxy(self, ctrl: dict) -> None:
+        self._spawn_aside(
+            ctrl,
+            self._settings_proxy_tasks,
+            MAX_SETTINGS_PROXY_TASKS,
+            self._run_settings_proxy,
+            "relay-settings-proxy",
+        )
+
+    async def _run_settings_proxy(self, ctrl: dict) -> None:
+        method = str(ctrl.get("method", "GET")).upper()
+        path = str(ctrl.get("path", ""))
+        try:
+            result = await self._dispatch_agent_settings(method, path, ctrl.get("body"))
+            if result is None:
+                result = {
+                    "status": 404,
+                    "body": {"detail": f"Unknown proxy route: {method} {path}"},
+                }
+        except Exception as exc:
+            logger.warning("relay.proxy_request_failed path=%s: %s", path, exc)
+            result = {"status": 500, "body": {"detail": str(exc)}}
+        await self._send_proxy_result(ctrl, result)
+
+    async def _dispatch_agent_settings(
+        self, method: str, path: str, body: dict | None
+    ) -> dict | None:
+        """``/api/agent/settings`` with the same service calls, models and
+        error bodies as ``mobaide.agent.settings.router``; ``None`` for any
+        other path."""
+        if path not in (_AGENT_SETTINGS_PATH, _AGENT_SETTINGS_PATH + "/keep_awake"):
+            return None
+        service = getattr(self._app_state, "agent_settings", None)
+        if not isinstance(service, AgentSettingsService):
+            return {
+                "status": 503,
+                "body": {
+                    "detail": {
+                        "code": "settings_unavailable",
+                        "message": "Agent settings are not available.",
+                    }
+                },
+            }
+        try:
+            if method == "GET" and path == _AGENT_SETTINGS_PATH:
+                resp = service.status()
+            elif method == "PUT" and path.endswith("/keep_awake"):
+                request = KeepAwakeSettingsRequest.model_validate(body or {})
+                resp = await service.set_keep_awake(request.enabled)
+            else:
+                return None
+        except ValidationError as exc:
+            return {"status": 422, "body": {"detail": _scrub_validation_errors(exc)}}
+        except AgentSettingsError as exc:
+            return {"status": exc.status, "body": {"detail": exc.detail()}}
+        return {"status": 200, "body": resp.model_dump(mode="json")}
 
     def _spawn_autoscan_proxy(self, ctrl: dict, ws: ClientConnection) -> None:
         """Run an Auto Scan route aside from the tunnel reader: each call to

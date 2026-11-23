@@ -417,6 +417,20 @@ struct AgentAPI: Sendable {
         )
     }
 
+    func getAgentSettings() async throws -> AgentSettingsResponse {
+        try await execute(method: "GET", url: "\(try await base())/api/agent/settings")
+    }
+
+    /// The agent applies it before it answers; a failure to apply is
+    /// `keep_awake.state`, not an error.
+    func setKeepAwake(enabled: Bool) async throws -> AgentSettingsResponse {
+        try await execute(
+            method: "PUT",
+            url: "\(try await base())/api/agent/settings/keep_awake",
+            body: KeepAwakeSettingsRequest(enabled: enabled)
+        )
+    }
+
     func getAutoScanList() async throws -> AutoScanListResponse {
         try await execute(method: "GET", url: "\(try await base())/api/autoscan/list")
     }

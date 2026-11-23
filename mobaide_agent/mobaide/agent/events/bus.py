@@ -32,6 +32,9 @@ class AgentEvent:
         - ``autoscan.list.changed`` — payload: <full AutoScanSessionManager.list_response()>
         - ``voice.changed``     — payload: <full VoiceStatusResponse> (throttled
           to 2/s while downloading; state changes are sent at once)
+        - ``agent_settings.changed`` — payload: <full AgentSettingsResponse>
+          (on every settings write, and when keep-awake gains or loses its
+          lock by itself)
     """
 
     type: str

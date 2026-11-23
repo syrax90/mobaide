@@ -182,6 +182,16 @@ fun VersionInfoResponse.voiceCapability(): VoiceCapability? = runCatching {
     )
 }.getOrNull()
 
+/**
+ * `capabilities.agent_settings.keep_awake`: the agent can keep its computer
+ * awake (`/api/agent/settings`). Explicit JSON `true` only.
+ */
+fun VersionInfoResponse.keepAwakeCapability(): Boolean = runCatching {
+    capabilities["agent_settings"]?.jsonObject
+        ?.get("keep_awake")?.jsonPrimitive
+        ?.let { !it.isString && it.booleanOrNull == true }
+}.getOrNull() == true
+
 /** `capabilities.fs.<key>`, with [gitCapability]'s explicit-JSON-`true` rule. */
 fun VersionInfoResponse.fsCapability(key: String): Boolean = runCatching {
     capabilities["fs"]?.jsonObject

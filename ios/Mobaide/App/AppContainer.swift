@@ -34,6 +34,7 @@ final class AppContainer {
     let sessionRepository: SessionRepository
     let workspacesRepository: WorkspacesRepository
     let voiceRepository: VoiceRepository
+    let agentSettingsRepository: AgentSettingsRepository
     let pathSuggestionRepository: PathSuggestionRepository
     let autoScanRepository: AutoScanRepository
     let agentRepository: AgentRepository
@@ -262,6 +263,11 @@ final class AppContainer {
             agentEventBus: agentEventBus,
             sessionManager: sessionManager
         )
+        self.agentSettingsRepository = AgentSettingsRepository(
+            agentAPI: agentAPI,
+            agentEventBus: agentEventBus,
+            sessionManager: sessionManager
+        )
         self.pathSuggestionRepository = PathSuggestionRepository(agentAPI: agentAPI, tokenStore: tokenStore)
         let autoScanWsClient = AutoScanWsClient(
             webSocketFactory: webSocketFactory,
@@ -382,6 +388,7 @@ final class AppContainer {
         chatSessionStore.start(sessions: sessionRepository.sessions())
         workspacesRepository.start()
         voiceRepository.start()
+        agentSettingsRepository.start()
         autoScanRepository.start()
         attentionCoordinator.start()
         deepLinkCoordinator.start()

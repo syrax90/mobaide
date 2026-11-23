@@ -64,6 +64,17 @@ async def events_ws(websocket: WebSocket) -> None:
             )
         except Exception:
             logger.exception("events_ws.voice_snapshot_failed")
+    agent_settings = getattr(websocket.app.state, "agent_settings", None)
+    if agent_settings is not None:
+        try:
+            await websocket.send_json(
+                {
+                    "type": "agent_settings.changed",
+                    "payload": agent_settings.status().model_dump(mode="json"),
+                }
+            )
+        except Exception:
+            logger.exception("events_ws.agent_settings_snapshot_failed")
 
     q = bus.subscribe()
     try:

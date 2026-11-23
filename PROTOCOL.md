@@ -125,6 +125,34 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-23: keep the computer awake
+
+Additive delta within proto-v7 (2026-11-23, keep awake — agent, web, Android and iOS): **two REST routes, one capability key and one agent event. No version bump; `central_server` is untouched (it already forwards `PUT`).**
+
+An opt-in setting per agent (default off) stops the agent's computer from going to sleep while it is idle, so its sessions stay reachable from a phone. The screen can still turn off. Closing a laptop lid still puts the laptop to sleep.
+
+* `capabilities.agent_settings` is `{"keep_awake": true}` on `GET /api/version` (both transports). Clients show the setting only when the key is `true`.
+* `GET /api/agent/settings` → `AgentSettingsResponse {"keep_awake": {"enabled", "state", "message"}}`. Every key is always present.
+  * `enabled`: the stored choice.
+  * `message`: `null`, or text for the user.
+  * `state` is an open vocabulary. A client reads a value it does not know as "not active" and shows `message`.
+
+  | `state` | Meaning |
+  |---|---|
+  | `off` | The choice is off. |
+  | `active` | The computer stays awake now. |
+  | `failed` | The choice is on, but the OS refused. `message` says why. |
+  | `unsupported` | This computer has no way to stay awake, whatever the choice (for example, an agent inside WSL). `message` says why. Clients disable the switch. |
+
+* `PUT /api/agent/settings/keep_awake` `{"enabled": bool}` (strict bool) → the full `AgentSettingsResponse`. The agent stores the choice in `<state dir>/agent_settings.json` and applies it before it answers, with no restart. A failure to apply is a `200` with `state: "failed"`, not an error. `500 storage_error` when the file cannot be written (then nothing changes); `422` validation. Both transports answer identically. The relay runs these routes off the tunnel reader.
+* The agent event `agent_settings.changed` carries the full `AgentSettingsResponse`. The agent publishes it after every `PUT`, when a lock ends or comes back by itself (Linux), and as a snapshot on every events-channel connect (direct `/ws/events` and the relay's events snapshot).
+* At start, the agent applies the stored choice again.
+* How each OS stays awake. The OS releases each lock when the agent process ends, also after a crash:
+  * macOS: an IOKit `PreventUserIdleSystemSleep` assertion (`pmset -g assertions` lists it).
+  * Windows: a `PowerRequestSystemRequired` power request (`powercfg /requests` lists it).
+  * Linux: `systemd-inhibit --what=sleep:idle --mode=block`. When polkit refuses `sleep` (it does for a system service outside a login session), the agent takes `--what=idle` instead. GNOME's automatic suspend ignores logind's idle lock, so the agent also runs `gnome-session-inhibit --inhibit suspend` on the user's session bus when that bus exists. Each lock is a child process that holds a pipe from the agent, so it ends with the agent. While the setting is on, the agent tries a missing lock again every minute: a desktop login after the agent started also gets its lock. `state` is `active` when at least one lock is held.
+* Golden fixtures: `AgentSettingsResponse.json` (also the event payload) and `KeepAwakeSettingsRequest.json`; the `agent_settings_capability` case in `VersionInfoResponse.json`.
+
 ### Delta 2026-11-22: cloud voice input
 
 Additive delta within proto-v7 (2026-11-22, cloud voice input — central server, web, Android and iOS): **six REST routes and one user event on the central server. No version bump; the agent is untouched.**
