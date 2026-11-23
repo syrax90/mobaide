@@ -545,7 +545,8 @@ h1 {
 
 .step-n,
 .step h3,
-.card h3 {
+.card h3,
+.chips-title {
   font-family: "Departure Mono", ui-monospace, monospace;
   font-weight: 400;
 }
@@ -561,7 +562,8 @@ h1 {
 }
 
 .step h3,
-.card h3 {
+.card h3,
+.chips-title {
   margin: 0 0 8px;
   font-size: var(--pix-md);
   line-height: 1.35;
