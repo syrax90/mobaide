@@ -2,6 +2,8 @@ package com.mobaide.app.data.network
 
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.CancelAccountDeletionResponse
+import com.mobaide.app.data.network.dto.CloudVoiceEngineRequest
+import com.mobaide.app.data.network.dto.CloudVoiceStatus
 import com.mobaide.app.data.network.dto.CreateAgentRequest
 import com.mobaide.app.data.network.dto.CreateAgentResponse
 import com.mobaide.app.data.network.dto.CreateCustomAgentTypeRequest
@@ -39,14 +41,22 @@ import com.mobaide.app.data.network.dto.UserLoginRequest
 import com.mobaide.app.data.network.dto.UserRegisterRequest
 import com.mobaide.app.data.network.dto.VerifyEmailRequest
 import com.mobaide.app.data.network.dto.VersionInfoResponse
+import com.mobaide.app.data.network.dto.VoiceDictationAudioRequest
+import com.mobaide.app.data.network.dto.VoiceDictationAudioResponse
+import com.mobaide.app.data.network.dto.VoiceDictationFinishRequest
+import com.mobaide.app.data.network.dto.VoiceDictationResponse
+import com.mobaide.app.data.network.dto.VoiceDictationResultResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 
 /**
  * HTTP client for **central server** user-auth endpoints (register, login,
@@ -535,18 +545,108 @@ class CentralApi(
         return execute(request)
     }
 
+    // Cloud voice input (PROTOCOL.md "cloud voice input"), JWT-authed via the user
+    // dashboard token. The dictation routes mirror the agent's body for body.
+
+    suspend fun getCloudVoice(userToken: String): CloudVoiceStatus {
+        val request = Request.Builder()
+            .url(cloudVoiceUrl())
+            .get()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun putCloudVoiceEngine(userToken: String, agentId: String, engine: String): CloudVoiceStatus {
+        val payload = json.encodeToString(CloudVoiceEngineRequest(engine))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url(cloudVoiceUrl("engines", agentId))
+            .put(payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    // Not cancellable on purpose: a dictation the server opened must come back
+    // with its id so it can be deleted.
+    suspend fun createCloudDictation(userToken: String): VoiceDictationResponse {
+        val request = Request.Builder()
+            .url(cloudVoiceUrl("dictations"))
+            .post("".toRequestBody(jsonMediaType))
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun appendCloudAudio(
+        userToken: String,
+        dictationId: String,
+        body: VoiceDictationAudioRequest,
+    ): VoiceDictationAudioResponse {
+        val request = Request.Builder()
+            .url(cloudVoiceUrl("dictations", dictationId, "audio"))
+            .post(json.encodeToString(body).toRequestBody(jsonMediaType))
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return executeCancellable(request)
+    }
+
+    suspend fun finishCloudDictation(
+        userToken: String,
+        dictationId: String,
+        lastSeq: Int,
+    ): VoiceDictationResultResponse {
+        val payload = json.encodeToString(VoiceDictationFinishRequest(last_seq = lastSeq))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url(cloudVoiceUrl("dictations", dictationId, "finish"))
+            .post(payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return executeCancellable(request)
+    }
+
+    suspend fun deleteCloudDictation(userToken: String, dictationId: String) {
+        val request = Request.Builder()
+            .url(cloudVoiceUrl("dictations", dictationId))
+            .delete()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        executeNoContent(request)
+    }
+
+    private fun cloudVoiceUrl(vararg segments: String): HttpUrl =
+        baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("voice")
+            .addPathSegment("cloud")
+            .apply { segments.forEach { addPathSegment(it) } }
+            .build()
+
     private suspend inline fun <reified T> execute(request: Request): T =
         withContext(Dispatchers.IO) {
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: ""
-                    throw ApiException(response.code, errorBody)
-                }
-                val body = response.body?.string()
-                    ?: throw ApiException(response.code, "Empty response body")
-                json.decodeFromString<T>(body)
-            }
+            client.newCall(request).execute().use { decodeBody<T>(it) }
         }
+
+    /**
+     * [execute] for the dictation uploader, which bounds each request with a
+     * timeout and drops it on Cancel: the blocking `Call.execute` ignores
+     * coroutine cancellation, so the uploader would wait for an abandoned
+     * request before its retry.
+     */
+    private suspend inline fun <reified T> executeCancellable(request: Request): T =
+        client.newCall(request).await { decodeBody<T>(it) }
+
+    private inline fun <reified T> decodeBody(response: Response): T {
+        if (!response.isSuccessful) {
+            val errorBody = response.body?.string() ?: ""
+            throw ApiException(response.code, errorBody)
+        }
+        val body = response.body?.string()
+            ?: throw ApiException(response.code, "Empty response body")
+        return json.decodeFromString<T>(body)
+    }
 
     private suspend fun executeNoContent(request: Request) =
         withContext(Dispatchers.IO) {

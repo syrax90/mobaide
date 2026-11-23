@@ -302,6 +302,40 @@ final class RecordingCustomTypeSync: CustomTypeSyncApplying, @unchecked Sendable
     }
 }
 
+final class RecordingCloudVoiceSync: CloudVoiceSyncApplying, @unchecked Sendable {
+    private let lock = NSLock()
+    private var changesStorage: [CloudVoiceChangedPayload] = []
+    private var refreshCountStorage = 0
+    private var clearCountStorage = 0
+    private var holdsRefreshStorage = false
+
+    /// While true, `refreshCloudVoice` does not return: a status read that
+    /// waits on the server.
+    var holdsRefresh: Bool {
+        get { lock.withLock { holdsRefreshStorage } }
+        set { lock.withLock { holdsRefreshStorage = newValue } }
+    }
+
+    var changes: [CloudVoiceChangedPayload] { lock.withLock { changesStorage } }
+    var refreshCount: Int { lock.withLock { refreshCountStorage } }
+    var clearCount: Int { lock.withLock { clearCountStorage } }
+
+    func applyEnginesChanged(_ payload: CloudVoiceChangedPayload) async {
+        lock.withLock { changesStorage.append(payload) }
+    }
+
+    func refreshCloudVoice() async throws {
+        lock.withLock { refreshCountStorage += 1 }
+        while holdsRefresh {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+    }
+
+    func clear() async {
+        lock.withLock { clearCountStorage += 1 }
+    }
+}
+
 final class RecordingFirstAgentPairedApplier: FirstAgentPairedApplying, @unchecked Sendable {
     private let lock = NSLock()
     private var pairedStorage: [String] = []

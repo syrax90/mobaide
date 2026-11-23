@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAgents } from '../api/agentRepository';
+import { createCloudVoiceApi } from '../api/cloudVoiceRepository';
 import { cleanupTranscript, createVoiceApi } from '../api/voiceRepository';
 import { queryKeys, wsBackedQueryOptions } from '../lib/queryKeys';
-import type { VoiceCapability } from '../protocol/dto/agentVersion';
+import { VOICE_ENGINE, type VoiceEngine } from '../protocol/dto/cloudVoice';
 import {
   DictationController,
   runCleanup,
@@ -35,6 +36,25 @@ export function spliceTranscript(
   return { text: head + trail + after, caret: head.length };
 }
 
+/** Who transcribes, and the limits it publishes. */
+export interface DictationSource {
+  engine: VoiceEngine;
+  sampleRate: number;
+  maxSeconds: number;
+}
+
+/** The failures after which the cached cloud voice status is no longer true. */
+const CLOUD_STATUS_CODES: readonly string[] = [
+  VOICE_CODE.cloudUnavailable,
+  VOICE_CODE.cloudLimitReached,
+  VOICE_CODE.cloudDisabled,
+];
+
+function sameSource(a: DictationSource | null, b: DictationSource | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.engine === b.engine && a.sampleRate === b.sampleRate && a.maxSeconds === b.maxSeconds;
+}
+
 /** Whether and with which session kind's AI agent transcripts are cleaned up. */
 export interface CleanupChoice {
   kind: string;
@@ -42,10 +62,11 @@ export interface CleanupChoice {
 }
 
 /**
- * One dictation controller per terminal (agent + session). A new pair of ids
- * — another session opened in the same route, an agent switch, leaving the
- * screen — disposes the old controller, which cancels its recording and
- * deletes the dictation on the agent, so audio and text never carry over.
+ * One dictation controller per terminal (agent + session) and source. A new
+ * pair of ids — another session opened in the same route, an agent switch,
+ * leaving the screen — or another engine disposes the old controller, which
+ * cancels its recording and deletes the dictation where it was uploaded, so
+ * audio and text never carry over. `source` is null while nothing can record.
  *
  * The actions call into the controller synchronously, which keeps the
  * click's user activation alive for the AudioContext.
@@ -59,7 +80,7 @@ export interface CleanupChoice {
 export function useDictation(
   agentId: string,
   sessionId: string,
-  capability: VoiceCapability | null,
+  source: DictationSource | null,
   cleanup: CleanupChoice | null = null,
 ) {
   const [state, setState] = useState<DictationState>(IDLE);
@@ -69,17 +90,29 @@ export function useDictation(
   const [carried, setCarried] = useState<CarriedText | null>(null);
   const queryClient = useQueryClient();
   const controllerRef = useRef<DictationController | null>(null);
-  const sampleRate = capability?.sampleRate ?? null;
-  const maxSeconds = capability?.maxSeconds ?? null;
+  // A cloud dictation keeps its source until it is over, whatever the status
+  // does meanwhile: "unavailable" arrives exactly when a recording failed,
+  // and dropping the controller then would drop the audio Retry needs. A
+  // review that waits for more dictation (`carried`) is not over either:
+  // its text must survive a second recording that fails.
+  const [held, setHeld] = useState(source);
+  const holding =
+    (state.kind !== 'idle' || carried !== null) && held?.engine === VOICE_ENGINE.cloud;
+  if (!holding && !sameSource(held, source)) setHeld(source);
+  const current = holding ? held : source;
+  const engine = current?.engine ?? null;
+  const sampleRate = current?.sampleRate ?? null;
+  const maxSeconds = current?.maxSeconds ?? null;
   const cleanupRef = useRef(cleanup);
   useEffect(() => {
     cleanupRef.current = cleanup;
   }, [cleanup]);
 
   useEffect(() => {
-    if (sampleRate === null || maxSeconds === null) return;
+    if (engine === null || sampleRate === null || maxSeconds === null) return;
     const controller = new DictationController({
-      api: createVoiceApi(agentId, sessionId),
+      api:
+        engine === VOICE_ENGINE.cloud ? createCloudVoiceApi() : createVoiceApi(agentId, sessionId),
       createRecorder: () => new WebAudioRecorder(),
       sampleRate,
       maxSeconds,
@@ -95,6 +128,14 @@ export function useDictation(
         if (next.kind === 'failed' && next.code === VOICE_CODE.notReady) {
           void queryClient.invalidateQueries({ queryKey: queryKeys.voiceStatus(agentId) });
         }
+        // The same for cloud voice input, and after each cloud transcript
+        // for today's use.
+        if (
+          (next.kind === 'failed' && CLOUD_STATUS_CODES.includes(next.code)) ||
+          (engine === VOICE_ENGINE.cloud && next.kind === 'result')
+        ) {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.cloudVoice() });
+        }
       },
     });
     controllerRef.current = controller;
@@ -104,7 +145,7 @@ export function useDictation(
       setState(IDLE);
       setCarried(null);
     };
-  }, [agentId, sessionId, sampleRate, maxSeconds, queryClient]);
+  }, [agentId, sessionId, engine, sampleRate, maxSeconds, queryClient]);
 
   const active =
     state.kind === 'starting' ||

@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { VOICE_RECOMMENDATION_LOW, VOICE_STATE, type VoiceStatus } from '../protocol/dto/voice';
 import { CleanupToggle } from './CleanupToggle';
+import { CLOUD_VOICE_NAME } from './cloudVoiceCopy';
+import { VoiceSessionToggles } from './VoiceSessionToggles';
 import {
   useVoiceActions,
   useVoiceCleanupCapability,
@@ -9,7 +11,7 @@ import {
 } from './useVoiceStatus';
 import { isVoiceApiError } from './voiceApi';
 import { installErrorCopy, voiceActionErrorCopy } from './voiceErrorCopy';
-import { useMicHidden, useSkipReview, useVoicePrefsStore } from './voicePrefsStore';
+import { useVoicePrefsStore } from './voicePrefsStore';
 import {
   formatBytes,
   languageNames,
@@ -36,6 +38,16 @@ interface VoicePanelProps {
   cleanupOffered?: boolean;
   /** "Not now" / "Hide the mic" in the setup variant. */
   onDismiss?: () => void;
+  /**
+   * Cloud voice input is offered: where this computer's voice is not ready,
+   * the panel also offers to switch this agent to it.
+   */
+  onUseCloud?: () => void;
+  /**
+   * The settings variant under cloud voice input, which shows the session
+   * toggles itself: only what belongs to the computer's own voice is shown.
+   */
+  embedded?: boolean;
 }
 
 /**
@@ -51,13 +63,17 @@ export function VoicePanel({
   loadFailed,
   cleanupOffered = false,
   onDismiss,
+  onUseCloud,
+  embedded = false,
 }: VoicePanelProps) {
   const actions = useVoiceActions(agentId);
-  const hidden = useMicHidden(agentId);
   const setMicHidden = useVoicePrefsStore((state) => state.setMicHidden);
-  const skipReview = useSkipReview(agentId);
-  const setSkipReview = useVoicePrefsStore((state) => state.setSkipReview);
   const settings = variant === 'settings';
+  const useCloud = onUseCloud !== undefined && (
+    <button type="button" className="link-button" onClick={onUseCloud}>
+      Use {CLOUD_VOICE_NAME} instead: nothing to install
+    </button>
+  );
   const cleanupSupported = useVoiceCleanupCapability(agentId, settings).data === true;
   const cleanUp = useVoiceCleanupSetting(agentId, status);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -78,7 +94,9 @@ export function VoicePanel({
   const actionError = actions.error;
   const languages = languageNames(status.model.languages);
   const lowResources = status.host.recommendation === VOICE_RECOMMENDATION_LOW;
-  const cleanupToggleShown = settings
+  const cleanupToggleShown = embedded
+    ? false
+    : settings
     ? cleanupSupported && status.state !== VOICE_STATE.unsupported
     : cleanupOffered &&
       (status.state === VOICE_STATE.queued ||
@@ -165,6 +183,7 @@ export function VoicePanel({
               </button>
             )}
           </div>
+          {!settings && useCloud}
           {!settings && (
             <button
               type="button"
@@ -263,6 +282,7 @@ export function VoicePanel({
             </button>
             {removeControls}
           </div>
+          {!settings && useCloud}
         </>
       );
       break;
@@ -277,6 +297,7 @@ export function VoicePanel({
               ))}
             </ul>
           )}
+          {!settings && useCloud}
         </>
       );
   }
@@ -291,7 +312,7 @@ export function VoicePanel({
             : voiceActionErrorCopy(isVoiceApiError(actionError) ? actionError.code : null)}
         </p>
       )}
-      {(settings || status.state === VOICE_STATE.notInstalled) && (
+      {((settings && !embedded) || status.state === VOICE_STATE.notInstalled) && (
         <dl className="voice-model">
           <div>
             <dt>Model</dt>
@@ -303,29 +324,8 @@ export function VoicePanel({
           </div>
         </dl>
       )}
-      {settings && status.state !== VOICE_STATE.unsupported && (
-        <label className="voice-toggle">
-          <input
-            type="checkbox"
-            checked={!hidden}
-            onChange={(event) => {
-              setMicHidden(agentId, !event.target.checked);
-            }}
-          />
-          Show the mic button in sessions
-        </label>
-      )}
-      {settings && status.state !== VOICE_STATE.unsupported && (
-        <label className="voice-toggle">
-          <input
-            type="checkbox"
-            checked={!skipReview}
-            onChange={(event) => {
-              setSkipReview(agentId, !event.target.checked);
-            }}
-          />
-          Review dictated text before it is inserted
-        </label>
+      {settings && !embedded && status.state !== VOICE_STATE.unsupported && (
+        <VoiceSessionToggles agentId={agentId} />
       )}
       {cleanupToggleShown && (
         <CleanupToggle
@@ -336,7 +336,7 @@ export function VoicePanel({
           onChange={cleanUp.set}
         />
       )}
-      {settings && status.model.notice !== undefined && status.model.notice !== '' && (
+      {settings && !embedded && status.model.notice !== undefined && status.model.notice !== '' && (
         <details className="voice-details">
           <summary>Model license</summary>
           <pre className="voice-notice">{status.model.notice}</pre>

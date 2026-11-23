@@ -31,6 +31,8 @@ of the shape ``{"type": "...", "payload": {...}}``. Current event types:
   companion ``shortcut.deleted`` events are sent)
 - ``session_mode_order.updated`` — payload: ``{"order": [str], "version":
   int, "updated_at": str}``; the user's new create-session mode picker order
+- ``cloud_voice.changed`` — payload: ``{"engines": {agent_id: str}}``; the
+  user's voice engine choice per agent (``cloud`` or ``local``)
 - ``session.attention`` — payload: attention push mirror (see PROTOCOL.md)
 - ``account.first_agent_paired`` — payload: ``{"agent_id": str}``; sent once
   per account, when ``_complete_pairing`` stamps ``users.first_paired_at``

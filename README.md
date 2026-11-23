@@ -47,7 +47,7 @@
 - **A real terminal, not a log tail.** Full two-way PTY, so TUIs behave: arrow keys, Ctrl-C, plan mode, approval prompts. A rolling buffer of recent output replays after a dropped connection. Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie and Pi sessions offer it as Terminal under Open sessions in; raw shells and custom agents always use it.
 - **Your agents, your options.** Launch Claude Code, Codex CLI or Antigravity CLI with their own model, effort, sandbox and approval settings, OpenCode or Pi with the model you pick inside the session, GitHub Copilot CLI with its allow-all choice, Cursor CLI with its run-everything choice, or Junie CLI in Plan or Brave mode. Open a raw shell, or define an agent from any command your shell can run.
 - **Several sessions at once.** Keep a Claude Code run, a Codex review and a shell side by side, each with its own state.
-- **[Voice input](#voice-input).** Dictate prompts instead of thumb-typing them. Your own computer does the transcription, in 25 languages. Opt-in, and the audio is never stored.
+- **[Voice input](#voice-input).** Dictate prompts instead of thumb-typing them. Mobaide Cloud transcribes at once, or your own computer does it privately, in 25 languages. Opt-in, and the audio is never stored.
 - **Git from your phone.** Read diffs, stage, commit, fetch, pull, push, rebase, resolve conflicts and manage branches. Git runs on your machine, with the credentials it already has.
 - **Optional Git worktrees.** Start any session in its own worktree so parallel runs do not collide. Opt-in per launch, Git workspaces only.
 - **Auto Scan.** Watch GitHub issues or [Linear](https://linear.app) for matching issues and launch the AI agent you pick in a new worktree for each one.
@@ -59,7 +59,7 @@ See the [feature reference](docs/features.md) for the details.
 
 ## Voice input
 
-Say your prompt instead of thumb-typing it. Your own computer turns the speech into text, and the text waits in the command field until you send it. Voice input works in the Android and iOS apps and in the browser, for every session kind.
+Say your prompt instead of thumb-typing it. Mobaide Cloud or your own computer turns the speech into text, and the text waits in the command field until you send it. Voice input works in the Android and iOS apps and in the browser, for every session kind.
 
 <table align="center">
   <tr>
@@ -72,11 +72,11 @@ Say your prompt instead of thumb-typing it. Your own computer turns the speech i
   </tr>
 </table>
 
-- **Transcribed on your computer.** The agent runs NVIDIA's open Parakeet speech model on your CPU. It needs no GPU and no cloud speech service.
-- **25 languages.** The model detects the language as you speak, so there is nothing to switch.
+- **Two ways to transcribe.** The first mic tap for a computer asks where your speech becomes text. You can switch at any time in that computer's voice input settings.
+- **Mobaide Cloud (recommended).** Nothing to install. The recording goes over TLS to Mobaide's own speech service, which returns the text. The audio is not kept. The text is kept for up to 14 days to prevent abuse. There is a daily allowance, which the app shows.
+- **On your own computer.** The agent runs NVIDIA's open Parakeet speech model on your CPU. It needs no GPU, and nothing outside your computer hears the audio. The relay routes the audio in memory, and the relay and the agent never store or log the audio or the text. The model detects the language as you speak, in 25 languages. The download is about 0.7 GB, once. Transcription uses about 700 MB of memory, released after three idle minutes. You can remove it at any time.
 - **Never sent on its own.** You read the transcript, edit it and send it yourself, so a misheard word cannot become a command.
-- **Nothing stored.** Audio streams over TLS through the relay, which routes it in memory. The relay and the agent never store or log the audio or the text.
-- **Opt-in per computer.** Nothing downloads until you enable it. The download is about 0.7 GB, once. Transcription uses about 700 MB of memory, released after three idle minutes. You can remove voice input at any time.
+- **Opt-in per computer.** Nothing is recorded or downloaded until you choose.
 
 Read more on the [voice input page](https://mobaide.com/voice-input): [how it works](https://mobaide.com/voice-input#how), [setup](https://mobaide.com/voice-input#setup), [requirements](https://mobaide.com/voice-input#requirements), [languages](https://mobaide.com/voice-input#languages), [privacy](https://mobaide.com/voice-input#privacy) and [FAQ](https://mobaide.com/voice-input#faq).
 

@@ -451,6 +451,7 @@ export function Composer({
         {voice.micMode !== 'hidden' && (
           <VoiceButton
             mode={voice.micMode}
+            route={voice.route}
             status={voice.status}
             disabled={closed}
             onClick={voice.onMicClick}

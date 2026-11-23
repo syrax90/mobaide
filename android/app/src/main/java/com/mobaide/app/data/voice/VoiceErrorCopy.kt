@@ -6,7 +6,7 @@ package com.mobaide.app.data.voice
  * "Details". Unknown codes get the generic line.
  */
 object VoiceErrorCopy {
-    /** A dictation that failed; [agent] names the computer. */
+    /** A dictation that failed; [agent] names who transcribes: the computer, or Mobaide Cloud. */
     fun dictation(code: String, agent: String): String = when (code) {
         VoiceCodes.NOT_READY -> "Voice input isn't ready on $agent."
         VoiceCodes.UNSUPPORTED -> "$agent can't run voice input."
@@ -14,7 +14,10 @@ object VoiceErrorCopy {
         VoiceCodes.TRANSCRIPTION_FAILED ->
             "Voice can't run on $agent. Retry, or reinstall voice in Settings."
         VoiceCodes.TRANSCRIPTION_TIMEOUT -> "$agent is taking too long to transcribe."
-        VoiceCodes.DICTATION_NOT_FOUND -> "The dictation expired on the agent."
+        VoiceCodes.DICTATION_NOT_FOUND -> "The dictation expired. Your recording is kept."
+        VoiceCodes.CLOUD_UNAVAILABLE -> "Cloud voice input is unavailable right now. Try again in a moment."
+        VoiceCodes.CLOUD_LIMIT_REACHED -> "Today’s cloud voice input limit is used up."
+        VoiceCodes.CLOUD_DISABLED -> "Cloud voice input isn’t available for this account."
         VoiceCodes.NETWORK -> "The connection dropped. Your recording is kept."
         VoiceCodes.MIC_PERMISSION_DENIED -> "Microphone access is blocked."
         VoiceCodes.MIC_UNAVAILABLE -> "No microphone is available."

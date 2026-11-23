@@ -18,6 +18,7 @@ import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.ui.common.insertAtCursor
 import com.mobaide.app.data.voice.DictationState
 import com.mobaide.app.data.voice.VoiceMicMode
+import com.mobaide.app.data.voice.VoiceRoute
 
 /** What a composer shows for voice input: the mic, and the bar that replaces its buttons while dictating. */
 class VoiceComposerSlots(
@@ -85,6 +86,7 @@ fun rememberVoiceComposerSlots(
     val requestMic = rememberMicPermissionRequest(
         onGranted = voiceViewModel::startDictation,
         onDenied = voiceViewModel::onMicPermissionDenied,
+        cloud = voiceState.route == VoiceRoute.Cloud,
     )
 
     if (voiceState.setupVisible) {
@@ -96,6 +98,10 @@ fun rememberVoiceComposerSlots(
             onRetry = voiceViewModel::install,
             onHideMic = { voiceViewModel.setMicHidden(true) },
             onCleanUpChange = voiceViewModel::setCleanUp,
+            onConfirmEngine = voiceViewModel::confirmEngine,
+            onUseLocal = voiceViewModel::useLocalEngine,
+            onUseCloud = voiceViewModel::useCloudEngine,
+            onRecheckCloud = voiceViewModel::recheckCloud,
         )
     }
 
@@ -110,6 +116,7 @@ fun rememberVoiceComposerSlots(
                     onClick = {
                         if (voiceState.micMode == VoiceMicMode.Ready) requestMic() else voiceViewModel.showSetup()
                     },
+                    route = voiceState.route,
                 )
             }
         }
@@ -120,7 +127,7 @@ fun rememberVoiceComposerSlots(
                 {
                     VoiceDictationBar(
                         state = voiceState.dictation,
-                        agentName = voiceState.agentName,
+                        transcriberName = voiceState.transcriberName,
                         onStop = voiceViewModel::stopDictation,
                         onCancel = voiceViewModel::cancelDictation,
                         onRetry = voiceViewModel::retryDictation,

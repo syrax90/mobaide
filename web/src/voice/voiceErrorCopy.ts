@@ -6,7 +6,7 @@
  */
 import { VOICE_CODE } from './voiceApi';
 
-/** A dictation that failed; `agent` names the computer. */
+/** A dictation that failed; `agent` names who transcribes: the computer, or Mobaide Cloud. */
 export function dictationErrorCopy(code: string, agent: string): string {
   switch (code) {
     case VOICE_CODE.notReady:
@@ -20,7 +20,13 @@ export function dictationErrorCopy(code: string, agent: string): string {
     case VOICE_CODE.transcriptionTimeout:
       return `${agent} is taking too long to transcribe.`;
     case VOICE_CODE.dictationNotFound:
-      return 'The dictation expired on the agent.';
+      return 'The dictation expired. Your recording is kept.';
+    case VOICE_CODE.cloudUnavailable:
+      return 'Cloud voice input is unavailable right now. Try again in a moment.';
+    case VOICE_CODE.cloudLimitReached:
+      return 'Today’s cloud voice input limit is used up.';
+    case VOICE_CODE.cloudDisabled:
+      return 'Cloud voice input isn’t available for this account.';
     case VOICE_CODE.network:
       return 'The connection dropped. Your recording is kept.';
     case VOICE_CODE.micPermissionDenied:

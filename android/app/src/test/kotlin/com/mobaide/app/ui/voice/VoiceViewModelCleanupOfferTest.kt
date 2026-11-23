@@ -5,15 +5,19 @@ import androidx.lifecycle.SavedStateHandle
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.data.network.dto.CloudVoiceStatus
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.VoiceCapability
 import com.mobaide.app.data.network.dto.VoiceStatusResponse
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.CloudVoiceRepository
 import com.mobaide.app.data.repository.VoiceRepository
 import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.testing.MainDispatcherRule
+import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,10 +53,16 @@ class VoiceViewModelCleanupOfferTest {
             coEvery { refresh() } returns mockk()
             every { status } returns MutableStateFlow<VoiceStatusResponse?>(null)
         }
+        val cloudVoiceRepository = mockk<CloudVoiceRepository> {
+            every { status } returns MutableStateFlow<CloudVoiceStatus?>(null)
+            every { checking } returns flowOf(false)
+            coEvery { refresh(any()) } just Runs
+        }
         val agentRepository = mockk<AgentRepository> { every { observeAgents() } returns MutableStateFlow(emptyList()) }
         val tokenStore = mockk<TokenStore> {
             every { getAgentId() } returns "agent-1"
             every { getAgentUrl() } returns null
+            every { getConnectionMode() } returns TokenStore.ConnectionMode.RELAY
         }
         val preferencesStore = mockk<PreferencesStore> {
             every { voiceMicHidden(any()) } returns flowOf(false)
@@ -64,6 +74,7 @@ class VoiceViewModelCleanupOfferTest {
         return VoiceViewModel(
             context = mockk<Context>(relaxed = true),
             voiceRepository = voiceRepository,
+            cloudVoiceRepository = cloudVoiceRepository,
             agentRepository = agentRepository,
             tokenStore = tokenStore,
             preferencesStore = preferencesStore,

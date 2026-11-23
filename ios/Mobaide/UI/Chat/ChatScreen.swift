@@ -181,7 +181,7 @@ struct ChatScreen: View {
             model.setAppActive(phase != .background)
             if phase == .background { voice.interrupt() }
         }
-        .onChange(of: voice.status?.state) { _, _ in voice.statusChanged() }
+        .onChange(of: voice.dictationTarget) { _, _ in voice.dictationTargetChanged() }
         .onChange(of: voice.dictation.isActive) { _, active in
             UIApplication.shared.isIdleTimerDisabled = active
         }
@@ -202,6 +202,7 @@ struct ChatScreen: View {
             await voice.load()
         }
         .task { await voice.watchConnection() }
+        .task(id: voice.localUnreachable) { await voice.pollWhileUnreachable() }
         .task {
             checkSessionStillExists()
             for await sessions in container.sessionRepository.sessions() {

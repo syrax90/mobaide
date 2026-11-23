@@ -1038,6 +1038,50 @@ The one way the text leaves the PC is the opt-in transcript cleanup (web, Androi
 
 **Troubleshooting.** `hash_mismatch` behind a proxy usually means TLS interception or a captive portal; `disk_full` needs the space shown in `voice status`; `selftest_failed` means the runtime or model could not load (the message names the cause, e.g. a missing glibc symbol) — `voice remove` then `voice install` reinstalls both.
 
+### Cloud voice input
+
+Cloud voice input lets a user dictate without the model on their computer: the client uploads the recording to the central server, and the central server has a hosted speech service turn it into text. The client side and the routes are in [voice-input.md](voice-input.md) (*Cloud voice input*) and [PROTOCOL.md](../PROTOCOL.md).
+
+#### Turning it on
+
+The speech service is any server that speaks the OpenAI chat-completions API with inline audio (`audio_url` with a `data:` URL). Its address, key and model name are set **only** in the central server's environment (`/opt/mobaide/.env` in production). The repository holds no default for them.
+
+| Variable | Meaning |
+|---|---|
+| `CLOUD_VOICE_URL` | Base URL of the speech service (`https://host`, with or without `/v1`). `http://` is accepted only for `127.0.0.1` and `localhost`. |
+| `CLOUD_VOICE_API_KEY` | The key sent as `Authorization: Bearer`. |
+| `CLOUD_VOICE_MODEL` | The model name to request. |
+| `CLOUD_VOICE_ENABLED` | Kill switch, default `true`. `false` turns the feature off without removing the three settings. |
+| `CLOUD_VOICE_PROMPT` | Optional. Replaces the built-in transcription instruction. The built-in one is a plain sentence; put the wording you tuned for your speech service here. |
+| `CLOUD_VOICE_USER_DAILY_SECONDS` | Audio per account per UTC day. Default 1800 (30 minutes). |
+| `CLOUD_VOICE_GLOBAL_DAILY_SECONDS` | Audio for all accounts per UTC day. Default 72000 (20 hours). |
+| `CLOUD_VOICE_MAX_CONCURRENCY` | Requests to the speech service at once. Default 4. Keep it at or below what the key allows in parallel. |
+| `CLOUD_VOICE_ALLOWED_EMAILS` | Optional, comma-separated. When set, only these accounts are offered cloud voice input (a staged rollout). |
+
+The feature is on when the first three are set and `CLOUD_VOICE_ENABLED` is not `false`. The server reads them at startup, so a change needs a restart (`docker compose up -d`). With all three set it logs `cloud_voice.enabled`. With only some of them set it logs `cloud_voice.misconfigured missing=…` and stays off. While it is off, clients get `state: off` and keep on-computer voice only.
+
+#### What the server sends and keeps
+
+- One request per recording: the transcription instruction, the audio as a WAV `data:` URL, `temperature: 0`, a token limit tied to the recording's length, and `user` = the account's internal id. The id lets the operator of the speech service see who uses it and block an account there.
+- A recording without speech (shorter than 0.3 s, or silent) is answered as empty text and never sent.
+- The audio is in memory only, until the answer arrives. Neither audio nor text is logged or stored. The log line `cloud_voice.transcribed` holds the account id, durations and the text length.
+- SQLite holds the seconds per account and day (`cloud_voice_usage`, kept 35 days; an hourly job deletes older rows) and the engine choice per agent (`voice_engine_choices`). Both are deleted with the account.
+- The seconds are counted when a recording is sent, and given back only when the speech service refuses it or cannot be reached. A request that the client abandons half-way still counts, and so does one that the speech service does not answer in time.
+
+#### When the speech service is down
+
+- A `400`, `413` or `422` answer fails that one recording (`cloud_voice.request_rejected`) and is not an outage. A `400` on every request usually means `CLOUD_VOICE_MODEL` is not a name the service knows.
+- A failed request (no connection, a timeout, a 5xx, or a refused key) marks it as down: the log says `cloud_voice.down reason=…`, and clients get `state: unavailable` and `503 cloud_unavailable`. The apps say so and offer on-computer voice.
+- While it is down, the server asks it again at most every 5 s, and only when a client asks for the status, opens a dictation or retries one. The first answer logs `cloud_voice.up`.
+- `cloud_voice.key_rejected` (401 or 403) means the key in `.env` is wrong or was revoked.
+- A `403` whose body says the user is blocked turns cloud voice input off for that one account (`cloud_voice.user_blocked user=…`); the server asks again after 10 minutes. Never block the user `health-check` there: it is the server's own probe, and blocking it reads as an outage for everyone.
+- After a failed attempt, the same recording is not sent again before 2, 4, 8, then 16 s have passed, however often the client asks.
+- `429` from the speech service reaches the client as `voice_busy`, which the apps retry by themselves.
+
+#### Testing it
+
+`tests/e2e/manual_stack.py up --fake-cloud-voice` starts a built-in fake speech service (transcript `fake cloud transcript <ms> ms`). Creating the file `fake-cloud-voice.down` in the state folder makes it answer 503, which shows the "unavailable" flows. `up --cloud-voice` uses the real service named by `CLOUD_VOICE_URL`, `CLOUD_VOICE_API_KEY` and `CLOUD_VOICE_MODEL` in your shell environment. See [manual-e2e-testing.md](manual-e2e-testing.md).
+
 ### Threat model
 
 The agent runs with the developer's full UID privileges and has read/write access to `$HOME`. A compromise of the relay channel — i.e. a stolen `RELAY_AGENT_TOKEN` or a compromised central server — gains the same access the developer has interactively:

@@ -1,14 +1,13 @@
 import type { ReactNode } from 'react';
 import type { VoiceStatus } from '../../../protocol/dto/voice';
-import {
-  voicePreparingLabel,
-  voiceProgressPercent,
-  type VoiceMicMode,
-} from '../../../voice/voiceStatusView';
+import type { ComposerMicMode, VoiceRoute } from '../../../voice/voiceEngine';
+import { voicePreparingLabel, voiceProgressPercent } from '../../../voice/voiceStatusView';
 import { AlertIcon, DownloadIcon, MicIcon, MicOffIcon } from './VoiceIcons';
 
 interface VoiceButtonProps {
-  mode: Exclude<VoiceMicMode, 'hidden'>;
+  mode: Exclude<ComposerMicMode, 'hidden'>;
+  /** Who would transcribe; only the accessible name depends on it. */
+  route?: VoiceRoute;
   status: VoiceStatus | undefined;
   disabled: boolean;
   onClick: () => void;
@@ -18,16 +17,20 @@ interface VoiceButtonProps {
  * The toolbar's voice entry. Every state has its own glyph, as on Android,
  * so nothing depends on colour: a mic when ready, a hollow mic when off, a
  * download arrow (with the percentage) while preparing, `!` after a failed
- * install. The accessible name spells the state out.
+ * install or while cloud voice input cannot record. The accessible name
+ * spells the state out.
  */
-export function VoiceButton({ mode, status, disabled, onClick }: VoiceButtonProps) {
+export function VoiceButton({ mode, route = 'local', status, disabled, onClick }: VoiceButtonProps) {
   let icon: ReactNode;
   let text: string | null = null;
   let label: string;
   switch (mode) {
     case 'ready':
       icon = <MicIcon />;
-      label = 'Dictate: record speech for your computer to transcribe';
+      label =
+        route === 'cloud'
+          ? 'Dictate: record speech for Mobaide Cloud to transcribe'
+          : 'Dictate: record speech for your computer to transcribe';
       break;
     case 'off':
       icon = <MicOffIcon />;
@@ -44,11 +47,16 @@ export function VoiceButton({ mode, status, disabled, onClick }: VoiceButtonProp
       icon = <AlertIcon />;
       label = 'Voice input needs attention. Show details';
       break;
+    case 'unavailable':
+      icon = <AlertIcon />;
+      label = 'Cloud voice input can’t record right now. Show details';
+      break;
   }
   return (
     <button
       type="button"
-      className={`button voice-button voice-button-${mode}`}
+      // `unavailable` shares the look of a failed install: the same "!" tone.
+      className={`button voice-button voice-button-${mode === 'unavailable' ? 'failed' : mode}`}
       aria-label={label}
       title={label}
       disabled={disabled}

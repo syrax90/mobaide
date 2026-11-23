@@ -112,6 +112,8 @@ export const COVERED_FIXTURES: readonly string[] = [
   'dto/agent/SessionResponse.json',
   'dto/agent/VersionInfoResponse.json',
   'dto/agent/VoiceStatusResponse.json',
+  'dto/central/CloudVoiceChangedPayload.json',
+  'dto/central/CloudVoiceStatus.json',
   'dto/central/CreateCustomAgentTypeRequest.json',
   'dto/central/CustomAgentTypeDto.json',
   'dto/central/CustomTypeDeletedPayload.json',

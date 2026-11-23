@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchAgentCapabilities } from '../api/agentCapabilities';
 import {
@@ -25,6 +26,61 @@ const CAPABILITIES_STALE_MS = 5 * 60_000;
  */
 export const VOICE_QUEUED_POLL_MS = 4_000;
 
+/** How often an agent that did not answer is asked again while a voice surface shows. */
+export const VOICE_UNREACHABLE_POLL_MS = 5_000;
+
+/**
+ * Whether a read of the agent's voice failed. True also while it is tried
+ * again, so a retry does not read as a first check.
+ */
+export function voiceQueryFailed(query: {
+  isError: boolean;
+  isPending: boolean;
+  errorUpdateCount: number;
+}): boolean {
+  return query.isError || (query.isPending && query.errorUpdateCount > 0);
+}
+
+/**
+ * The `refetchInterval` of a read the agent did not answer: nothing tells a
+ * failed query that the agent is back, so it is asked again by itself. Like
+ * every `refetchInterval`, it rests while the tab is hidden.
+ */
+function unreachablePoll(state: {
+  status: string;
+  error: unknown;
+  errorUpdateCount: number;
+}): number | false {
+  if (state.status === 'pending') return state.errorUpdateCount > 0 ? VOICE_UNREACHABLE_POLL_MS : false;
+  if (state.status !== 'error') return false;
+  // A refusal is an answer: the next request would get the same one.
+  const code = (state.error as { status?: unknown } | null)?.status;
+  const refused = typeof code === 'number' && code >= 400 && code < 500;
+  return refused ? false : VOICE_UNREACHABLE_POLL_MS;
+}
+
+/**
+ * Reads the agent's voice again at once when the agent list says the agent
+ * came online. A request from before that can hang until it times out, so it
+ * is dropped, not waited for.
+ */
+export function useVoiceReprobeOnline(agentId: string, online: boolean): void {
+  const queryClient = useQueryClient();
+  const wasOnline = useRef(online);
+  useEffect(() => {
+    const cameBack = online && !wasOnline.current;
+    wasOnline.current = online;
+    if (!cameBack) return;
+    for (const queryKey of [queryKeys.agentCapabilities(agentId), queryKeys.voiceStatus(agentId)]) {
+      // Cancelled first: a query that has no answer yet keeps its request
+      // through an invalidation.
+      void queryClient
+        .cancelQueries({ queryKey, exact: true })
+        .then(() => queryClient.invalidateQueries({ queryKey, exact: true }));
+    }
+  }, [agentId, online, queryClient]);
+}
+
 /** `capabilities.voice`, sharing the cached `/api/version` probe with the git menu. */
 export function useVoiceCapability(agentId: string, enabled = true) {
   return useQuery({
@@ -33,6 +89,7 @@ export function useVoiceCapability(agentId: string, enabled = true) {
     enabled,
     staleTime: CAPABILITIES_STALE_MS,
     select: voiceCapability,
+    refetchInterval: (query) => unreachablePoll(query.state),
     meta: { silent: true },
   });
 }
@@ -73,7 +130,9 @@ export function useVoiceStatus(agentId: string, enabled: boolean) {
     queryFn: ({ signal }) => getVoiceStatus(agentId, signal),
     enabled,
     refetchInterval: (query) =>
-      query.state.data?.state === VOICE_STATE.queued ? VOICE_QUEUED_POLL_MS : false,
+      query.state.data?.state === VOICE_STATE.queued
+        ? VOICE_QUEUED_POLL_MS
+        : unreachablePoll(query.state),
     meta: { silent: true },
   });
 }

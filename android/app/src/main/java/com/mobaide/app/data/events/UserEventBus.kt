@@ -7,6 +7,7 @@ import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.CloudVoiceChangedPayload
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.CustomTypeDeletedPayload
 import com.mobaide.app.data.network.dto.SessionModeOrderDto
@@ -15,6 +16,7 @@ import com.mobaide.app.data.network.dto.ShortcutDto
 import com.mobaide.app.data.network.dto.TemplateDeletedPayload
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.CloudVoiceRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
@@ -60,6 +62,7 @@ class UserEventBus @Inject constructor(
     private val shortcutsRepository: ShortcutsRepository,
     private val customAgentTypesRepository: CustomAgentTypesRepository,
     private val agentPairedConversion: AgentPairedConversion,
+    private val cloudVoiceRepository: CloudVoiceRepository,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true }
@@ -93,6 +96,7 @@ class UserEventBus @Inject constructor(
                         templatesRepository.clear()
                         shortcutsRepository.clear()
                         customAgentTypesRepository.clear()
+                        cloudVoiceRepository.clear()
                     }
                     is SessionManager.AuthState.IncompatibleServer -> stop()
                     SessionManager.AuthState.UserOnly,
@@ -159,6 +163,7 @@ class UserEventBus @Inject constructor(
                 } catch (t: Throwable) {
                     Log.w(TAG, "refreshModeOrder on WS connect failed", t)
                 }
+                refreshCloudVoice("WS connect")
                 try {
                     agentPairedConversion.reconcile()
                 } catch (t: Throwable) {
@@ -264,6 +269,18 @@ class UserEventBus @Inject constructor(
                 }
                 customAgentTypesRepository.applyModeOrder(order)
             }
+            "cloud_voice.changed" -> {
+                try {
+                    json.decodeFromJsonElement(CloudVoiceChangedPayload.serializer(), payload)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Malformed cloud_voice.changed payload", t)
+                    return
+                }
+                // Another device changed an agent's voice engine. The payload
+                // names the choices; the status around them is read again
+                // with it, and a choice being saved here stays on top.
+                refreshCloudVoice("cloud_voice.changed")
+            }
             "account.first_agent_paired" -> {
                 try {
                     json.decodeFromJsonElement(FirstAgentPairedPayload.serializer(), payload)
@@ -279,6 +296,18 @@ class UserEventBus @Inject constructor(
             }
             // Unknown types are silently ignored — forward compatible.
             else -> Unit
+        }
+    }
+
+    /**
+     * Launched, not awaited: the status read can wait on the speech service,
+     * and the collector must not hold back the events behind it meanwhile.
+     * The repository drops an answer older than one it already applied.
+     */
+    private fun refreshCloudVoice(cause: String) {
+        scope.launch {
+            runCatching { cloudVoiceRepository.refresh() }
+                .onFailure { Log.w(TAG, "cloud voice refresh on $cause failed", it) }
         }
     }
 

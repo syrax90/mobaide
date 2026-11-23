@@ -10,6 +10,7 @@ final class UserEventBusTests: XCTestCase {
         let templateSync = RecordingTemplateSync()
         let shortcutSync = RecordingShortcutSync()
         let customTypeSync = RecordingCustomTypeSync()
+        let cloudVoiceSync = RecordingCloudVoiceSync()
         let conversion = RecordingFirstAgentPairedApplier()
         let bus: UserEventBus
 
@@ -28,6 +29,7 @@ final class UserEventBusTests: XCTestCase {
                 templateSync: templateSync,
                 shortcutSync: shortcutSync,
                 customTypeSync: customTypeSync,
+                cloudVoiceSync: cloudVoiceSync,
                 conversion: conversion
             )
         }
@@ -585,5 +587,101 @@ final class UserEventBusTests: XCTestCase {
             [SessionModeOrderDto(order: ["shell", "custom_ab12cd34ef56"], version: 3, updated_at: "2026-11-04T10:00:00Z")]
         )
     }
-}
 
+    // MARK: - Cloud voice input
+
+    func testCloudVoiceChangedFixtureDemux() throws {
+        for fixtureCase in try EnvelopeFixtures.cases(fixture: "dto/central/CloudVoiceChangedPayload.json") {
+            let envelope = try EnvelopeFixtures.envelope(type: "cloud_voice.changed", payload: fixtureCase.wire)
+            guard case .cloudVoiceChanged(let payload) = UserEnvelopeDemux.demux(envelope) else {
+                return XCTFail("case \(fixtureCase.name): expected cloudVoiceChanged")
+            }
+            XCTAssertEqual(fixtureCase.name == "no_choices", payload.engines.isEmpty, fixtureCase.name)
+        }
+    }
+
+    func testMalformedCloudVoiceChangedIsSilentlyIgnored() {
+        XCTAssertEqual(
+            UserEnvelopeDemux.demux(#"{"type":"cloud_voice.changed","payload":{"engines":["cloud"]}}"#),
+            .none
+        )
+        XCTAssertEqual(UserEnvelopeDemux.demux(#"{"type":"cloud_voice.changed","payload":{}}"#), .none)
+    }
+
+    func testCloudVoiceChangedRoutesToHookAndReconcileRefreshes() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+        let states = StreamCollector(harness.bus.connectionStates())
+
+        await harness.bus.start()
+        let connection = try await harness.transportFactory.connection(1)
+        connection.emit(.opened)
+        _ = try await states.next(where: { $0 == .connected })
+
+        connection.emit(.text(
+            #"{"type":"cloud_voice.changed","payload":{"engines":{"a1b2c3d4e5f6":"cloud","0f9e8d7c6b5a":"local"}}}"#
+        ))
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline,
+              harness.cloudVoiceSync.changes.isEmpty || harness.cloudVoiceSync.refreshCount == 0 {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(
+            harness.cloudVoiceSync.refreshCount, 1,
+            "on-connect reconcile re-reads cloud voice, which a push missed while offline would otherwise lose"
+        )
+        XCTAssertEqual(
+            harness.cloudVoiceSync.changes,
+            [CloudVoiceChangedPayload(engines: ["a1b2c3d4e5f6": "cloud", "0f9e8d7c6b5a": "local"])]
+        )
+    }
+
+    func testSlowCloudVoiceRefreshDoesNotHoldBackLaterEvents() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+        harness.cloudVoiceSync.holdsRefresh = true
+        defer { harness.cloudVoiceSync.holdsRefresh = false }
+        let states = StreamCollector(harness.bus.connectionStates())
+
+        await harness.bus.start()
+        let connection = try await harness.transportFactory.connection(1)
+        connection.emit(.opened)
+        _ = try await states.next(where: { $0 == .connected })
+
+        connection.emit(.text(
+            #"{"type":"cloud_voice.changed","payload":{"engines":{"a1b2c3d4e5f6":"cloud"}}}"#
+        ))
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline,
+              harness.cloudVoiceSync.changes.isEmpty || harness.cloudVoiceSync.refreshCount == 0 {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(harness.cloudVoiceSync.refreshCount, 1)
+        XCTAssertEqual(
+            harness.cloudVoiceSync.changes,
+            [CloudVoiceChangedPayload(engines: ["a1b2c3d4e5f6": "cloud"])],
+            "the status read can wait on the speech service; the events behind it must not"
+        )
+    }
+
+    func testLogoutClearsCloudVoice() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+
+        await harness.bus.start()
+        let connection = try await harness.transportFactory.connection(1)
+        connection.emit(.opened)
+
+        await harness.session.sessionManager.invalidateUserSession(.tokenRejected)
+
+        // Cross-account isolation: the next account on this process must not
+        // see the previous user's engine choices or daily use.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline, harness.cloudVoiceSync.clearCount < 1 {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(harness.cloudVoiceSync.clearCount, 1)
+    }
+}

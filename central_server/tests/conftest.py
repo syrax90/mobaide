@@ -9,6 +9,7 @@ from central_server.ads import ConversionUploader
 from central_server.agents.service import AgentService
 from central_server.app import create_app
 from central_server.auth.service import AuthService
+from central_server.cloud_voice import CloudVoiceService
 from central_server.config import CentralServerConfig
 from central_server.custom_agent_types.service import CustomAgentTypeService
 from central_server.db.database import Database
@@ -124,6 +125,11 @@ async def app(config, db):
     # Disabled uploader (no GOOGLE_ADS_* config in tests); ads tests build
     # their own with a fake transport.
     application.state.ads_uploader = ConversionUploader(db, client=None)
+    # Off (no CLOUD_VOICE_* config in tests); cloud voice tests build their
+    # own with a fake speech service.
+    application.state.cloud_voice_service = CloudVoiceService.from_config(
+        db, application.state.routing, config
+    )
     # Seed admin user (mirrors lifespan)
     await application.state.auth_service.seed_admin_user()
     yield application

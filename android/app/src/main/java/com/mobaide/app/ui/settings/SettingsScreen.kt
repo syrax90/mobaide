@@ -48,6 +48,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.BuildConfig
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MAX
@@ -72,6 +74,9 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val voiceState by voiceViewModel.uiState.collectAsStateWithLifecycle()
+    // Voice input is drawn from the cached cloud status: read it again each
+    // time this screen comes on screen (opened, returned to, app foregrounded).
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { voiceViewModel.refreshCloudIfStale() }
     val context = LocalContext.current
 
     PixelScaffold(
@@ -183,6 +188,8 @@ fun SettingsScreen(
                 onReinstall = voiceViewModel::reinstall,
                 onShowMicChange = { show -> voiceViewModel.setMicHidden(!show) },
                 onCleanUpChange = voiceViewModel::setCleanUp,
+                onEngineChange = voiceViewModel::setEngine,
+                onRecheckCloud = voiceViewModel::recheckCloud,
             )
 
             HorizontalDivider(thickness = 2.dp)

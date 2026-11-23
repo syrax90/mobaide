@@ -55,6 +55,16 @@ protocol CustomTypeSyncApplying: Sendable {
     func clear() async
 }
 
+protocol CloudVoiceSyncApplying: Sendable {
+    /// `cloud_voice.changed`: an engine choice changed on one of the
+    /// account's devices.
+    func applyEnginesChanged(_ payload: CloudVoiceChangedPayload) async
+    /// REST reconcile of the cloud voice status after (re)connect.
+    func refreshCloudVoice() async throws
+    /// Drop the cached status on sign-out (cross-account isolation).
+    func clear() async
+}
+
 protocol FirstAgentPairedApplying: Sendable {
     /// Live `account.first_agent_paired`: the account just paired its first
     /// agent ever, on any client.
@@ -91,6 +101,12 @@ struct NoOpCustomTypeSyncApplier: CustomTypeSyncApplying {
     func refreshCustomTypes() async throws {}
     func applyModeOrder(_ order: SessionModeOrderDto) async {}
     func refreshModeOrder() async throws {}
+    func clear() async {}
+}
+
+struct NoOpCloudVoiceSyncApplier: CloudVoiceSyncApplying {
+    func applyEnginesChanged(_ payload: CloudVoiceChangedPayload) async {}
+    func refreshCloudVoice() async throws {}
     func clear() async {}
 }
 

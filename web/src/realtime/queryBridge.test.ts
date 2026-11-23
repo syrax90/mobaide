@@ -51,6 +51,27 @@ describe('applyUserEvent', () => {
     expect(invalidated).toEqual([['custom-agent-types']]);
   });
 
+  it('refetches cloud voice when another device changes a voice engine', () => {
+    const outcome = applyUserEvent(
+      client,
+      frame('cloud_voice.changed', { engines: { a1b2c3d4e5f6: 'cloud', '0f9e8d7c6b5a': 'local' } }),
+    );
+
+    expect(outcome).toEqual({
+      kind: 'invalidated',
+      type: 'cloud_voice.changed',
+      keys: [['cloud-voice']],
+    });
+    expect(invalidated).toEqual([['cloud-voice']]);
+  });
+
+  it('drops a voice engine notice whose choices it cannot read', () => {
+    const outcome = applyUserEvent(client, frame('cloud_voice.changed', { engines: ['cloud'] }));
+
+    expect(outcome).toEqual({ kind: 'dropped' });
+    expect(invalidated).toEqual([]);
+  });
+
   it('refetches the agent list when the account pairs its first agent', () => {
     const outcome = applyUserEvent(
       client,
@@ -449,6 +470,7 @@ describe('refresh on connect', () => {
       ['templates'],
       ['custom-agent-types'],
       ['session-mode-order'],
+      ['cloud-voice'],
     ]);
   });
 

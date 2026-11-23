@@ -18,6 +18,12 @@ export function ComposerVoiceDialogs({ voice, canSend, canRecord }: ComposerVoic
         <VoiceSetupDialog
           agentId={voice.agentId}
           agentName={voice.agentName}
+          route={voice.route}
+          cloud={voice.cloud}
+          cloudChecking={voice.cloudChecking}
+          onRecheckCloud={voice.recheckCloud}
+          localSupported={voice.localSupported}
+          localProbeFailed={voice.localProbeFailed}
           status={voice.status}
           loadFailed={voice.statusLoadFailed}
           cleanupOffered={voice.cleanupAvailable}
@@ -29,6 +35,7 @@ export function ComposerVoiceDialogs({ voice, canSend, canRecord }: ComposerVoic
           state={dictation.state}
           carried={dictation.carried}
           agentName={voice.agentName}
+          transcriberName={voice.transcriberName}
           canSend={canSend}
           canRecord={canRecord}
           onStop={dictation.stop}

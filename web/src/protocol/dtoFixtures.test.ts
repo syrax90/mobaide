@@ -9,6 +9,7 @@ import {
   autoScanListResponseSchema,
 } from './dto/autoscan';
 import { chatStoredSessionsResponseSchema } from './dto/chatSessions';
+import { cloudVoiceChangedSchema, cloudVoiceSchema } from './dto/cloudVoice';
 import { createCustomAgentTypeRequestSchema } from './dto/customAgentTypes';
 import { busyByResponseSchema, busyHolderSchema } from './dto/gitConflict';
 import { gitJobSchema } from './dto/gitJob';
@@ -69,6 +70,8 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   SessionModeOrderDto: sessionModeOrderSchema,
   VoiceStatusResponse: voiceStatusSchema,
   ChatStoredSessionsResponse: chatStoredSessionsResponseSchema,
+  CloudVoiceStatus: cloudVoiceSchema,
+  CloudVoiceChangedPayload: cloudVoiceChangedSchema,
 };
 
 const dtoFiles = COVERED_FIXTURES.filter((path) => path.startsWith('dto/'));

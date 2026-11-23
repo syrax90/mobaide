@@ -40,6 +40,7 @@ final class AppContainer {
     let templatesRepository: TemplatesRepository
     let shortcutsRepository: ShortcutsRepository
     let customAgentTypesRepository: CustomAgentTypesRepository
+    let cloudVoiceRepository: CloudVoiceRepository
     let deviceRepository: DeviceRepository
     let terminalSessionStore: TerminalSessionStore
     let chatSessionStore: ChatSessionStore
@@ -124,6 +125,10 @@ final class AppContainer {
             centralAPI: centralAPI,
             userIdentityStore: userIdentityStore
         )
+        let cloudVoiceRepository = CloudVoiceRepository(
+            centralAPI: centralAPI,
+            userIdentityStore: userIdentityStore
+        )
         let deviceRepository = DeviceRepository(
             centralAPI: centralAPI,
             userIdentityStore: userIdentityStore
@@ -152,6 +157,7 @@ final class AppContainer {
             templateSync: templatesRepository,
             shortcutSync: shortcutsRepository,
             customTypeSync: customAgentTypesRepository,
+            cloudVoiceSync: cloudVoiceRepository,
             conversion: agentPairedConversion
         )
 
@@ -186,6 +192,7 @@ final class AppContainer {
         self.templatesRepository = templatesRepository
         self.shortcutsRepository = shortcutsRepository
         self.customAgentTypesRepository = customAgentTypesRepository
+        self.cloudVoiceRepository = cloudVoiceRepository
         self.deviceRepository = deviceRepository
         self.authRepository = authRepository
         self.signInService = SignInService(

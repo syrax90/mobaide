@@ -125,6 +125,71 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-22: cloud voice input
+
+Additive delta within proto-v7 (2026-11-22, cloud voice input — central server, web, Android and iOS): **six REST routes and one user event on the central server. No version bump; the agent is untouched.**
+
+A user can dictate without a speech model on the computer. The client uploads the recording to the central server, and the central server has a hosted speech service turn it into text. The agent's on-computer voice input (delta 2026-10-14) stays, and the user chooses per agent which one transcribes.
+
+All routes take the user token (`Authorization: Bearer`, the same token as `/api/agents`). A server from before this delta answers `404`; a client reads that as "not offered". The feature is on only when the server's configuration names a speech service (docs/deployment.md, *Cloud voice input*).
+
+#### Cloud voice status
+
+`GET /api/voice/cloud` → `CloudVoiceStatus {"state", "limits": {"sample_rate", "max_seconds", "max_chunk_bytes"}, "usage": {"used_seconds", "limit_seconds", "resets_at"}, "engines": {"<agent_id>": "cloud" | "local"}}`, every key always present.
+
+| `state` | Meaning |
+|---|---|
+| `off` | Not offered to this account: the feature is off, or the account is not in the rollout. Clients behave as before this delta. |
+| `ready` | A dictation can start. |
+| `unavailable` | The speech service does not answer, or the limit for all users is used up. Clients say so and offer on-computer voice. |
+| `limit_reached` | The caller used today's allowance (`usage.limit_seconds`, counted per UTC day). It is back at `usage.resets_at`. |
+
+`state` is an open vocabulary: a client reads a value it does not know as `off`. `limits` has the role of `capabilities.voice` for cloud dictations. `engines` holds the caller's choice per agent; an agent without an entry has no choice yet, and a value a client does not know reads as no choice.
+
+When the last answer of the speech service is older than five minutes, this route asks it again (one small request, at most one at a time) and waits up to 2 s for the answer. After that it answers from the last known state.
+
+#### Voice engine choice
+
+`PUT /api/voice/cloud/engines/{agent_id}` `{"engine": "cloud" | "local"}` → the full `CloudVoiceStatus`. It stores where that agent's dictations are transcribed, for every device of the account. `404 agent_not_found` when the agent is not the caller's; `403 cloud_disabled` for `cloud` while cloud voice input is not offered.
+
+A change publishes the user event `cloud_voice.changed` `{"engines": {…}}` (the whole map) on `/ws/user-events`. Clients refresh their status on it.
+
+How a client resolves an agent:
+
+1. `state` is `off` or unknown: on-computer voice, as before.
+2. The agent has an entry in `engines`: that engine.
+3. No entry, and the agent's own voice input is enabled (`VoiceStatusResponse.enabled`): on-computer voice.
+4. Otherwise the first mic tap opens a chooser. Cloud is preselected there, and nothing is recorded before the user confirms.
+
+Because cloud voice input needs nothing from the agent, the mic is also shown for an agent without `capabilities.voice`.
+
+#### Cloud dictation
+
+The four routes mirror the agent's dictation routes (delta 2026-10-14) body for body, so a client uploads to either with the same code:
+
+1. **Open.** `POST /api/voice/cloud/dictations` → `{"dictation_id", "sample_rate", "max_seconds", "max_chunk_bytes"}`. An account has one open dictation: a new one replaces the previous one.
+2. **Upload audio.** `POST /api/voice/cloud/dictations/{id}/audio` `{"seq", "pcm16_b64"}` → `{"seq", "duration_ms"}`. Same rules as on the agent: 16 kHz mono little-endian PCM16, `seq` from 0, one request in flight, a repeated `seq` is acknowledged without being appended again.
+3. **Finish.** `POST /api/voice/cloud/dictations/{id}/finish` `{"last_seq"}` → `{"dictation_id", "state", "text", "duration_ms"}`. `state` is `done` or `transcribing` (call again; the server waits about 20 s per call for the text). A recording with no speech answers `done` with an empty `text` and is not sent to the speech service.
+4. **Abort.** `DELETE /api/voice/cloud/dictations/{id}` (204, idempotent).
+
+A failed `finish` keeps the audio on the server, so calling `finish` again tries the speech service again. The server spaces these attempts (2, 4, 8, then 16 s): a `finish` that comes sooner gets the previous refusal again. A finished result is kept for 2 minutes. An open dictation expires after 60 s without a request, or 5 minutes after it was opened.
+
+Refusals use the agent's envelope `{"detail": {"code", "message", …}}` and never `401`:
+
+| Status and code | When |
+|---|---|
+| `403 cloud_disabled` | Cloud voice input is not offered to this account. |
+| `503 cloud_unavailable` | The speech service does not answer, or it refused this recording. Checked when a dictation opens (so the user learns it after a few words, not after the whole recording) and when it finishes. The client keeps the audio and offers Retry. |
+| `429 cloud_limit_reached` | Today's allowance is used up; `resets_at` says when it is back. A dictation that was already open may still finish. |
+| `503 voice_busy` | Too many requests at once, or more than 30 dictations in a minute. Clients retry it by themselves, with backoff, as they do for the relay's `503 voice_busy`. |
+| `404 dictation_not_found`, `409 seq_gap` (`expected_seq`), `409 dictation_finished`, `409 too_long` (`max_seconds`), `413 chunk_too_large`, `422 bad_audio` | As on the agent. |
+
+Cloud transcripts skip the transcript cleanup (delta 2026-11-03): the speech service already returns clean text. The central server keeps the audio in memory only, until the speech service has answered, and stores neither audio nor text; it stores the seconds of audio per account and day for the limits. The seconds are counted when the recording is sent, and given back only when the speech service refuses it or cannot be reached, so an aborted `finish` and a request that is not answered in time still count. `central_server/legal/privacy.md` says what the speech service keeps.
+
+#### Cloud voice golden fixtures
+
+`tests/protocol_fixtures/dto/central/CloudVoiceStatus.json` and `CloudVoiceChangedPayload.json`. The dictation bodies are the agent's (`VoiceDictation*.json`).
+
 ### Delta 2026-11-21: delete a stored chat session
 
 Additive delta within proto-v7 (2026-11-21): **one route, one response field. No version bump; `central_server` is untouched (it already forwards `DELETE`).**

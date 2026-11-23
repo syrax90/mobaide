@@ -9,6 +9,7 @@ subprocesses. Run just this file with::
 from __future__ import annotations
 
 import argparse
+import asyncio
 import io
 import json
 import os
@@ -710,3 +711,81 @@ def test_wsl_agent_token_travels_in_wslenv_not_on_the_command_line(monkeypatch):
                           "_", "/home/u/.mobaide-manual-e2e")
     assert "--exec" in argv
     assert not any("wsl-secret" in a for a in argv)
+
+
+def test_cloud_voice_settings_reach_the_server_only_when_asked(monkeypatch, tmp_path):
+    """Cloud voice input stays off unless `up` asks for it: a shell that
+    exports CLOUD_VOICE_* (a sourced central_server .env) must not silently
+    send the stack's dictations to a real speech service."""
+    stray = {
+        "CLOUD_VOICE_URL": "https://stray.test",
+        "CLOUD_VOICE_API_KEY": "stray-key",
+        "CLOUD_VOICE_MODEL": "stray-model",
+    }
+    for name, value in stray.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("CLOUD_VOICE_ENABLED", "true")
+    state = {"jwt_secret_key": "secret"}
+
+    def server_env(argv, fake=None):
+        args = ms.build_parser().parse_args(argv)
+        return ms.build_server_env(
+            state, args, tmp_path / "server", ms.cloud_voice_env(args, fake)
+        )
+
+    env = server_env(["up"])
+    assert [name for name in env if name.startswith("CLOUD_VOICE_")] == []
+
+    env = server_env(["up", "--cloud-voice"])
+    assert {name: env[name] for name in stray} == stray
+
+    fake = argparse.Namespace(url="http://127.0.0.1:1", key="fake-key", model="fake-speech")
+    env = server_env(["up", "--fake-cloud-voice"], fake)
+    assert {name: env[name] for name in stray} == {
+        "CLOUD_VOICE_URL": fake.url,
+        "CLOUD_VOICE_API_KEY": fake.key,
+        "CLOUD_VOICE_MODEL": fake.model,
+    }
+
+    # A half-set environment is an error, not a half-configured server.
+    monkeypatch.setenv("MOBAIDE_RELEASE_DIR", str(tmp_path / "release"))
+    monkeypatch.delenv("CLOUD_VOICE_API_KEY")
+    with pytest.raises(SystemExit):
+        server_env(["up", "--cloud-voice"])
+
+
+def test_fake_speech_service_answers_the_servers_own_client(tmp_path):
+    """`up --fake-cloud-voice` is only useful while the fake speaks what
+    central_server sends: the server's real client must get a transcript from
+    it, and the down flag must read as an outage that ends when it is removed."""
+    from central_server.cloud_voice.speech_client import SpeechClient, SpeechServiceError
+
+    down_flag = tmp_path / ms.FAKE_SPEECH_DOWN_NAME
+    fake = ms.FakeSpeechService(down_flag)
+    one_second = bytes(32000)
+
+    async def transcribe(key: str) -> str:
+        client = SpeechClient(base_url=fake.url, api_key=key, model=fake.model)
+        try:
+            answer = await client.transcribe(
+                one_second, user="u1", max_tokens=64, timeout=5.0
+            )
+            return answer.text
+        finally:
+            await client.aclose()
+
+    try:
+        assert asyncio.run(transcribe(fake.key)) == "fake cloud transcript 1000 ms"
+
+        down_flag.touch()
+        with pytest.raises(SpeechServiceError) as outage:
+            asyncio.run(transcribe(fake.key))
+        assert outage.value.kind == "unavailable"
+        down_flag.unlink()
+        assert asyncio.run(transcribe(fake.key)) == "fake cloud transcript 1000 ms"
+
+        with pytest.raises(SpeechServiceError) as rejected:
+            asyncio.run(transcribe("not-the-key"))
+        assert rejected.value.kind == "unavailable"
+    finally:
+        fake.close()

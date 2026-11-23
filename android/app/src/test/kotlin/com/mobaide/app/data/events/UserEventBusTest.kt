@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.SessionModeOrderDto
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.CloudVoiceRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
@@ -19,6 +20,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -72,6 +74,7 @@ class UserEventBusTest {
         val customAgentTypesRepository: CustomAgentTypesRepository,
         val authStateFlow: MutableStateFlow<SessionManager.AuthState>,
         val agentPairedConversion: AgentPairedConversion,
+        val cloudVoiceRepository: CloudVoiceRepository,
     )
 
     private fun newBus(initiallyLoggedIn: Boolean = true): Fixture {
@@ -119,15 +122,19 @@ class UserEventBusTest {
         coEvery { agentPairedConversion.onFirstAgentPairedEvent() } just Runs
         coEvery { agentPairedConversion.reconcile() } just Runs
 
+        val cloudVoiceRepository = mockk<CloudVoiceRepository>(relaxed = true)
+
         val bus = UserEventBus(
             wsm, sessionManager, userIdentityStore,
             agentRepository, templatesRepository, shortcutsRepository,
             customAgentTypesRepository, agentPairedConversion,
+            cloudVoiceRepository,
         )
         return Fixture(
             bus, connEvents, conn, wsm,
             agentRepository, templatesRepository, shortcutsRepository,
             customAgentTypesRepository, authStateFlow, agentPairedConversion,
+            cloudVoiceRepository,
         )
     }
 
@@ -866,6 +873,7 @@ class UserEventBusTest {
         verify(timeout = 2000, exactly = 1) { fx.templatesRepository.clear() }
         verify(timeout = 2000, exactly = 1) { fx.shortcutsRepository.clear() }
         verify(timeout = 2000, exactly = 1) { fx.customAgentTypesRepository.clear() }
+        verify(timeout = 2000, exactly = 1) { fx.cloudVoiceRepository.clear() }
     }
 
 
@@ -943,6 +951,96 @@ class UserEventBusTest {
             fx.agentRepository.updateAgentOnline("sync", true)
         }
         verify(exactly = 0) { fx.customAgentTypesRepository.applyModeOrder(any()) }
+
+        fx.bus.stop()
+    }
+
+    // ---- Cloud voice input: cloud_voice.changed and the reconnect reconcile --
+
+    @Test
+    fun connected_event_alsoRefreshesCloudVoice() = runTest {
+        // A cloud_voice.changed that fired while offline is only recovered
+        // by the reconnect reconcile.
+        val fx = newBus()
+        fx.stubModeOrderHooks()
+        fx.bus.start()
+        awaitSubscribed(fx.connEvents)
+
+        emit(fx.connEvents, WsEvent.Connected)
+
+        coVerify(timeout = 2000, exactly = 1) { fx.cloudVoiceRepository.refresh(any()) }
+
+        fx.bus.stop()
+    }
+
+    @Test
+    fun message_cloudVoiceChanged_refreshesCloudVoice() = runTest {
+        val fx = newBus()
+        fx.bus.start()
+        awaitSubscribed(fx.connEvents)
+
+        emit(
+            fx.connEvents,
+            WsEvent.Message(
+                """{"type":"cloud_voice.changed","payload":{"engines":{"a1b2c3d4e5f6":"cloud","0f9e8d7c6b5a":"local"}}}""",
+            ),
+        )
+
+        coVerify(timeout = 2000, exactly = 1) { fx.cloudVoiceRepository.refresh(any()) }
+
+        fx.bus.stop()
+    }
+
+    @Test
+    fun message_cloudVoiceChanged_slowRefreshDoesNotHoldBackLaterEvents() = runTest {
+        // The status read can wait on the speech service; the events behind
+        // it must be applied meanwhile.
+        val fx = newBus()
+        val answered = CompletableDeferred<Unit>()
+        coEvery { fx.cloudVoiceRepository.refresh(any()) } coAnswers { answered.await() }
+        fx.bus.start()
+        awaitSubscribed(fx.connEvents)
+
+        emit(
+            fx.connEvents,
+            WsEvent.Message("""{"type":"cloud_voice.changed","payload":{"engines":{"a1b2c3d4e5f6":"cloud"}}}"""),
+        )
+        emit(
+            fx.connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+
+        coVerify(timeout = 2000, exactly = 1) { fx.cloudVoiceRepository.refresh(any()) }
+        verify(timeout = 2000, exactly = 1) {
+            fx.agentRepository.updateAgentOnline("sync", true)
+        }
+
+        answered.complete(Unit)
+        fx.bus.stop()
+    }
+
+    @Test
+    fun message_cloudVoiceChangedMalformedPayload_isSilentlySkipped() = runTest {
+        val fx = newBus()
+        fx.bus.start()
+        awaitSubscribed(fx.connEvents)
+
+        emit(
+            fx.connEvents,
+            WsEvent.Message("""{"type":"cloud_voice.changed","payload":{"engines":["cloud"]}}"""),
+        )
+        emit(
+            fx.connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+        verify(timeout = 2000, exactly = 1) {
+            fx.agentRepository.updateAgentOnline("sync", true)
+        }
+        coVerify(exactly = 0) { fx.cloudVoiceRepository.refresh(any()) }
 
         fx.bus.stop()
     }

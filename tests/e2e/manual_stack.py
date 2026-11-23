@@ -153,6 +153,16 @@ ANDROID_MAIN_ACTIVITY = f"{ANDROID_APP_ID}/.MainActivity"
 # a leftover MOBAIDE_ENV=test would otherwise silently flip the real-mode agent
 # onto the fake echo PTY. MOBAIDE_CLAUDE_BIN/CODEX/AGY are deliberately kept:
 # inheriting the operator's CLI paths is what makes managed sessions work.
+# What turns cloud voice input on in central_server. Never inherited by
+# accident: `up --cloud-voice` passes the caller's values (or the release
+# dir's voice/cloud-voice.env) on, and `up --fake-cloud-voice` points them at
+# FakeSpeechService.
+CLOUD_VOICE_ENV_VARS = ("CLOUD_VOICE_URL", "CLOUD_VOICE_API_KEY", "CLOUD_VOICE_MODEL")
+CLOUD_VOICE_OPTIONAL_ENV_VARS = ("CLOUD_VOICE_PROMPT",)
+CLOUD_VOICE_SECRETS_REL = Path("voice") / "cloud-voice.env"
+# While this file exists in the state dir, the fake speech service answers 503.
+FAKE_SPEECH_DOWN_NAME = "fake-cloud-voice.down"
+
 SANITIZED_ENV_VARS = (
     "MOBAIDE_ENV",
     "JWT_SECRET_KEY",
@@ -179,6 +189,9 @@ SANITIZED_ENV_VARS = (
     "MOBAIDE_VOICE_FAKE",
     "MOBAIDE_VOICE_DIR",
     "MOBAIDE_WORKTREES_DIR",
+    *CLOUD_VOICE_ENV_VARS,
+    *CLOUD_VOICE_OPTIONAL_ENV_VARS,
+    "CLOUD_VOICE_ENABLED",
 )
 
 _DEPS: SimpleNamespace | None = None
@@ -845,7 +858,112 @@ def base_child_env() -> dict:
     return env
 
 
-def build_server_env(state: dict, args: argparse.Namespace, server_dir: Path) -> dict:
+class FakeSpeechService:
+    """A stand-in for the speech service behind cloud voice input.
+
+    While ``down_flag`` exists it answers 503, which is how the "unavailable"
+    flows are exercised: create or delete the file while the stack runs.
+    """
+
+    def __init__(self, down_flag: Path) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.key = secrets.token_urlsafe(16)
+        self.model = "fake-speech"
+        service = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args) -> None:
+                pass
+
+            def _answer(self, status: int, body: dict) -> None:
+                raw = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_POST(self) -> None:  # noqa: N802 (http.server's name)
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length)
+                if self.headers.get("Authorization") != f"Bearer {service.key}":
+                    self._answer(401, {"error": {"message": "bad key"}})
+                    return
+                if self.path != "/v1/chat/completions":
+                    self._answer(404, {"error": {"message": "not found"}})
+                    return
+                if down_flag.exists():
+                    self._answer(503, {"error": {"message": "down"}})
+                    return
+                try:
+                    parts = json.loads(raw)["messages"][0]["content"]
+                    url = next(p["audio_url"]["url"] for p in parts if p.get("type") == "audio_url")
+                except (ValueError, LookupError, TypeError, AttributeError):
+                    self._answer(400, {"error": {"message": "no audio"}})
+                    return
+                # 16 kHz mono PCM16 behind a 44-byte WAV header.
+                pcm_bytes = max(0, len(url.partition(",")[2]) * 3 // 4 - 44)
+                text = f"fake cloud transcript {pcm_bytes // 32} ms"
+                self._answer(200, {"choices": [{"message": {"content": text},
+                                                "finish_reason": "stop"}]})
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server.daemon_threads = True
+        self.url = f"http://127.0.0.1:{self._server.server_address[1]}"
+        threading.Thread(target=self._server.serve_forever, daemon=True,
+                         name="fake-speech-service").start()
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+def cloud_voice_env(args: argparse.Namespace, fake: FakeSpeechService | None) -> dict:
+    """The central_server settings for cloud voice input; empty leaves it off."""
+    if fake is not None:
+        return {"CLOUD_VOICE_URL": fake.url, "CLOUD_VOICE_API_KEY": fake.key,
+                "CLOUD_VOICE_MODEL": fake.model}
+    if not getattr(args, "cloud_voice", False):
+        return {}
+    secrets_file = cloud_voice_secrets_file()
+    values = read_env_file(secrets_file) if secrets_file.is_file() else {}
+    names = (*CLOUD_VOICE_ENV_VARS, *CLOUD_VOICE_OPTIONAL_ENV_VARS)
+    values = {name: os.environ.get(name) or values.get(name, "") for name in names}
+    missing = [name for name in CLOUD_VOICE_ENV_VARS if not values[name]]
+    if missing:
+        die(f"--cloud-voice needs {', '.join(missing)} in the environment or in "
+            f"{secrets_file} (or use --fake-cloud-voice)")
+    return {name: value for name, value in values.items() if value}
+
+
+def cloud_voice_secrets_file() -> Path:
+    """voice/cloud-voice.env in the release dir that deploy/prod/release_common.py uses."""
+    if os.environ.get("MOBAIDE_RELEASE_DIR"):
+        release_dir = Path(os.environ["MOBAIDE_RELEASE_DIR"]).expanduser()
+    elif os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        release_dir = Path(os.environ["LOCALAPPDATA"]) / "mobaide-release"
+    else:
+        release_dir = Path.home() / ".config" / "mobaide-release"
+    return release_dir / CLOUD_VOICE_SECRETS_REL
+
+
+def read_env_file(path: Path) -> dict:
+    """KEY=value lines, optionally `export`-prefixed and shell-quoted."""
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        words = shlex.split(line, comments=True)
+        if words[:1] == ["export"]:
+            words = words[1:]
+        if len(words) == 1 and "=" in words[0]:
+            name, _, value = words[0].partition("=")
+            values[name] = value
+    return values
+
+
+def build_server_env(
+    state: dict, args: argparse.Namespace, server_dir: Path, cloud_voice: dict | None = None
+) -> dict:
     env = base_child_env()
     env.update(
         {
@@ -862,6 +980,7 @@ def build_server_env(state: dict, args: argparse.Namespace, server_dir: Path) ->
             "LOG_LEVEL": "INFO",
         }
     )
+    env.update(cloud_voice or {})
     return env
 
 
@@ -2885,6 +3004,8 @@ def cmd_up(args: argparse.Namespace) -> int:
     simulator_udid = None
     ios_installed = False
     children: list[ChildProcess] = []
+    fake_speech: FakeSpeechService | None = None
+    (state_dir / FAKE_SPEECH_DOWN_NAME).unlink(missing_ok=True)
     client = None
     wsl_work = None
     wsl_forwarder = None
@@ -2949,11 +3070,17 @@ def cmd_up(args: argparse.Namespace) -> int:
                 "first run and ALLOW Python on Private networks, or the phone cannot connect"
             )
 
+        if args.fake_cloud_voice:
+            fake_speech = FakeSpeechService(state_dir / FAKE_SPEECH_DOWN_NAME)
+            log(f"cloud voice input: fake speech service on {fake_speech.url} "
+                f"(create {state_dir / FAKE_SPEECH_DOWN_NAME} to make it unavailable)")
+        elif args.cloud_voice:
+            log("cloud voice input: the speech service from CLOUD_VOICE_URL")
         log(f"starting central_server on {args.host}:{args.port} (MOBAIDE_ENV=test)")
         server = ChildProcess(
             "server",
             [sys.executable, "-u", "-m", "central_server"],
-            build_server_env(state, args, server_dir),
+            build_server_env(state, args, server_dir, cloud_voice_env(args, fake_speech)),
             server_dir,
             logs_dir / "server.log",
         )
@@ -3085,6 +3212,8 @@ def cmd_up(args: argparse.Namespace) -> int:
             child.stop(deps.psutil)
         if wsl_forwarder is not None:
             wsl_forwarder.close()
+        if fake_speech is not None:
+            fake_speech.close()
         if client is not None:
             client.close()
         if not args.keep_emulator:
@@ -3487,6 +3616,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run voice input with MOBAIDE_VOICE_FAKE=1: a tiny "
                          "generated model and a deterministic transcript, so "
                          "enable/dictate flows need no 670 MB download")
+    cloud = up.add_mutually_exclusive_group()
+    cloud.add_argument("--fake-cloud-voice", action="store_true",
+                       help="turn on cloud voice input against a built-in fake "
+                            "speech service with a deterministic transcript")
+    cloud.add_argument("--cloud-voice", action="store_true",
+                       help="turn on cloud voice input against the speech service "
+                            "named by CLOUD_VOICE_URL, CLOUD_VOICE_API_KEY and "
+                            "CLOUD_VOICE_MODEL (+ optional CLOUD_VOICE_PROMPT) from "
+                            "your environment, else from voice/cloud-voice.env in "
+                            "the release dir (~/.config/mobaide-release)")
     up.add_argument("--fresh", action="store_true",
                     help="wipe the state dir first: new secret, account, agent, DB")
     up.add_argument("--email", default=None, help=f"account email (default {DEFAULT_EMAIL})")
