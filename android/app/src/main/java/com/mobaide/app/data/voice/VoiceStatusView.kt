@@ -10,10 +10,13 @@ import kotlin.math.roundToLong
  *
  * - [Hidden]: no voice on this agent (too old, `unsupported`, a state this
  *   client does not know, status not loaded yet) or the user hid the mic.
+ * - [Unavailable]: cloud voice input that cannot record right now (the speech
+ *   service is down, or today's limit is used up); see [VoiceRouting.micMode].
  */
-enum class VoiceMicMode { Hidden, Off, Preparing, Failed, Ready }
+enum class VoiceMicMode { Hidden, Off, Preparing, Failed, Ready, Unavailable }
 
 object VoiceStatusView {
+    /** The mic of on-computer voice input. */
     fun micMode(
         capability: VoiceCapability?,
         status: VoiceStatusResponse?,

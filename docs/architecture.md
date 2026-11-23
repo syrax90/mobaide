@@ -52,6 +52,8 @@ Mobaide bridges this gap with a client-agent-relay architecture:
 
 Chat sessions run the coding agent through an [Agent Client Protocol](https://agentclientprotocol.com) adapter (`mobaide_agent/mobaide/acp/`) and stream a structured timeline on the same per-session socket. See [features.md](features.md#chat-sessions).
 
+One path skips the agent. With Mobaide Cloud voice input, a client sends dictation audio to the central server. The central server passes it to a hosted speech service and returns the text. See [voice-input.md](voice-input.md).
+
 ## Agent stack
 
 | Library | Purpose |

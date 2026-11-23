@@ -378,6 +378,215 @@
         "title": "CancelAccountDeletionResponse",
         "type": "object"
       },
+      "CloudVoiceAudioRequest": {
+        "properties": {
+          "pcm16_b64": {
+            "title": "Pcm16 B64",
+            "type": "string"
+          },
+          "seq": {
+            "minimum": 0.0,
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "pcm16_b64"
+        ],
+        "title": "CloudVoiceAudioRequest",
+        "type": "object"
+      },
+      "CloudVoiceAudioResponse": {
+        "properties": {
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "duration_ms"
+        ],
+        "title": "CloudVoiceAudioResponse",
+        "type": "object"
+      },
+      "CloudVoiceDictationResponse": {
+        "properties": {
+          "dictation_id": {
+            "title": "Dictation Id",
+            "type": "string"
+          },
+          "max_chunk_bytes": {
+            "title": "Max Chunk Bytes",
+            "type": "integer"
+          },
+          "max_seconds": {
+            "title": "Max Seconds",
+            "type": "integer"
+          },
+          "sample_rate": {
+            "title": "Sample Rate",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dictation_id",
+          "sample_rate",
+          "max_seconds",
+          "max_chunk_bytes"
+        ],
+        "title": "CloudVoiceDictationResponse",
+        "type": "object"
+      },
+      "CloudVoiceEngineRequest": {
+        "properties": {
+          "engine": {
+            "enum": [
+              "cloud",
+              "local"
+            ],
+            "title": "Engine",
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine"
+        ],
+        "title": "CloudVoiceEngineRequest",
+        "type": "object"
+      },
+      "CloudVoiceFinishRequest": {
+        "properties": {
+          "last_seq": {
+            "minimum": -1.0,
+            "title": "Last Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "last_seq"
+        ],
+        "title": "CloudVoiceFinishRequest",
+        "type": "object"
+      },
+      "CloudVoiceLimits": {
+        "properties": {
+          "max_chunk_bytes": {
+            "title": "Max Chunk Bytes",
+            "type": "integer"
+          },
+          "max_seconds": {
+            "title": "Max Seconds",
+            "type": "integer"
+          },
+          "sample_rate": {
+            "title": "Sample Rate",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sample_rate",
+          "max_seconds",
+          "max_chunk_bytes"
+        ],
+        "title": "CloudVoiceLimits",
+        "type": "object"
+      },
+      "CloudVoiceResultResponse": {
+        "description": "``state`` is ``done`` (``text`` set) or ``transcribing`` (call\n``finish`` again).",
+        "properties": {
+          "dictation_id": {
+            "title": "Dictation Id",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "dictation_id",
+          "state",
+          "text",
+          "duration_ms"
+        ],
+        "title": "CloudVoiceResultResponse",
+        "type": "object"
+      },
+      "CloudVoiceStatus": {
+        "description": "``GET /api/voice/cloud``.\n\n``state`` is an open vocabulary: ``off`` (not offered to this account),\n``ready``, ``unavailable`` (the speech service does not answer) or\n``limit_reached`` (the caller's daily limit, until ``usage.resets_at``).\nA client reads a value it does not know as ``off``.",
+        "properties": {
+          "engines": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Engines",
+            "type": "object"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/CloudVoiceLimits"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/CloudVoiceUsage"
+          }
+        },
+        "required": [
+          "state",
+          "limits",
+          "usage",
+          "engines"
+        ],
+        "title": "CloudVoiceStatus",
+        "type": "object"
+      },
+      "CloudVoiceUsage": {
+        "description": "The caller's audio transcribed today (UTC) against the daily limit.",
+        "properties": {
+          "limit_seconds": {
+            "title": "Limit Seconds",
+            "type": "integer"
+          },
+          "resets_at": {
+            "title": "Resets At",
+            "type": "string"
+          },
+          "used_seconds": {
+            "title": "Used Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "used_seconds",
+          "limit_seconds",
+          "resets_at"
+        ],
+        "title": "CloudVoiceUsage",
+        "type": "object"
+      },
       "CreateAgentRequest": {
         "properties": {
           "name": {
@@ -4080,6 +4289,241 @@
         "summary": "Version Info",
         "tags": [
           "version"
+        ]
+      }
+    },
+    "/api/voice/cloud": {
+      "get": {
+        "description": "Whether cloud voice input is offered to the caller and works now, its\nlimits, today's use, and the caller's per-agent choices.",
+        "operationId": "cloud_voice_status_api_voice_cloud_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudVoiceStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Cloud Voice Status",
+        "tags": [
+          "cloud-voice"
+        ]
+      }
+    },
+    "/api/voice/cloud/dictations": {
+      "post": {
+        "operationId": "cloud_voice_dictation_create_api_voice_cloud_dictations_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudVoiceDictationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Cloud Voice Dictation Create",
+        "tags": [
+          "cloud-voice"
+        ]
+      }
+    },
+    "/api/voice/cloud/dictations/{dictation_id}": {
+      "delete": {
+        "operationId": "cloud_voice_dictation_delete_api_voice_cloud_dictations__dictation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dictation_id",
+            "required": true,
+            "schema": {
+              "title": "Dictation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cloud Voice Dictation Delete",
+        "tags": [
+          "cloud-voice"
+        ]
+      }
+    },
+    "/api/voice/cloud/dictations/{dictation_id}/audio": {
+      "post": {
+        "operationId": "cloud_voice_dictation_audio_api_voice_cloud_dictations__dictation_id__audio_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dictation_id",
+            "required": true,
+            "schema": {
+              "title": "Dictation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudVoiceAudioRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudVoiceAudioResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cloud Voice Dictation Audio",
+        "tags": [
+          "cloud-voice"
+        ]
+      }
+    },
+    "/api/voice/cloud/dictations/{dictation_id}/finish": {
+      "post": {
+        "operationId": "cloud_voice_dictation_finish_api_voice_cloud_dictations__dictation_id__finish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dictation_id",
+            "required": true,
+            "schema": {
+              "title": "Dictation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudVoiceFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudVoiceResultResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cloud Voice Dictation Finish",
+        "tags": [
+          "cloud-voice"
+        ]
+      }
+    },
+    "/api/voice/cloud/engines/{agent_id}": {
+      "put": {
+        "description": "Choose where one agent's dictations are transcribed and push\n``cloud_voice.changed`` to the caller's other devices.",
+        "operationId": "cloud_voice_set_engine_api_voice_cloud_engines__agent_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudVoiceEngineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudVoiceStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cloud Voice Set Engine",
+        "tags": [
+          "cloud-voice"
         ]
       }
     },

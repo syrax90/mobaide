@@ -16,7 +16,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [PROTOCOL.md](../PROTOCOL.md) | The wire contract: `protocol_version`, WebSocket close codes, the HTTPS-bootstrap update path, agent self-uninstall, voice input API (incl. the opt-in `POST /api/voice/cleanup` transcript cleanup), and the session and workspace git APIs (status, mutations, jobs, branches, rebase, conflict resolver). Also how to bump the version. |
+| [PROTOCOL.md](../PROTOCOL.md) | The wire contract: `protocol_version`, WebSocket close codes, the HTTPS-bootstrap update path, agent self-uninstall, voice input API (incl. the opt-in `POST /api/voice/cleanup` transcript cleanup and the central server's Mobaide Cloud voice API with the `cloud_voice.changed` event), and the session and workspace git APIs (status, mutations, jobs, branches, rebase, conflict resolver). Also how to bump the version. |
 
 ## Clients
 
@@ -34,7 +34,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [voice-input.md](voice-input.md) | Voice input on Android, iOS and web: opt-in flow, per-platform module map, status → mic-button table, dictation rules, opt-in transcript cleanup through the session's CLI (Claude Haiku, Codex Luna, Gemini Flash, OpenCode's default model, GitHub Copilot's default model, Cursor's Auto model, Junie Lite, Pi's default model), permissions and privacy, release checklist. |
+| [voice-input.md](voice-input.md) | Voice input on Android, iOS and web: the two engines (on this computer, or Mobaide Cloud through the central server) and the first-tap chooser, opt-in flow, per-platform module map, status → mic-button table, dictation rules, opt-in transcript cleanup through the session's CLI (Claude Haiku, Codex Luna, Gemini Flash, OpenCode's default model, GitHub Copilot's default model, Cursor's Auto model, Junie Lite, Pi's default model), permissions and privacy, release checklist. |
 | [qr-pairing.md](qr-pairing.md) | Agent pairing: QR flow and `MOBA1\|...` payload, printed pairing link, device-code direction, relay URL persistence, trust-key pinning, re-pair rules, operator runbook, troubleshooting. |
 
 ## Account workflows
@@ -50,7 +50,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [deployment.md](deployment.md) | `deploy_all.py` (ship several components in order), central-server and web-SPA deploys, TLS certificates, capacity triggers, agent deployment per OS, agent uninstall, security headers and CSP, voice input operations and the `dl.mobaide.com` voice-model mirror, Google Ads conversion upload. |
+| [deployment.md](deployment.md) | `deploy_all.py` (ship several components in order), central-server and web-SPA deploys, TLS certificates, capacity triggers, agent deployment per OS, agent uninstall, security headers and CSP, voice input operations, the Mobaide Cloud voice settings (`CLOUD_VOICE_*`) and the `dl.mobaide.com` voice-model mirror, Google Ads conversion upload. |
 | [bootstrap-mobaide.md](../deploy/prod/bootstrap-mobaide.md) | One-time VPS bootstrap before `deploy_central.py` runs: prerequisites, layout, `.env`, ufw, TLS mode, backups. |
 | [configuration-profiles.md](configuration-profiles.md) | One PowerShell command swaps env-specific files (agent `.env`, `android/local.properties`, TLS trust config) between named profiles. |
 | [central_server/CHANGELOG.md](../central_server/CHANGELOG.md) | `central_server` release notes, per `server-vX.Y.Z` tag. |
@@ -76,4 +76,4 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 | File | What it covers |
 |---|---|
 | [e2e-harness.md](e2e-harness.md) | Python E2E harness in `tests/e2e/`: real server + agent subprocesses and a mock mobile client over the real protocol. |
-| [manual-e2e-testing.md](manual-e2e-testing.md) | `tests/e2e/manual_stack.py`: a LAN-reachable stack for real devices, emulators and the web client, with connectivity modes, an optional second agent inside WSL on Windows (`up --wsl`), iOS ATS traps and troubleshooting. |
+| [manual-e2e-testing.md](manual-e2e-testing.md) | `tests/e2e/manual_stack.py`: a LAN-reachable stack for real devices, emulators and the web client, with connectivity modes, an optional second agent inside WSL on Windows (`up --wsl`), fake or real cloud voice (`up --fake-cloud-voice`, `up --cloud-voice`), iOS ATS traps and troubleshooting. |

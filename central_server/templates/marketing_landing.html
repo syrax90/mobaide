@@ -265,8 +265,8 @@
       </article>
 
       {# The short mention; /voice-input carries the full story. Same accuracy
-         rules: opt-in per computer, transcribed on the user's own machine,
-         never sent on its own. #}
+         rules: opt-in per computer, transcribed by Mobaide Cloud or on the
+         user's own machine, never sent on its own. #}
       <article class="card card-feature notch">
         <div class="card-head">
           <span class="card-ico">
@@ -276,10 +276,10 @@
         </div>
         <h3>Dictate your prompts</h3>
         <p>
-          Tap the mic and say what you want instead of thumb-typing it. Your own
-          computer turns the speech into text — in 25 languages — and the text
-          waits in the command field until you send it. Opt-in, and the audio
-          is never stored.
+          Tap the mic and say what you want instead of thumb-typing it. Mobaide
+          Cloud turns the speech into text at once, or your own computer does
+          it privately in 25 languages. The text waits in the command field
+          until you send it. Opt-in, and the audio is never stored.
         </p>
         <p><a class="card-link" href="/voice-input">How voice input works <span aria-hidden="true">→</span></a></p>
       </article>
@@ -641,6 +641,12 @@
           relay's in-memory routing and are then discarded — never appended to
           its database, log files or backups. Server-side logs record
           connection and error events, never session payloads.
+        </p>
+        <p>
+          One choice changes that for dictation: if you pick Mobaide Cloud for
+          voice input, the recording goes to Mobaide's own speech service to
+          become text. It keeps no audio, and keeps the recognised text for up
+          to 14 days to prevent abuse.
         </p>
         <p>
           The relay does persist the things that have to sync across your

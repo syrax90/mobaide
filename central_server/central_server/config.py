@@ -73,6 +73,42 @@ def _env_int_clamped(name: str, default: int, low: int, high: int) -> int:
     return max(low, min(high, int(raw)))
 
 
+_SERVICE_URL_RE = re.compile(
+    r"^(?P<scheme>https?)://(?P<host>[A-Za-z0-9.-]+)(?::\d{1,5})?(?:/[A-Za-z0-9._~/-]*)?$"
+)
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})
+
+
+def normalize_service_url(raw: str) -> str | None:
+    """The base URL of an outbound HTTP service, without a trailing slash,
+    or None when it is unset or not usable. ``https`` only, except for a
+    service on this machine: a key and a user's audio must not cross a
+    network in clear text."""
+    value = raw.strip().rstrip("/")
+    match = _SERVICE_URL_RE.fullmatch(value)
+    if match is None:
+        return None
+    if match.group("scheme") == "http" and match.group("host").lower() not in _LOOPBACK_HOSTS:
+        return None
+    return value
+
+
+def _env_header_token(name: str) -> str | None:
+    """A secret that travels in an HTTP header, or None when it is unset or
+    cannot be one (HTTP header values are printable ASCII without spaces).
+    A mistyped key then reads as "not configured" instead of failing later."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw or not raw.isascii() or not raw.isprintable() or any(c.isspace() for c in raw):
+        return None
+    return raw
+
+
+def _env_email_list(name: str) -> tuple[str, ...]:
+    """Comma-separated e-mail addresses, lower-cased; blanks are dropped."""
+    raw = os.getenv(name) or ""
+    return tuple(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
 def normalize_origin(raw: str) -> str | None:
     """Canonicalize an origin for equality comparison, or None if malformed.
 
@@ -392,6 +428,33 @@ class CentralServerConfig:
     # fallback instead. Clamped to the 90-day retention the policy promises.
     google_ads_click_window_days: int = 90
 
+    # The feature is on when all three are set and
+    # `cloud_voice_enabled` (the kill switch) is true; otherwise the clients
+    # are told it is off and keep on-computer voice input only.
+    cloud_voice_url: str | None = None
+    cloud_voice_api_key: str | None = None
+    cloud_voice_model: str | None = None
+    cloud_voice_enabled: bool = True
+    # Replaces the built-in transcription instruction when set.
+    cloud_voice_prompt: str | None = None
+    # Seconds of audio per UTC day: one account, and all accounts together.
+    cloud_voice_user_daily_seconds: int = 1800
+    cloud_voice_global_daily_seconds: int = 72000
+    # Requests to the speech service in flight at once; the rest wait.
+    cloud_voice_max_concurrency: int = 4
+    # When not empty, only these accounts are offered cloud voice input.
+    cloud_voice_allowed_emails: tuple[str, ...] = ()
+
+    @property
+    def cloud_voice_missing(self) -> tuple[str, ...]:
+        """Env names of the required cloud voice settings that are unset."""
+        pairs = (
+            ("CLOUD_VOICE_URL", self.cloud_voice_url),
+            ("CLOUD_VOICE_API_KEY", self.cloud_voice_api_key),
+            ("CLOUD_VOICE_MODEL", self.cloud_voice_model),
+        )
+        return tuple(name for name, value in pairs if not value)
+
     @property
     def google_ads_missing(self) -> tuple[str, ...]:
         """Env names of the required Google Ads settings that are unset."""
@@ -627,4 +690,19 @@ class CentralServerConfig:
             google_ads_click_window_days=_env_int_clamped(
                 "GOOGLE_ADS_CLICK_WINDOW_DAYS", 90, 1, 90
             ),
+            cloud_voice_url=normalize_service_url(os.getenv("CLOUD_VOICE_URL") or ""),
+            cloud_voice_api_key=_env_header_token("CLOUD_VOICE_API_KEY"),
+            cloud_voice_model=(os.getenv("CLOUD_VOICE_MODEL") or "").strip() or None,
+            cloud_voice_enabled=_env_bool("CLOUD_VOICE_ENABLED", True),
+            cloud_voice_prompt=(os.getenv("CLOUD_VOICE_PROMPT") or "").strip() or None,
+            cloud_voice_user_daily_seconds=_env_int_clamped(
+                "CLOUD_VOICE_USER_DAILY_SECONDS", 1800, 0, 86400
+            ),
+            cloud_voice_global_daily_seconds=_env_int_clamped(
+                "CLOUD_VOICE_GLOBAL_DAILY_SECONDS", 72000, 0, 10_000_000
+            ),
+            cloud_voice_max_concurrency=_env_int_clamped(
+                "CLOUD_VOICE_MAX_CONCURRENCY", 4, 1, 64
+            ),
+            cloud_voice_allowed_emails=_env_email_list("CLOUD_VOICE_ALLOWED_EMAILS"),
         )

@@ -4,7 +4,7 @@ import Foundation
 /// host details (a worker traceback tail), so it is only shown behind
 /// "Details". Unknown codes get the generic line.
 enum VoiceErrorCopy {
-    /// A dictation that failed; `agent` names the computer.
+    /// A dictation that failed; `agent` names who transcribes: the computer, or Mobaide Cloud.
     static func dictation(_ code: String, agent: String) -> String {
         switch code {
         case VoiceCodes.notReady: return "Voice input isn't ready on \(agent)."
@@ -13,7 +13,11 @@ enum VoiceErrorCopy {
         case VoiceCodes.transcriptionFailed:
             return "Voice can't run on \(agent). Retry, or reinstall voice in Settings."
         case VoiceCodes.transcriptionTimeout: return "\(agent) is taking too long to transcribe."
-        case VoiceCodes.dictationNotFound: return "The dictation expired on the agent."
+        case VoiceCodes.dictationNotFound: return "The dictation expired. Your recording is kept."
+        case VoiceCodes.cloudUnavailable:
+            return "Cloud voice input is unavailable right now. Try again in a moment."
+        case VoiceCodes.cloudLimitReached: return "Today's cloud voice input limit is used up."
+        case VoiceCodes.cloudDisabled: return "Cloud voice input isn't available for this account."
         case VoiceCodes.network: return "The connection dropped. Your recording is kept."
         case VoiceCodes.micPermissionDenied: return "Microphone access is off for Mobaide."
         case VoiceCodes.micUnavailable: return "No microphone is available."

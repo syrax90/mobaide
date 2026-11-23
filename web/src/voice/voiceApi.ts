@@ -1,6 +1,7 @@
 /**
- * The dictation half of the agent's voice API, as the uploader sees it.
- * `api/voiceRepository.ts` implements it over the relay; tests script it.
+ * The dictation routes, as the uploader sees them. `api/voiceRepository.ts`
+ * implements them for an agent (over the relay) and
+ * `api/cloudVoiceRepository.ts` for cloud voice input; tests script them.
  */
 export interface VoiceDictationOpened {
   dictationId: string;
@@ -74,6 +75,12 @@ export const VOICE_CODE = {
   /** Also the client's own code when the agent's answer never arrives. */
   cleanupTimeout: 'cleanup_timeout',
   cleanupFailed: 'cleanup_failed',
+  /** Cloud voice input: the speech service does not answer. */
+  cloudUnavailable: 'cloud_unavailable',
+  /** Cloud voice input: the account's daily limit is used up. */
+  cloudLimitReached: 'cloud_limit_reached',
+  /** Cloud voice input is not offered to this account. */
+  cloudDisabled: 'cloud_disabled',
   /** Client-side codes, never sent by the agent. */
   network: 'network',
   transcriptionTimeout: 'transcription_timeout',

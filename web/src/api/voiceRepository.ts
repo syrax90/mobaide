@@ -55,7 +55,8 @@ interface FetchResult<T> {
   response: Response;
 }
 
-async function call<T>(request: () => Promise<FetchResult<T>>): Promise<T> {
+/** Runs one voice request; every failure becomes a `VoiceApiError`. */
+export async function callVoice<T>(request: () => Promise<FetchResult<T>>): Promise<T> {
   let result: FetchResult<T>;
   try {
     result = await request();
@@ -77,7 +78,7 @@ function decodeStatus(body: unknown): VoiceStatus {
 }
 
 export async function getVoiceStatus(agentId: string, signal?: AbortSignal): Promise<VoiceStatus> {
-  const body = await call(() =>
+  const body = await callVoice(() =>
     createAgentClient(agentId).GET('/api/voice/status', signal === undefined ? {} : { signal }),
   );
   return decodeStatus(body);
@@ -85,7 +86,7 @@ export async function getVoiceStatus(agentId: string, signal?: AbortSignal): Pro
 
 /** Enable voice and start (or retry) the install; answers at once. */
 export async function installVoice(agentId: string): Promise<VoiceStatus> {
-  const body = await call(() =>
+  const body = await callVoice(() =>
     createAgentClient(agentId).POST('/api/voice/install', { body: {} }),
   );
   return decodeStatus(body);
@@ -93,19 +94,19 @@ export async function installVoice(agentId: string): Promise<VoiceStatus> {
 
 /** Stop an install (while repairing, only the runtime download stops). */
 export async function cancelVoiceInstall(agentId: string): Promise<VoiceStatus> {
-  const body = await call(() => createAgentClient(agentId).POST('/api/voice/install/cancel'));
+  const body = await callVoice(() => createAgentClient(agentId).POST('/api/voice/install/cancel'));
   return decodeStatus(body);
 }
 
 /** Turn voice off and free the disk. */
 export async function removeVoice(agentId: string): Promise<VoiceStatus> {
-  const body = await call(() => createAgentClient(agentId).DELETE('/api/voice/model'));
+  const body = await callVoice(() => createAgentClient(agentId).DELETE('/api/voice/model'));
   return decodeStatus(body);
 }
 
 /** Turn transcript cleanup on or off for every client of this agent. */
 export async function setVoiceCleanup(agentId: string, enabled: boolean): Promise<VoiceStatus> {
-  const body = await call(() =>
+  const body = await callVoice(() =>
     createAgentClient(agentId).PUT('/api/voice/cleanup/settings', { body: { enabled } }),
   );
   return decodeStatus(body);
@@ -124,7 +125,7 @@ export async function cleanupTranscript(
 ): Promise<string> {
   // Any kind the agent listed in `cleanup_kinds`, which may be newer than
   // the generated enum.
-  const body: CleanupResult = await call(() =>
+  const body: CleanupResult = await callVoice(() =>
     createAgentClient(agentId).POST('/api/voice/cleanup', {
       body: { text, kind: kind as CleanupRequest['kind'] },
       signal,
@@ -138,7 +139,7 @@ export function createVoiceApi(agentId: string, sessionId: string | null): Voice
   const client = createAgentClient(agentId);
   return {
     async create(signal) {
-      const body: DictationResponse = await call(() =>
+      const body: DictationResponse = await callVoice(() =>
         client.POST('/api/voice/dictations', {
           body: sessionId === null ? {} : { session_id: sessionId },
           signal,
@@ -152,7 +153,7 @@ export function createVoiceApi(agentId: string, sessionId: string | null): Voice
       };
     },
     async audio(dictationId, seq, pcm16B64, signal) {
-      await call(() =>
+      await callVoice(() =>
         client.POST('/api/voice/dictations/{dictation_id}/audio', {
           params: { path: { dictation_id: dictationId } },
           body: { seq, pcm16_b64: pcm16B64 },
@@ -161,7 +162,7 @@ export function createVoiceApi(agentId: string, sessionId: string | null): Voice
       );
     },
     async finish(dictationId, lastSeq, signal) {
-      const body: DictationResult = await call(() =>
+      const body: DictationResult = await callVoice(() =>
         client.POST('/api/voice/dictations/{dictation_id}/finish', {
           params: { path: { dictation_id: dictationId } },
           body: { last_seq: lastSeq },

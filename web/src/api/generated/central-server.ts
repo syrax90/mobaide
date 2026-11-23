@@ -1037,6 +1037,116 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/voice/cloud": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cloud Voice Status
+         * @description Whether cloud voice input is offered to the caller and works now, its
+         *     limits, today's use, and the caller's per-agent choices.
+         */
+        get: operations["cloud_voice_status_api_voice_cloud_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/cloud/dictations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cloud Voice Dictation Create */
+        post: operations["cloud_voice_dictation_create_api_voice_cloud_dictations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/cloud/dictations/{dictation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cloud Voice Dictation Delete */
+        delete: operations["cloud_voice_dictation_delete_api_voice_cloud_dictations__dictation_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/cloud/dictations/{dictation_id}/audio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cloud Voice Dictation Audio */
+        post: operations["cloud_voice_dictation_audio_api_voice_cloud_dictations__dictation_id__audio_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/cloud/dictations/{dictation_id}/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cloud Voice Dictation Finish */
+        post: operations["cloud_voice_dictation_finish_api_voice_cloud_dictations__dictation_id__finish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/cloud/engines/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Cloud Voice Set Engine
+         * @description Choose where one agent's dictations are transcribed and push
+         *     ``cloud_voice.changed`` to the caller's other devices.
+         */
+        put: operations["cloud_voice_set_engine_api_voice_cloud_engines__agent_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/proxy/{agent_id}/{path}": {
         parameters: {
             query?: never;
@@ -1240,6 +1350,99 @@ export interface components {
              * @default cancelled
              */
             status: string;
+        };
+        /** CloudVoiceAudioRequest */
+        CloudVoiceAudioRequest: {
+            /** Pcm16 B64 */
+            pcm16_b64: string;
+            /** Seq */
+            seq: number;
+        };
+        /** CloudVoiceAudioResponse */
+        CloudVoiceAudioResponse: {
+            /** Duration Ms */
+            duration_ms: number;
+            /** Seq */
+            seq: number;
+        };
+        /** CloudVoiceDictationResponse */
+        CloudVoiceDictationResponse: {
+            /** Dictation Id */
+            dictation_id: string;
+            /** Max Chunk Bytes */
+            max_chunk_bytes: number;
+            /** Max Seconds */
+            max_seconds: number;
+            /** Sample Rate */
+            sample_rate: number;
+        };
+        /** CloudVoiceEngineRequest */
+        CloudVoiceEngineRequest: {
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "cloud" | "local";
+        };
+        /** CloudVoiceFinishRequest */
+        CloudVoiceFinishRequest: {
+            /** Last Seq */
+            last_seq: number;
+        };
+        /** CloudVoiceLimits */
+        CloudVoiceLimits: {
+            /** Max Chunk Bytes */
+            max_chunk_bytes: number;
+            /** Max Seconds */
+            max_seconds: number;
+            /** Sample Rate */
+            sample_rate: number;
+        };
+        /**
+         * CloudVoiceResultResponse
+         * @description ``state`` is ``done`` (``text`` set) or ``transcribing`` (call
+         *     ``finish`` again).
+         */
+        CloudVoiceResultResponse: {
+            /** Dictation Id */
+            dictation_id: string;
+            /** Duration Ms */
+            duration_ms: number;
+            /** State */
+            state: string;
+            /** Text */
+            text: string | null;
+        };
+        /**
+         * CloudVoiceStatus
+         * @description ``GET /api/voice/cloud``.
+         *
+         *     ``state`` is an open vocabulary: ``off`` (not offered to this account),
+         *     ``ready``, ``unavailable`` (the speech service does not answer) or
+         *     ``limit_reached`` (the caller's daily limit, until ``usage.resets_at``).
+         *     A client reads a value it does not know as ``off``.
+         */
+        CloudVoiceStatus: {
+            /** Engines */
+            engines: {
+                [key: string]: string;
+            };
+            limits: components["schemas"]["CloudVoiceLimits"];
+            /** State */
+            state: string;
+            usage: components["schemas"]["CloudVoiceUsage"];
+        };
+        /**
+         * CloudVoiceUsage
+         * @description The caller's audio transcribed today (UTC) against the daily limit.
+         */
+        CloudVoiceUsage: {
+            /** Limit Seconds */
+            limit_seconds: number;
+            /** Resets At */
+            resets_at: string;
+            /** Used Seconds */
+            used_seconds: number;
         };
         /** CreateAgentRequest */
         CreateAgentRequest: {
@@ -3598,6 +3801,180 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    cloud_voice_status_api_voice_cloud_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudVoiceStatus"];
+                };
+            };
+        };
+    };
+    cloud_voice_dictation_create_api_voice_cloud_dictations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudVoiceDictationResponse"];
+                };
+            };
+        };
+    };
+    cloud_voice_dictation_delete_api_voice_cloud_dictations__dictation_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dictation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cloud_voice_dictation_audio_api_voice_cloud_dictations__dictation_id__audio_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dictation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloudVoiceAudioRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudVoiceAudioResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cloud_voice_dictation_finish_api_voice_cloud_dictations__dictation_id__finish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dictation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloudVoiceFinishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudVoiceResultResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cloud_voice_set_engine_api_voice_cloud_engines__agent_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloudVoiceEngineRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudVoiceStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

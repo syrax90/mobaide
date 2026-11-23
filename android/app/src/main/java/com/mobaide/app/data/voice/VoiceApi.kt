@@ -10,7 +10,10 @@ data class VoiceDictationOpened(
 /** [state] is `done` ([text] set) or `transcribing` (ask again); an open vocabulary. */
 data class VoiceFinishResult(val state: String, val text: String?)
 
-/** The dictation half of the agent's voice API, as the uploader sees it. */
+/**
+ * The dictation routes, as the uploader sees them: the connected agent's
+ * (`VoiceRepository`) or cloud voice input's (`CloudVoiceRepository`).
+ */
 interface VoiceApi {
     suspend fun create(): VoiceDictationOpened
     suspend fun audio(dictationId: String, seq: Int, pcm16B64: String)
@@ -56,6 +59,15 @@ object VoiceCodes {
     /** Also the client's own code when the agent's answer never arrives. */
     const val CLEANUP_TIMEOUT = "cleanup_timeout"
     const val CLEANUP_FAILED = "cleanup_failed"
+
+    /** Cloud voice input: the speech service does not answer. */
+    const val CLOUD_UNAVAILABLE = "cloud_unavailable"
+
+    /** Cloud voice input: the account's daily limit is used up. */
+    const val CLOUD_LIMIT_REACHED = "cloud_limit_reached"
+
+    /** Cloud voice input is not offered to this account. */
+    const val CLOUD_DISABLED = "cloud_disabled"
 
     /** Client-side codes, never sent by the agent. */
     const val NETWORK = "network"

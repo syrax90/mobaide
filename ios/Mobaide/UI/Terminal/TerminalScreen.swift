@@ -508,7 +508,8 @@ private struct TerminalScreenContent: View {
             await voice.load()
         }
         .task { await voice.watchConnection() }
-        .onChange(of: voice.status?.state) { _, _ in voice.statusChanged() }
+        .task(id: voice.localUnreachable) { await voice.pollWhileUnreachable() }
+        .onChange(of: voice.dictationTarget) { _, _ in voice.dictationTargetChanged() }
         // Leaving the foreground keeps what was said and transcribes it.
         // `.background` only: the microphone permission alert, Control Center
         // and a pulled-down notification all make the scene `.inactive`.

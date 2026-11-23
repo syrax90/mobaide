@@ -366,6 +366,7 @@ declaration* would flip it back to "No" and block the next upload.
 - It is **processed ephemerally** (relayed in memory to the user's own agent, never
   stored).
 - Not shared: it goes to the user's own computer, not a third party.
+- **Owner re-check needed.** With Mobaide Cloud voice input, the audio goes through the central server to a hosted speech service. That service keeps the recognised text up to 14 days and never the audio. Re-check the "ephemeral" and "not shared" answers above before submitting.
 
 ### App Store Connect — App Privacy
 
@@ -396,7 +397,7 @@ under Apple's definition).
 **Audio Data note.** Apple counts data as collected only when it is kept beyond
 serving the request in real time, and the relay only forwards it, so it could
 arguably be omitted. It is declared as the conservative choice unless App Review
-says otherwise. Not used for tracking.
+says otherwise. Not used for tracking. **Owner re-check needed:** with Mobaide Cloud voice input, a hosted speech service keeps the recognised text up to 14 days (never the audio). Re-check this answer before publishing.
 
 "Developer's Advertising or Marketing" (not "Third-Party Advertising") is the
 correct purpose: the data measures our own ads; no ads are shown in the app.

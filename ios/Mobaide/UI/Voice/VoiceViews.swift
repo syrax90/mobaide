@@ -15,17 +15,25 @@ struct VoiceMicButton: View {
             }
             .accessibilityLabel(appearance.label)
             .accessibilityIdentifier("voice_mic_button")
+            .task(id: voice.cloudDown) { await voice.pollWhileCloudUnavailable() }
         }
     }
 
     private var appearance: (symbol: String, label: String)? {
         switch voice.micMode {
         case .hidden: return nil
-        case .ready: return ("mic.fill", "Dictate")
+        case .ready:
+            return (
+                "mic.fill",
+                voice.route == .cloud ? "Dictate: record speech for Mobaide Cloud to transcribe" : "Dictate"
+            )
         case .off: return ("mic", "Voice input is off. Set it up")
         case .preparing:
             return ("arrow.down.circle", voice.status.map(VoiceStatusView.preparingLabel) ?? "Preparing voice input")
         case .failed: return ("exclamationmark.triangle", "Voice input needs attention")
+        // The look of a failed install: the same "!" symbol.
+        case .unavailable:
+            return ("exclamationmark.triangle", "Cloud voice input can't record right now. Show details")
         }
     }
 }
@@ -83,7 +91,7 @@ struct VoiceDictationBar: View {
             .accessibilityIdentifier("voice_stop_button")
         case .transcribing(let reason, let lagging):
             PixelLoadingBlock(width: 8, height: 12)
-            Text(Self.transcribingLine(reason: reason, lagging: lagging, agent: voice.agentName))
+            Text(Self.transcribingLine(reason: reason, lagging: lagging, agent: voice.transcriberName))
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             cancelButton
@@ -99,8 +107,9 @@ struct VoiceDictationBar: View {
             Button("Again") { voice.startDictation() }.buttonStyle(.pixelSmall)
             closeButton
         case .failed(let code, let retryable, let message, let hasAudio):
-            Text(VoiceErrorCopy.dictation(code, agent: voice.agentName))
-                .lineLimit(2)
+            // Three lines: the cloud failure lines need them on a narrow phone.
+            Text(VoiceErrorCopy.dictation(code, agent: voice.transcriberName))
+                .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if code == VoiceCodes.micPermissionDenied {
                 Button("Settings") {
@@ -179,18 +188,28 @@ private struct LevelMeter: View {
     }
 }
 
-/// What the mic opens while voice is not ready; follows the live status.
-/// Never opens on its own.
+/// What the mic opens while it cannot record. It follows the live state, so a
+/// choice or Enable turns into the next step in place. Never opens on its own.
 struct VoiceSetupSheet: View {
     let voice: VoiceInputModel
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.mobaideColors) private var colors
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VoicePanel(voice: voice, settings: false)
-                    .padding(16)
+                VStack(alignment: .leading, spacing: 12) {
+                    content
+                    // The chooser shows it itself, above its buttons.
+                    if voice.engineSaveFailed, !showsChooser {
+                        Text(CloudVoiceCopy.choiceSaveFailed)
+                            .font(.caption)
+                            .foregroundStyle(colors.danger)
+                            .accessibilityIdentifier("voice_engine_error")
+                    }
+                }
+                .padding(16)
             }
             .navigationTitle("Voice input")
             .navigationBarTitleDisplayMode(.inline)
@@ -204,15 +223,32 @@ struct VoiceSetupSheet: View {
         .accessibilityIdentifier("voice_setup_sheet")
         .task(id: voice.status?.state) { await voice.pollWhileQueued() }
     }
+
+    private var showsChooser: Bool { voice.cloudOffered && voice.route == .choose }
+
+    @ViewBuilder
+    private var content: some View {
+        if let cloud = voice.cloud, showsChooser {
+            VoiceEngineChooser(voice: voice, cloud: cloud)
+        } else if let cloud = voice.cloud, cloud.isOffered, voice.route == .cloud {
+            CloudVoicePanel(voice: voice, cloud: cloud, settings: false)
+        } else {
+            VoicePanel(voice: voice, settings: false)
+        }
+    }
 }
 
 /// Voice input for the connected agent in every state, with the real costs the
 /// agent reports. `settings` adds remove, reinstall, the mic toggle and the
 /// model's license (Settings → Voice input); without it this is the enable
-/// sheet.
+/// sheet, which also offers Mobaide Cloud where on-computer voice is not
+/// ready. `embedded` is the settings variant under cloud voice input, which
+/// shows the mic toggle itself: only what belongs to the computer's own voice
+/// is shown.
 struct VoicePanel: View {
     let voice: VoiceInputModel
     let settings: Bool
+    var embedded = false
 
     @Environment(\.mobaideColors) private var colors
     @State private var confirmRemove = false
@@ -226,17 +262,16 @@ struct VoicePanel: View {
                 if let error = voice.actionError {
                     Text(error).font(.caption).foregroundStyle(colors.danger)
                 }
-                if settings || status.state == VoiceStatusResponse.stateNotInstalled {
+                if (settings && !embedded) || status.state == VoiceStatusResponse.stateNotInstalled {
                     modelFacts(status.model)
                 }
-                if settings && status.state != VoiceStatusResponse.stateUnsupported {
-                    Toggle("Show the mic in the command field", isOn: showMicBinding)
-                        .toggleStyle(.pixelCheckbox)
+                if settings && !embedded && status.state != VoiceStatusResponse.stateUnsupported {
+                    VoiceMicToggle(voice: voice)
                 }
                 if cleanupToggleShown(status) {
                     VoiceCleanupToggle(voice: voice)
                 }
-                if settings, let notice = status.model.notice, !notice.isEmpty {
+                if settings, !embedded, let notice = status.model.notice, !notice.isEmpty {
                     // Borderless: in a List row, default-style buttons all fire on any tap.
                 Button("Model license") { showLicense = true }
                     .buttonStyle(.borderless)
@@ -247,6 +282,7 @@ struct VoicePanel: View {
             }
         }
         .font(.body)
+        .voicePanelWrapping()
         .frame(maxWidth: .infinity, alignment: .leading)
         .alert("Details", isPresented: detailsPresented) {
             Button("Close", role: .cancel) {}
@@ -291,8 +327,8 @@ struct VoicePanel: View {
                 }
             }
             if !settings {
-                Button("Hide the mic for this agent") { voice.setMicHidden(true) }
-                    .font(.caption)
+                useCloudButton
+                VoiceTextButton("Hide the mic for this agent") { voice.setMicHidden(true) }
             }
         case VoiceStatusResponse.stateQueued, VoiceStatusResponse.stateDownloading, VoiceStatusResponse.stateVerifying:
             Text(VoiceStatusView.preparingLabel(status))
@@ -330,11 +366,24 @@ struct VoicePanel: View {
                     Button("Remove") { confirmRemove = true }.buttonStyle(.pixelDanger).disabled(voice.actionBusy)
                 }
             }
+            if !settings { useCloudButton }
         default:
             Text("\(voice.agentName) can't run voice input.")
             ForEach(status.host.reasons, id: \.code) { reason in
                 Text("• \(reason.message)").font(.caption)
             }
+            if !settings { useCloudButton }
+        }
+    }
+
+    /// Where cloud voice input is offered, the way out of an on-computer
+    /// voice that is not ready.
+    @ViewBuilder
+    private var useCloudButton: some View {
+        if voice.cloudOffered {
+            VoiceTextButton("Use \(CloudVoiceCopy.cloudName) instead: nothing to install") { voice.useCloud() }
+                .disabled(voice.engineSaving)
+                .accessibilityIdentifier("voice_use_cloud_button")
         }
     }
 
@@ -342,6 +391,7 @@ struct VoicePanel: View {
     /// voice is enabled in a session that can use it, so the first dictation is
     /// already cleaned up.
     private func cleanupToggleShown(_ status: VoiceStatusResponse) -> Bool {
+        if embedded { return false }
         if settings {
             return voice.cleanupSupported && status.state != VoiceStatusResponse.stateUnsupported
         }
@@ -376,10 +426,6 @@ struct VoicePanel: View {
 
     private var detailsPresented: Binding<Bool> {
         Binding(get: { details != nil }, set: { if !$0 { details = nil } })
-    }
-
-    private var showMicBinding: Binding<Bool> {
-        Binding(get: { !voice.micHidden }, set: { voice.setMicHidden(!$0) })
     }
 }
 
@@ -471,26 +517,99 @@ private struct LicenseSheet: View {
     }
 }
 
-/// Settings → Voice input, for the connected agent.
+/// "Show the mic", stored per agent on this device.
+struct VoiceMicToggle: View {
+    let voice: VoiceInputModel
+
+    var body: some View {
+        Toggle("Show the mic in the command field", isOn: binding)
+            .toggleStyle(.pixelCheckbox)
+    }
+
+    private var binding: Binding<Bool> {
+        Binding(get: { !voice.micHidden }, set: { voice.setMicHidden(!$0) })
+    }
+}
+
+/// A caption-size text button. Its label is 44 pt high, for the touch target;
+/// the negative padding gives most of that back to the layout, so the column
+/// does not look loose. The part given back is half the column's spacing, so
+/// two of these in a row never overlap.
+struct VoiceTextButton: View {
+    static let giveBack: CGFloat = -6
+
+    let title: String
+    let action: () -> Void
+
+    init(_ title: String, action: @escaping () -> Void) {
+        self.title = title
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Text(title).voiceTextTarget()
+        }
+        .font(.caption)
+        .padding(.vertical, Self.giveBack)
+    }
+}
+
+extension View {
+    /// For a column of wrapping texts in a List row. The row offers the
+    /// column exactly its height, the column then offers each text an equal
+    /// share, and a text that needs more than its share is cut ("…") while
+    /// the row keeps the room.
+    func voicePanelWrapping() -> some View {
+        fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// The label of a caption-size text button or link, at touch-target height.
+    func voiceTextTarget() -> some View {
+        multilineTextAlignment(.leading)
+            .frame(minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+    }
+}
+
+/// Settings → Voice input, for the connected agent: where speech is
+/// transcribed (Mobaide Cloud or the computer, when cloud voice input is
+/// offered), and for the computer's own voice the status and install
+/// progress, enable, remove and reinstall, the model and its license.
 struct VoiceSettingsSection: View {
     let voice: VoiceInputModel
 
     @Environment(\.mobaideColors) private var colors
+    @State private var localExpanded = false
 
     var body: some View {
         Section {
-            if !voice.capabilityKnown {
-                Text("Checking the connected agent…").foregroundStyle(colors.textMuted)
-            } else if voice.capability == nil {
-                Text(
-                    "Dictate into the command field: your own computer transcribes what you say. "
-                        + "Connect to an agent that supports voice input (it updates itself) to set it up."
-                )
-                .font(.caption)
-                .foregroundStyle(colors.textMuted)
+            if let cloud = voice.cloud, cloud.isOffered {
+                VStack(alignment: .leading, spacing: 12) {
+                    VoiceEngineSetting(voice: voice)
+                    if voice.route == .choose {
+                        // No engine yet: the computer's enable panel here would
+                        // steer the user to the option that is not recommended.
+                        Text("Choose one to turn on voice input for \(voice.agentName).")
+                            .font(.caption)
+                            .foregroundStyle(colors.textMuted)
+                        VoiceMicToggle(voice: voice)
+                    } else if voice.route == .cloud {
+                        CloudVoicePanel(voice: voice, cloud: cloud, settings: true)
+                        // Under cloud voice input the computer's own voice only
+                        // matters once it is enabled there: then it can still
+                        // be removed or repaired from here.
+                        if voice.localSupported, voice.status?.enabled == true {
+                            localDisclosure
+                        }
+                    } else {
+                        local(cloudOffered: true)
+                    }
+                }
+                .voicePanelWrapping()
+                .padding(.vertical, 4)
             } else {
-                VoicePanel(voice: voice, settings: true)
-                    .padding(.vertical, 4)
+                local(cloudOffered: false)
             }
         } header: {
             PixelSectionHeader("Voice input")
@@ -498,5 +617,58 @@ struct VoiceSettingsSection: View {
         .pixelFormSection()
         .task { await voice.load() }
         .task(id: voice.status?.state) { await voice.pollWhileQueued() }
+        .task(id: voice.cloudDown) { await voice.pollWhileCloudUnavailable() }
+        .task(id: voice.localUnreachable) { await voice.pollWhileUnreachable() }
+    }
+
+    @ViewBuilder
+    private func local(cloudOffered: Bool) -> some View {
+        if !voice.capabilityKnown {
+            Text("Checking the connected agent…")
+                .font(.caption)
+                .foregroundStyle(colors.textMuted)
+        } else if voice.capabilityLoadFailed {
+            // An agent that did not answer is not an agent without voice.
+            Text("\(CloudVoiceCopy.unreachable(agent: voice.agentName)) Is it online?")
+                .font(.caption)
+                .foregroundStyle(colors.textMuted)
+        } else if voice.capability == nil {
+            Text(
+                cloudOffered
+                    ? "\(voice.agentName) runs a Mobaide agent without on-computer voice input. "
+                        + "It updates itself; check again after its next update."
+                    : "Dictate into the command field: your own computer transcribes what you say. "
+                        + "Connect to an agent that supports voice input (it updates itself) to set it up."
+            )
+            .font(.caption)
+            .foregroundStyle(colors.textMuted)
+        } else {
+            VoicePanel(voice: voice, settings: true)
+                .padding(.vertical, cloudOffered ? 0 : 4)
+        }
+    }
+
+    /// Plain style: in a List row, default-style buttons all fire on any tap.
+    @ViewBuilder
+    private var localDisclosure: some View {
+        Button {
+            localExpanded.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Text("On-computer voice input on \(voice.agentName)")
+                Spacer(minLength: 8)
+                Image(systemName: localExpanded ? "chevron.down" : "chevron.right")
+                    .foregroundStyle(colors.textMuted)
+                    .accessibilityHidden(true)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(localExpanded ? "Expanded" : "Collapsed")
+        .accessibilityIdentifier("voice_local_disclosure")
+        if localExpanded {
+            VoicePanel(voice: voice, settings: true, embedded: true)
+        }
     }
 }

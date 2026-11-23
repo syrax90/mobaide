@@ -251,6 +251,29 @@ describe('DictationDialog review', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
     expect(calls.discard).toBe(1);
   });
+
+  it.each([
+    ['the cursor', 'hello world', 5, 5],
+    ['the selection', 'hello big world', 6, 9],
+  ])(
+    'puts %s back when the extra recording is abandoned, so the next one lands there',
+    (_label, text, start, end) => {
+      const calls = newCalls();
+      const carried = { before: text.slice(0, start), after: text.slice(end) };
+      const { rerender } = render(dialog(calls, result(text), true, { canSend: true }));
+      textField().setSelectionRange(start, end);
+      fireEvent.click(dictateMore());
+      // The field is gone while recording, and is drawn again for the review.
+      rerender(dialog(calls, { kind: 'starting' }, true, { canSend: true, carried }));
+
+      rerender(dialog(calls, { kind: 'idle' }, true, { canSend: true, carried }));
+
+      expect(textField().value).toBe(text);
+      expect([textField().selectionStart, textField().selectionEnd]).toEqual([start, end]);
+      fireEvent.click(dictateMore());
+      expect(calls.continued).toEqual([carried, carried]);
+    },
+  );
 });
 
 describe('DictationDialog cleanup', () => {

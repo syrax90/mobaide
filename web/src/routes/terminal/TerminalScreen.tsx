@@ -258,6 +258,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           {voice.micMode !== 'hidden' && (
             <VoiceButton
               mode={voice.micMode}
+              route={voice.route}
               status={voice.status}
               disabled={voice.micMode === 'ready' && !canRecord}
               onClick={voice.onMicClick}

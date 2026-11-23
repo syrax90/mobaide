@@ -498,7 +498,10 @@ them and any future `hx-indicator` is silently dead.
 ## The voice input page
 
 `/voice-input` explains voice input (dictation, GH #736/#737 — see
-[`docs/voice-input.md`](voice-input.md)) to visitors. The landing page points at it
+[`docs/voice-input.md`](voice-input.md)) to visitors. It presents the two ways to
+transcribe in `#choose` (Mobaide Cloud, recommended, and on your own computer); the
+rest of the page describes on-computer voice, and each claim that holds for only one
+of them says which. The landing page points at it
 from the header nav, a highlighted first feature card, the "What leaves my machine?"
 answer and the shared footer; the sitemap lists it.
 
@@ -514,6 +517,9 @@ answer and the shared footer; the sitemap lists it.
   — the clients' direct-connection dictation path is not described), and the
   TLS claim scoped with "going through the relay". `TestVoiceInputPage` in
   `test_marketing.py` pins all of it, plus the voice facts the page states.
+  The page never says what runs the Mobaide Cloud speech service; it names only
+  what the user can check (no install, the audio is not kept, the text is kept up
+  to 14 days, a daily allowance).
 - **Where the numbers come from.** Change the page when any of these changes:
 
   | Source | Supplies |
@@ -522,6 +528,7 @@ answer and the shared footer; the sitemap lists it.
   | `host.py` | The 12 GB / 4 cores / 2 GB recommendation and the unsupported cases |
   | `dictation.py` | The two-minute cap |
   | `helper.py` | The three-minute idle exit |
+  | `central_server/central_server/cloud_voice/` and its `CLOUD_VOICE_*` settings | Mobaide Cloud: the 2-minute recording cap, the daily limits, the text kept up to 14 days by the speech service and never the audio |
   | `cleanup.py` | The opt-in transcript cleanup through the session's AI agent, stated in *Where your voice goes* and the FAQ |
   | *Voice input* section of [`docs/deployment.md`](deployment.md) | Disk, download hosts, the CLI |
 

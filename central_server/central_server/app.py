@@ -327,6 +327,12 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             db, app.state.routing
         )
 
+        from .cloud_voice import CloudVoiceService
+
+        app.state.cloud_voice_service = CloudVoiceService.from_config(
+            db, app.state.routing, config
+        )
+
         from .relay.mobile_proxy import MobileProxy
 
         app.state.mobile_proxy = MobileProxy(app.state.routing)
@@ -342,6 +348,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         # the server was down must be gone before anything resumes it, and
         # the hourly loop's first sweep is an hour away.
         await _purge_stale_ad_attribution(db)
+        await _purge_old_cloud_voice_usage(db)
         await app.state.ads_uploader.resume_pending()
 
         # Runs every 60 s; interval is not surfaced in the function signature.
@@ -360,8 +367,8 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             monitoring_loop(app.state.routing, config),
             name="monitoring",
         )
-        ad_purge_task = asyncio.create_task(
-            _ad_attribution_purge_loop(db), name="ad-attribution-purge"
+        retention_purge_task = asyncio.create_task(
+            _retention_purge_loop(db), name="retention-purge"
         )
 
         yield
@@ -371,7 +378,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         deletion_sweeper_task.cancel()
         heartbeat_flush_task.cancel()
         monitoring_task.cancel()
-        ad_purge_task.cancel()
+        retention_purge_task.cancel()
         try:
             await cleanup_task
         except asyncio.CancelledError:
@@ -389,7 +396,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         except asyncio.CancelledError:
             pass
         try:
-            await ad_purge_task
+            await retention_purge_task
         except asyncio.CancelledError:
             pass
         # Final sweep after the loop is cancelled (no interleaving) and
@@ -399,6 +406,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             await _flush_agent_heartbeats(db, app.state.routing)
         except Exception as exc:
             logger.exception("heartbeat_flush.shutdown_error: %s", exc)
+        await app.state.cloud_voice_service.aclose()
         await app.state.ads_uploader.aclose()
         await app.state.push_dispatcher.aclose()
         app.state.auth_service.close()
@@ -531,6 +539,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
 
     from .agents.router import router as agents_router
     from .auth.router import router as auth_router
+    from .cloud_voice.router import router as cloud_voice_router
     from .custom_agent_types.router import router as custom_agent_types_router
     from .dashboard.router import router as dashboard_router
     from .devices.router import router as devices_router
@@ -568,6 +577,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(shortcuts_router)
     app.include_router(custom_agent_types_router)
     app.include_router(session_mode_order_router)
+    app.include_router(cloud_voice_router)
     app.include_router(ads_router)
 
     if config.enable_api_docs:
@@ -647,17 +657,25 @@ async def _purge_stale_ad_attribution(db: Database) -> None:
         logger.info("ad_attribution.purged users=%d", purged)
 
 
-async def _ad_attribution_purge_loop(db: Database) -> None:
-    """Hourly: enforce the 90-day retention the privacy policy promises for
-    sign-up click attribution, whether or not the uploader ever ran."""
+async def _purge_old_cloud_voice_usage(db: Database) -> None:
+    from .cloud_voice.service import usage_cutoff_day
+
+    await db.purge_cloud_voice_usage(usage_cutoff_day())
+
+
+async def _retention_purge_loop(db: Database) -> None:
+    """Hourly: enforce the retention the privacy policy promises, whether or
+    not the feature that wrote the rows still runs: 90 days for sign-up click
+    attribution, 35 days for the cloud voice usage counts."""
     while True:
         try:
             await asyncio.sleep(3600)
             await _purge_stale_ad_attribution(db)
+            await _purge_old_cloud_voice_usage(db)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception("ad_attribution_purge.error: %s", exc)
+            logger.exception("retention_purge.error: %s", exc)
 
 
 async def _account_deletion_sweeper_loop(

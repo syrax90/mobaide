@@ -66,12 +66,9 @@ import com.mobaide.app.data.network.dto.VoiceInstallRequest
 import com.mobaide.app.data.network.dto.VoiceStatusResponse
 import com.mobaide.app.data.network.dto.WorktreeBasesResponse
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -79,10 +76,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import java.io.IOException
 import java.net.URLEncoder
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 class RestApi(
     private val client: OkHttpClient,
@@ -671,23 +665,6 @@ class RestApi(
             ?: throw ApiException(response.code, "Empty response body")
         return json.decodeFromString<T>(body)
     }
-
-    private suspend fun <T> Call.await(transform: (Response) -> T): T =
-        suspendCancellableCoroutine { cont ->
-            cont.invokeOnCancellation { cancel() }
-            enqueue(object : Callback {
-                override fun onResponse(call: Call, response: Response) {
-                    runCatching { response.use(transform) }.fold(
-                        onSuccess = { cont.resume(it) },
-                        onFailure = { if (!cont.isCancelled) cont.resumeWithException(it) },
-                    )
-                }
-
-                override fun onFailure(call: Call, e: IOException) {
-                    if (!cont.isCancelled) cont.resumeWithException(e)
-                }
-            })
-        }
 
     private suspend fun executeRaw(request: Request) = withContext(Dispatchers.IO) {
         client.newCall(request).execute().use { response ->

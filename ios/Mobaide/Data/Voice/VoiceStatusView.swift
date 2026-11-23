@@ -4,8 +4,10 @@ import Foundation
 ///
 /// - `hidden`: no voice on this agent (too old, `unsupported`, a state this
 ///   client does not know, status not loaded yet) or the user hid the mic.
+/// - `unavailable`: cloud voice input that cannot record now (the speech
+///   service is down, or today's limit is used up); a tap explains.
 enum VoiceMicMode: Equatable, Sendable {
-    case hidden, off, preparing, failed, ready
+    case hidden, off, preparing, failed, ready, unavailable
 }
 
 enum VoiceStatusView {
@@ -21,6 +23,20 @@ enum VoiceStatusView {
         default: mode = .hidden
         }
         return hiddenByUser ? .hidden : mode
+    }
+
+    /// The session mic. `localMode` is `micMode` of the agent's own voice,
+    /// which decides alone while that is the route.
+    static func composerMicMode(
+        route: VoiceRoute,
+        cloud: CloudVoiceStatus?,
+        localMode: VoiceMicMode,
+        hiddenByUser: Bool
+    ) -> VoiceMicMode {
+        if route == .local { return localMode }
+        if hiddenByUser { return .hidden }
+        if route == .choose { return .off }
+        return cloud?.state == CloudVoiceStatus.stateReady ? .ready : .unavailable
     }
 
     /// Whole percent of the install download, or nil when unknown.

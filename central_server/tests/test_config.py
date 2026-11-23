@@ -207,3 +207,127 @@ def test_google_ads_click_window_days_parses_and_clamps(monkeypatch, raw, expect
     assert CentralServerConfig.from_env().google_ads_click_window_days == expected
 
 
+_CLOUD_VOICE_VARS = (
+    "CLOUD_VOICE_URL",
+    "CLOUD_VOICE_API_KEY",
+    "CLOUD_VOICE_MODEL",
+    "CLOUD_VOICE_ENABLED",
+    "CLOUD_VOICE_PROMPT",
+    "CLOUD_VOICE_USER_DAILY_SECONDS",
+    "CLOUD_VOICE_GLOBAL_DAILY_SECONDS",
+    "CLOUD_VOICE_MAX_CONCURRENCY",
+    "CLOUD_VOICE_ALLOWED_EMAILS",
+)
+_CLOUD_VOICE_REQUIRED = _CLOUD_VOICE_VARS[:3]
+
+
+def _set_cloud_voice(monkeypatch, **overrides):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    for var in _CLOUD_VOICE_VARS:
+        monkeypatch.delenv(var, raising=False)
+    values = {
+        "CLOUD_VOICE_URL": "https://speech.test",
+        "CLOUD_VOICE_API_KEY": "test-speech-key",
+        "CLOUD_VOICE_MODEL": "test-speech-model",
+    }
+    values.update(overrides)
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_cloud_voice_has_no_built_in_service(monkeypatch):
+    """The speech service's address, key and model come from the environment
+    only: with none of them set, neither ``from_env`` nor the dataclass
+    may name one."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    for var in _CLOUD_VOICE_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+    for config in (
+        CentralServerConfig.from_env(),
+        CentralServerConfig(jwt_secret_key="test-secret"),
+    ):
+        assert (
+            config.cloud_voice_url,
+            config.cloud_voice_api_key,
+            config.cloud_voice_model,
+        ) == (None, None, None)
+        assert config.cloud_voice_missing == _CLOUD_VOICE_REQUIRED
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("https://speech.test", "https://speech.test"),
+        (" https://speech.test/v1/ ", "https://speech.test/v1"),
+        ("http://127.0.0.1:8000", "http://127.0.0.1:8000"),
+        ("http://localhost:8000/v1", "http://localhost:8000/v1"),
+        ("https://speech.test/gateway/v1", "https://speech.test/gateway/v1"),
+    ],
+)
+def test_cloud_voice_env_vars_parse(monkeypatch, raw, expected):
+    _set_cloud_voice(
+        monkeypatch,
+        CLOUD_VOICE_URL=raw,
+        CLOUD_VOICE_API_KEY=" test-speech-key ",
+        CLOUD_VOICE_ALLOWED_EMAILS=" First@Test.Local , ,second@test.local",
+    )
+    config = CentralServerConfig.from_env()
+    assert config.cloud_voice_url == expected
+    assert config.cloud_voice_api_key == "test-speech-key"
+    assert config.cloud_voice_model == "test-speech-model"
+    assert config.cloud_voice_missing == ()
+    assert config.cloud_voice_enabled is True
+    assert config.cloud_voice_allowed_emails == ("first@test.local", "second@test.local")
+
+
+@pytest.mark.parametrize("name", _CLOUD_VOICE_REQUIRED)
+def test_cloud_voice_partial_set_reports_missing(monkeypatch, name):
+    _set_cloud_voice(monkeypatch, **{name: " "})
+    assert CentralServerConfig.from_env().cloud_voice_missing == (name,)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "speech.test",
+        "ftp://speech.test",
+        "https://user:secret@speech.test",
+        "https://speech.test/v1?key=secret",
+        "https://speech.test/v1#key",
+        "https://speech.test/a b",
+        "http://speech.test",
+        "http://10.0.0.5:8000/v1",
+        "http://127.0.0.1.speech.test:8000",
+        "http://localhost.speech.test",
+    ],
+)
+def test_cloud_voice_url_malformed_counts_as_unset(monkeypatch, raw):
+    """A URL that could carry a secret (credentials, a query) is refused,
+    not sent requests: the key belongs in ``CLOUD_VOICE_API_KEY``. So is
+    plain ``http`` to any host but this machine: the key and the audio
+    would cross the network in clear text."""
+    _set_cloud_voice(monkeypatch, CLOUD_VOICE_URL=raw)
+    config = CentralServerConfig.from_env()
+    assert config.cloud_voice_url is None
+    assert config.cloud_voice_missing == ("CLOUD_VOICE_URL",)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "ключ-0123456789",
+        "test speech key",
+        "test-speech-key\nX-Injected: 1",
+        "test-speech-key\x7f",
+    ],
+    ids=["non_ascii", "inner_space", "line_break", "control_character"],
+)
+def test_cloud_voice_api_key_that_cannot_be_a_header_counts_as_unset(monkeypatch, raw):
+    """The key travels in an HTTP header. A value that cannot (a paste with
+    a line break, a non-ASCII character) turns the feature off, as a missing
+    key does, instead of stopping the server at startup."""
+    _set_cloud_voice(monkeypatch, CLOUD_VOICE_API_KEY=raw)
+    config = CentralServerConfig.from_env()
+    assert config.cloud_voice_api_key is None
+    assert config.cloud_voice_missing == ("CLOUD_VOICE_API_KEY",)

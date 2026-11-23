@@ -22,6 +22,8 @@ interface DictationDialogProps {
   /** The review's text around its cursor while the user dictates more; the next result goes in between. */
   carried: CarriedText | null;
   agentName: string;
+  /** Who transcribes, when it is not the agent itself (Mobaide Cloud). */
+  transcriberName?: string;
   canSend: boolean;
   /** False once the session has ended: a new recording could never be inserted. */
   canRecord: boolean;
@@ -71,6 +73,22 @@ function interruptionNote(reason: InterruptReason | null): string | null {
   }
 }
 
+/**
+ * Puts the cursor at `caret` and scrolls the field so that it shows: a
+ * textarea does not scroll to a cursor that a script placed. The field keeps
+ * the offset `atLeast` when the cursor already shows there.
+ */
+function placeCaretInView(field: HTMLTextAreaElement, caret: number, atLeast: number): void {
+  const text = field.value;
+  // The height of the text up to the cursor, measured with the rest cut
+  // off. Nothing is painted in between.
+  field.value = text.slice(0, caret);
+  const caretBottom = field.scrollHeight;
+  field.value = text;
+  field.setSelectionRange(caret, caret);
+  field.scrollTop = Math.max(atLeast, caretBottom - field.clientHeight);
+}
+
 const PERMISSION_HELP =
   'Allow the microphone for this site, then try again. Chrome and Edge: the site ' +
   'settings icon left of the address bar. Firefox: the microphone icon in the ' +
@@ -96,6 +114,7 @@ export function DictationDialog({
   state,
   carried,
   agentName,
+  transcriberName = agentName,
   canSend,
   canRecord,
   onStop,
@@ -128,6 +147,9 @@ export function DictationDialog({
   const textRef = useRef<HTMLTextAreaElement>(null);
   // Where the cursor goes once a spliced transcript is in the field.
   const caretRef = useRef<number | null>(null);
+  // How far the field was scrolled when "Dictate more" left it. The field is
+  // drawn again at its top, and placing the cursor does not scroll to it.
+  const scrollRef = useRef(0);
   // The draft of the version not showing (cleaned up or as heard), edits
   // included, so swapping back and forth never loses them.
   const otherDraftRef = useRef<string | null>(null);
@@ -196,8 +218,21 @@ export function DictationDialog({
     const field = textRef.current;
     if (caret === null || field === null || field.value !== draft) return;
     caretRef.current = null;
-    field.setSelectionRange(caret, caret);
+    placeCaretInView(field, caret, scrollRef.current);
   }, [draft]);
+
+  // Back in the review with no new transcript (a cancel, no speech, a
+  // failure): the field was drawn again with its cursor at the start, so it
+  // goes back to where "Dictate more" left it.
+  const backInReview = state.kind === 'idle';
+  useLayoutEffect(() => {
+    const around = carriedRef.current;
+    const field = textRef.current;
+    if (!backInReview || around === null || field === null) return;
+    const end = field.value.length - around.after.length;
+    if (end >= around.before.length) field.setSelectionRange(around.before.length, end);
+    field.scrollTop = scrollRef.current;
+  }, [backInReview]);
 
   const live =
     state.kind === 'starting' ||
@@ -263,7 +298,7 @@ export function DictationDialog({
       title = 'Transcribing';
       body = (
         <>
-          <p role="status">Transcribing on {agentName}…</p>
+          <p role="status">Transcribing on {transcriberName}…</p>
           {note !== null && <p className="page-note">{note}</p>}
           {state.lagging && <p className="page-note">Waiting for the connection…</p>}
         </>
@@ -420,6 +455,7 @@ export function DictationDialog({
               const field = textRef.current;
               const start = field?.selectionStart ?? draft.length;
               const end = field?.selectionEnd ?? draft.length;
+              scrollRef.current = field?.scrollTop ?? 0;
               onContinue({ before: draft.slice(0, start), after: draft.slice(end) });
             }}
           >
@@ -465,7 +501,7 @@ export function DictationDialog({
       title = 'Dictation failed';
       body = (
         <>
-          <p role="alert">{dictationErrorCopy(state.code, agentName)}</p>
+          <p role="alert">{dictationErrorCopy(state.code, transcriberName)}</p>
           {state.code === VOICE_CODE.micPermissionDenied && <p className="page-note">{PERMISSION_HELP}</p>}
           {state.message !== null && state.message !== '' && (
             <details className="voice-details">

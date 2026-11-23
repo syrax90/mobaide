@@ -27,6 +27,7 @@ actor UserEventBus {
     private let templateSync: any TemplateSyncApplying
     private let shortcutSync: any ShortcutSyncApplying
     private let customTypeSync: any CustomTypeSyncApplying
+    private let cloudVoiceSync: any CloudVoiceSyncApplying
     private let conversion: any FirstAgentPairedApplying
 
     private let connectionBroadcaster = Broadcaster<BusConnectionState>.stateFlow()
@@ -45,6 +46,7 @@ actor UserEventBus {
         templateSync: any TemplateSyncApplying = NoOpTemplateSyncApplier(),
         shortcutSync: any ShortcutSyncApplying = NoOpShortcutSyncApplier(),
         customTypeSync: any CustomTypeSyncApplying = NoOpCustomTypeSyncApplier(),
+        cloudVoiceSync: any CloudVoiceSyncApplying = NoOpCloudVoiceSyncApplier(),
         conversion: any FirstAgentPairedApplying = NoOpFirstAgentPairedApplier()
     ) {
         self.webSocketFactory = webSocketFactory
@@ -56,6 +58,7 @@ actor UserEventBus {
         self.templateSync = templateSync
         self.shortcutSync = shortcutSync
         self.customTypeSync = customTypeSync
+        self.cloudVoiceSync = cloudVoiceSync
         self.conversion = conversion
         connectionBroadcaster.emit(.disconnected)
     }
@@ -83,12 +86,14 @@ actor UserEventBus {
                 case .unauthenticated:
                     await self.stopConnection()
                     // Cross-account isolation: drop cached agents/templates/
-                    // shortcuts/custom types so a different account signing in
-                    // the same process never sees the previous user's data.
+                    // shortcuts/custom types/cloud voice status so a different
+                    // account signing in the same process never sees the
+                    // previous user's data.
                     await self.agentStatusApplier.clear()
                     await self.templateSync.clear()
                     await self.shortcutSync.clear()
                     await self.customTypeSync.clear()
+                    await self.cloudVoiceSync.clear()
                 case .incompatibleServer:
                     await self.stopConnection()
                 }
@@ -166,6 +171,9 @@ actor UserEventBus {
         try? await customTypeSync.refreshCustomTypes()
         try? await customTypeSync.refreshModeOrder()
         await conversion.reconcileAfterConnect()
+        // Off the stream: this answer can wait on the speech service, and the
+        // events behind it must not.
+        Task { [cloudVoiceSync] in try? await cloudVoiceSync.refreshCloudVoice() }
     }
 
     private func route(_ text: String) async {
@@ -189,6 +197,8 @@ actor UserEventBus {
             await shortcutSync.purgeKind("custom_\(typeId)")
         case .sessionModeOrderUpdated(let order):
             await customTypeSync.applyModeOrder(order)
+        case .cloudVoiceChanged(let payload):
+            await cloudVoiceSync.applyEnginesChanged(payload)
         case .firstAgentPaired(let agentId):
             await conversion.firstAgentPaired(agentId: agentId)
         case .none:
@@ -252,6 +262,7 @@ enum UserEnvelopeDemux {
         case customTypeUpserted(CustomAgentTypeDto)
         case customTypeDeleted(typeId: String)
         case sessionModeOrderUpdated(SessionModeOrderDto)
+        case cloudVoiceChanged(CloudVoiceChangedPayload)
         case firstAgentPaired(agentId: String)
         case none
     }
@@ -301,6 +312,11 @@ enum UserEnvelopeDemux {
                 return .none
             }
             return .sessionModeOrderUpdated(order)
+        case "cloud_voice.changed":
+            guard let payload = try? WireJSON.decoder().decode(CloudVoiceChangedPayload.self, from: data) else {
+                return .none
+            }
+            return .cloudVoiceChanged(payload)
         case "account.first_agent_paired":
             guard let payload = try? WireJSON.decoder().decode(FirstAgentPairedPayload.self, from: data) else {
                 return .none

@@ -13,7 +13,8 @@ struct VoiceFinishResult: Equatable, Sendable {
     let text: String?
 }
 
-/// The dictation half of the agent's voice API, as the uploader sees it.
+/// The dictation routes, as the uploader sees them: the connected agent's
+/// (`VoiceRepository`) or cloud voice input's (`CloudVoiceRepository`).
 protocol VoiceApi: Sendable {
     func create() async throws -> VoiceDictationOpened
     func audio(dictationId: String, seq: Int, pcm16B64: String) async throws
@@ -82,6 +83,14 @@ enum VoiceCodes {
     /// Also the client's own code when the agent's answer never arrives.
     static let cleanupTimeout = "cleanup_timeout"
     static let cleanupFailed = "cleanup_failed"
+    /// Cloud voice input: the speech service does not answer.
+    static let cloudUnavailable = "cloud_unavailable"
+    /// Cloud voice input: the account's daily limit is used up.
+    static let cloudLimitReached = "cloud_limit_reached"
+    /// Cloud voice input is not offered to this account.
+    static let cloudDisabled = "cloud_disabled"
+    /// The failures after which the cached cloud voice status is no longer true.
+    static let cloudStatusCodes: Set<String> = [cloudUnavailable, cloudLimitReached, cloudDisabled]
     // Client-side codes, never sent by the agent.
     static let network = "network"
     static let transcriptionTimeout = "transcription_timeout"

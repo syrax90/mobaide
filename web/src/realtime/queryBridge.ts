@@ -49,6 +49,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import type { z } from 'zod';
 import type { SessionGitStatus } from '../api/sessionGitRepository';
 import { queryKeys } from '../lib/queryKeys';
+import { cloudVoiceChangedSchema } from '../protocol/dto/cloudVoice';
 import { decodeEventEnvelope, type EventEnvelope } from '../protocol/dto/envelope';
 import { gitChangedSchema, type GitChanged } from '../protocol/dto/workspaces';
 import type { SessionResponse } from '../protocol/dto/session';
@@ -119,6 +120,12 @@ const USER_EVENT_RULES: Readonly<Record<string, UserEventRule>> = {
   'custom_type.deleted': {
     schema: customTypeDeletedSchema,
     keys: constantKeys(queryKeys.customAgentTypes()),
+  },
+  // Another device changed an agent's voice engine. The payload names the
+  // choices; the status around them is refetched with it.
+  'cloud_voice.changed': {
+    schema: cloudVoiceChangedSchema,
+    keys: constantKeys(queryKeys.cloudVoice()),
   },
   'session.attention': {
     schema: sessionAttentionSchema,
@@ -357,6 +364,7 @@ export function refreshOnUserEventsConnect(client: QueryClient): void {
     queryKeys.templates(),
     queryKeys.customAgentTypes(),
     queryKeys.sessionModeOrder(),
+    queryKeys.cloudVoice(),
   ]);
 }
 

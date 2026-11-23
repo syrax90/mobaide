@@ -224,7 +224,9 @@ export function Agents() {
 
       {panel.kind === 'voice' && (
         <VoiceSettingsDialog
-          agent={panel.agent}
+          // The live row, not the one the dialog opened with: the dialog
+          // acts on the agent coming back online.
+          agent={agents.data?.find((row) => row.agentId === panel.agent.agentId) ?? panel.agent}
           onClose={() => {
             setPanel({ kind: 'none' });
           }}

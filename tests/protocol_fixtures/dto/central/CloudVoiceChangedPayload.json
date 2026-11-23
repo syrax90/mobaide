@@ -1,0 +1,13 @@
+{
+  "type": "CloudVoiceChangedPayload",
+  "cases": [
+    {
+      "name": "two_agents",
+      "wire": { "engines": { "a1b2c3d4e5f6": "cloud", "0f9e8d7c6b5a": "local" } }
+    },
+    {
+      "name": "no_choices",
+      "wire": { "engines": {} }
+    }
+  ]
+}

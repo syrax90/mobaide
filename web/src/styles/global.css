@@ -4511,6 +4511,35 @@ body:has(dialog[open]) {
   margin: 0;
 }
 
+/* Two notes, or two button labels, that take turns in one place: both are
+   laid out in the same cell and only one shows, so the slot has the size of
+   the larger one at any width and what follows never moves. */
+.voice-note-slot {
+  display: grid;
+}
+
+.voice-label-slot {
+  display: inline-grid;
+  justify-items: center;
+}
+
+.voice-note-slot > *,
+.voice-label-slot > * {
+  grid-area: 1 / 1;
+}
+
+.voice-note-slot > [aria-hidden='true'],
+.voice-label-slot > [aria-hidden='true'] {
+  visibility: hidden;
+}
+
+/* A text link keeps its own width: stretched across the column, the empty
+   space beside "Hide the mic for this agent" would be clickable too. */
+.voice-panel > .link-button {
+  align-self: flex-start;
+  text-align: left;
+}
+
 .voice-progress {
   width: 100%;
   height: 0.75rem;
@@ -4580,6 +4609,115 @@ body:has(dialog[open]) {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* The engine chooser: two radio cards, the chosen one framed in the accent. */
+.voice-engine-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.voice-engine-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.7rem 0.8rem;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--rule);
+  cursor: pointer;
+}
+
+.voice-engine-card:has(input:checked) {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+.voice-engine-card[aria-disabled='true'] {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.voice-engine-card input {
+  flex: none;
+  margin-top: 0.2rem;
+}
+
+.voice-engine-card input:disabled,
+.voice-engine-options input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.voice-engine-options label:has(input:disabled) {
+  color: var(--text-muted);
+}
+
+.voice-engine-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.voice-engine-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+/* Continue stays in view while a short window scrolls the cards. The row
+   sticks to the dialog's edge, not to its padding: the bottom padding moves
+   from the dialog to the panel, so no scrolled text shows under the buttons. */
+.voice-engine-actions {
+  position: sticky;
+  bottom: 2px;
+  padding: 0.5rem 0;
+  background: var(--bg-2);
+}
+
+.voice-dialog:has(.voice-engine-actions) {
+  padding-bottom: 0;
+}
+
+.voice-panel:has(> .voice-engine-actions) {
+  padding-bottom: 22px;
+}
+
+.voice-engine-card-note {
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+/* The filled badge recipe of `.device-current`. */
+.voice-engine-badge {
+  padding: 2px 8px;
+  background: var(--brand);
+  color: #fff;
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.voice-engine-setting,
+.voice-engine-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.voice-engine-setting-label {
+  color: var(--text-muted);
+}
+
+/* The global radio sits 4px low for top-aligned rows; these rows centre it. */
+.voice-engine-options input[type='radio'] {
+  margin-top: 0;
 }
 
 .voice-timer {
@@ -6784,6 +6922,10 @@ body:has(dialog[open]) {
 
   .dialog {
     padding: 16px;
+  }
+
+  .voice-panel:has(> .voice-engine-actions) {
+    padding-bottom: 16px;
   }
 
   /* Swap the toggle's long label for a compact one — never an unlabelled

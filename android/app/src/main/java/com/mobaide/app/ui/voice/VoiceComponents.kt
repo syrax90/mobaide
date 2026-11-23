@@ -11,6 +11,7 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,8 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
@@ -59,6 +62,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.mobaide.app.data.network.dto.CloudVoiceStatus
 import com.mobaide.app.data.network.dto.VoiceCapability
 import com.mobaide.app.data.network.dto.VoiceErrorInfo
 import com.mobaide.app.data.network.dto.VoiceHostInfo
@@ -66,11 +70,13 @@ import com.mobaide.app.data.network.dto.VoiceHostReason
 import com.mobaide.app.data.network.dto.VoiceModelInfo
 import com.mobaide.app.data.network.dto.VoiceProgress
 import com.mobaide.app.data.network.dto.VoiceStatusResponse
+import com.mobaide.app.data.voice.CloudVoiceCopy
 import com.mobaide.app.data.voice.DictationState
 import com.mobaide.app.data.voice.InterruptReason
 import com.mobaide.app.data.voice.VoiceCodes
 import com.mobaide.app.data.voice.VoiceErrorCopy
 import com.mobaide.app.data.voice.VoiceMicMode
+import com.mobaide.app.data.voice.VoiceRoute
 import com.mobaide.app.data.voice.VoiceStatusView
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
@@ -85,20 +91,31 @@ import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.theme.pixel
 
-/** The composer's mic. Every state has its own icon and label, so none relies on colour. */
+/**
+ * The composer's mic. Every state has its own icon and label, so none relies
+ * on colour; cloud voice input that cannot record shares the look of a failed
+ * install. [route] says who would transcribe: only the label depends on it.
+ */
 @Composable
 fun VoiceMicButton(
     mode: VoiceMicMode,
     status: VoiceStatusResponse?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    route: VoiceRoute = VoiceRoute.Local,
 ) {
     val (icon, label) = when (mode) {
-        VoiceMicMode.Ready -> Icons.Filled.Mic to "Dictate"
+        VoiceMicMode.Ready -> Icons.Filled.Mic to if (route == VoiceRoute.Cloud) {
+            "Dictate: record speech for Mobaide Cloud to transcribe"
+        } else {
+            "Dictate"
+        }
         VoiceMicMode.Off -> Icons.Outlined.MicNone to "Voice input is off. Set it up"
         VoiceMicMode.Preparing ->
             Icons.Outlined.Downloading to (status?.let(VoiceStatusView::preparingLabel) ?: "Preparing voice input")
         VoiceMicMode.Failed -> Icons.Outlined.ErrorOutline to "Voice input needs attention"
+        VoiceMicMode.Unavailable ->
+            Icons.Outlined.ErrorOutline to "Cloud voice input can’t record right now. Show details"
         VoiceMicMode.Hidden -> return
     }
     PixelIconButton(
@@ -115,11 +132,12 @@ fun VoiceMicButton(
  * timer, level meter and stop while recording; progress while transcribing
  * and cleaning up; the reason with Retry after a failure. The status line is
  * a polite live region, so TalkBack announces "Recording" and "Transcribing".
+ * [transcriberName] names who transcribes: the computer, or Mobaide Cloud.
  */
 @Composable
 fun VoiceDictationBar(
     state: DictationState,
-    agentName: String,
+    transcriberName: String,
     onStop: () -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
@@ -178,7 +196,7 @@ fun VoiceDictationBar(
             is DictationState.Transcribing -> {
                 PixelBlinkCursor()
                 StatusText(
-                    text = transcribingLine(state, agentName),
+                    text = transcribingLine(state, transcriberName),
                     modifier = Modifier.weight(1f),
                 )
                 CancelButton(onCancel)
@@ -195,7 +213,7 @@ fun VoiceDictationBar(
                 CloseButton(onDismiss)
             }
             is DictationState.Failed -> {
-                StatusText(VoiceErrorCopy.dictation(state.code, agentName), Modifier.weight(1f))
+                StatusText(VoiceErrorCopy.dictation(state.code, transcriberName), Modifier.weight(1f))
                 when {
                     state.code == VoiceCodes.MIC_PERMISSION_DENIED -> PixelButton(
                         text = "Settings",
@@ -227,14 +245,14 @@ fun VoiceDictationBar(
     }
 }
 
-private fun transcribingLine(state: DictationState.Transcribing, agentName: String): String =
+private fun transcribingLine(state: DictationState.Transcribing, transcriberName: String): String =
     when {
         state.lagging -> "Waiting for the connection…"
         state.interruptedBy == InterruptReason.Background -> "Stopped when the app left the screen. Transcribing…"
         state.interruptedBy == InterruptReason.Call -> "Stopped for a call. Transcribing…"
         state.interruptedBy == InterruptReason.Device -> "The microphone went away. Transcribing…"
         state.interruptedBy == InterruptReason.Limit -> "Time limit reached. Transcribing…"
-        else -> "Transcribing on $agentName…"
+        else -> "Transcribing on $transcriberName…"
     }
 
 @Composable
@@ -289,7 +307,10 @@ private fun CloseButton(onClick: () -> Unit) {
     )
 }
 
-/** What the mic opens while voice is not ready; follows the live status. Never opens on its own. */
+/**
+ * What the mic opens while it cannot record. It follows the live state, so a
+ * choice or Enable turns into the next step in place. Never opens on its own.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VoiceSetupSheet(
@@ -300,6 +321,10 @@ fun VoiceSetupSheet(
     onRetry: () -> Unit,
     onHideMic: () -> Unit,
     onCleanUpChange: (Boolean) -> Unit = {},
+    onConfirmEngine: (engine: String) -> Unit = {},
+    onUseLocal: () -> Unit = {},
+    onUseCloud: () -> Unit = {},
+    onRecheckCloud: () -> Unit = {},
 ) {
     PixelBottomSheet(
         onDismissRequest = onDismiss,
@@ -318,23 +343,55 @@ fun VoiceSetupSheet(
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
-            VoicePanel(
-                status = state.status,
-                agentName = state.agentName,
-                settings = false,
-                action = state.action,
-                micHidden = state.micHidden,
-                cleanupAvailable = state.cleanupOffered,
-                cleanUp = state.cleanUp,
-                cleanupError = state.cleanupError,
-                cleanupNoticeSeen = state.cleanupNoticeSeen,
-                onEnable = onEnable,
-                onCancelInstall = onCancelInstall,
-                onRetry = onRetry,
-                onNotNow = onDismiss,
-                onHideMic = onHideMic,
-                onCleanUpChange = onCleanUpChange,
-            )
+            val cloud = state.cloud
+            when {
+                cloud != null && state.setupContent == VoiceSetupContent.Chooser -> VoiceEngineChooser(
+                    cloud = cloud,
+                    agentName = state.agentName,
+                    localSupported = state.capability != null,
+                    status = state.status,
+                    loadFailed = state.statusLoadFailed,
+                    saving = state.engine.saving,
+                    saveError = state.engine.error,
+                    onContinue = onConfirmEngine,
+                    onNotNow = onDismiss,
+                    onHideMic = onHideMic,
+                    probeFailed = state.capabilityLoadFailed,
+                )
+                cloud != null && state.setupContent == VoiceSetupContent.Cloud -> CloudVoicePanel(
+                    cloud = cloud,
+                    agentName = state.agentName,
+                    settings = false,
+                    checking = state.cloudChecking,
+                    onRecheck = onRecheckCloud,
+                    onUseLocal = onUseLocal.takeIf { state.capability != null },
+                    saving = state.engine.saving,
+                    rechecked = state.cloudRechecked,
+                )
+                else -> VoicePanel(
+                    status = state.status,
+                    agentName = state.agentName,
+                    settings = false,
+                    action = state.action,
+                    micHidden = state.micHidden,
+                    cleanupAvailable = state.cleanupOffered,
+                    cleanUp = state.cleanUp,
+                    cleanupError = state.cleanupError,
+                    cleanupNoticeSeen = state.cleanupNoticeSeen,
+                    onEnable = onEnable,
+                    onCancelInstall = onCancelInstall,
+                    onRetry = onRetry,
+                    onNotNow = onDismiss,
+                    onHideMic = onHideMic,
+                    onCleanUpChange = onCleanUpChange,
+                    onUseCloud = onUseCloud.takeIf { cloud != null },
+                    engineSaving = state.engine.saving,
+                )
+            }
+            // The chooser shows its own, next to Continue.
+            if (state.setupContent != VoiceSetupContent.Chooser) {
+                state.engine.error?.let { EngineSaveError(it) }
+            }
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
@@ -349,6 +406,12 @@ fun VoiceSetupSheet(
  * [cleanupAvailable] offers the transcript cleanup toggle: in Settings for
  * an agent that supports it, in the enable sheet once voice is enabled in a
  * session that can use it, so the first dictation is already cleaned up.
+ *
+ * [onUseCloud] is set while cloud voice input is offered: where this
+ * computer's voice is not ready, the enable sheet also offers to switch the
+ * agent to it. [embedded] is the settings variant under cloud voice input,
+ * which shows the mic toggle itself: only what belongs to the computer's own
+ * voice is shown.
  */
 @Composable
 fun VoicePanel(
@@ -371,7 +434,21 @@ fun VoicePanel(
     onHideMic: () -> Unit = {},
     onShowMicChange: (Boolean) -> Unit = {},
     onCleanUpChange: (Boolean) -> Unit = {},
+    onUseCloud: (() -> Unit)? = null,
+    engineSaving: Boolean = false,
+    embedded: Boolean = false,
 ) {
+    val useCloud: (@Composable () -> Unit)? = onUseCloud?.takeIf { !settings }?.let { switch ->
+        {
+            PixelTextButton(
+                onClick = switch,
+                enabled = !engineSaving,
+                modifier = Modifier.testTag("voice_use_cloud_button"),
+            ) {
+                Text("Use ${CloudVoiceCopy.CLOUD_NAME} instead: nothing to install")
+            }
+        }
+    }
     var confirmRemove by rememberSaveable { mutableStateOf(false) }
     var showLicense by rememberSaveable { mutableStateOf(false) }
     var details by remember { mutableStateOf<String?>(null) }
@@ -409,6 +486,7 @@ fun VoicePanel(
                     )
                     if (!settings) PixelButton(text = "Not now", onClick = onNotNow)
                 }
+                useCloud?.invoke()
                 if (!settings) {
                     PixelTextButton(onClick = onHideMic) { Text("Hide the mic for this agent") }
                 }
@@ -477,12 +555,14 @@ fun VoicePanel(
                         )
                     }
                 }
+                useCloud?.invoke()
             }
             else -> {
                 Text("$agentName can't run voice input.", style = MaterialTheme.typography.bodyMedium)
                 status.host.reasons.forEach { reason ->
                     Text("• ${reason.message}", style = MaterialTheme.typography.bodySmall)
                 }
+                useCloud?.invoke()
             }
         }
         action.error?.let { error ->
@@ -493,23 +573,13 @@ fun VoicePanel(
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
-        if (settings || status.state == VoiceStatusResponse.STATE_NOT_INSTALLED) {
+        if ((settings && !embedded) || status.state == VoiceStatusResponse.STATE_NOT_INSTALLED) {
             ModelFacts(status.model)
         }
-        if (settings && status.state != VoiceStatusResponse.STATE_UNSUPPORTED) {
-            // The whole row is one target, like the cleanup row below it.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .toggleable(value = !micHidden, role = Role.Checkbox, onValueChange = onShowMicChange)
-                    .testTag("voice_show_mic_checkbox"),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PixelCheckbox(checked = !micHidden, onCheckedChange = null)
-                Text("Show the mic in the command field", style = MaterialTheme.typography.bodyMedium)
-            }
+        if (settings && !embedded && status.state != VoiceStatusResponse.STATE_UNSUPPORTED) {
+            ShowMicToggle(micHidden = micHidden, onShowMicChange = onShowMicChange)
         }
-        val cleanupToggleShown = cleanupAvailable && if (settings) {
+        val cleanupToggleShown = cleanupAvailable && !embedded && if (settings) {
             status.state != VoiceStatusResponse.STATE_UNSUPPORTED
         } else {
             status.state in CLEANUP_SETUP_STATES
@@ -532,7 +602,7 @@ fun VoicePanel(
                 )
             }
         }
-        if (settings && !status.model.notice.isNullOrBlank()) {
+        if (settings && !embedded && !status.model.notice.isNullOrBlank()) {
             PixelTextButton(onClick = { showLicense = true }) { Text("Model license") }
         }
     }
@@ -580,6 +650,25 @@ fun VoicePanel(
             },
             confirmButton = { PixelTextButton(onClick = { showLicense = false }) { Text("Close") } },
         )
+    }
+}
+
+/** "Show the mic", the whole row one target, like the cleanup row. */
+@Composable
+internal fun ShowMicToggle(
+    micHidden: Boolean,
+    onShowMicChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .toggleable(value = !micHidden, role = Role.Checkbox, onValueChange = onShowMicChange)
+            .testTag("voice_show_mic_checkbox"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PixelCheckbox(checked = !micHidden, onCheckedChange = null)
+        Text("Show the mic in the command field", style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -700,7 +789,12 @@ private fun ModelFacts(model: VoiceModelInfo) {
     }
 }
 
-/** Settings → Voice input, for the connected agent. */
+/**
+ * Settings → Voice input, for the connected agent: where speech is
+ * transcribed (Mobaide Cloud or the computer, while cloud voice input is
+ * offered), and for the computer's own voice the status and install progress,
+ * enable, remove and reinstall, the model and its license.
+ */
 @Composable
 fun VoiceSettingsSection(
     state: VoiceUiState,
@@ -712,7 +806,32 @@ fun VoiceSettingsSection(
     onShowMicChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     onCleanUpChange: (Boolean) -> Unit = {},
+    onEngineChange: (engine: String) -> Unit = {},
+    onRecheckCloud: () -> Unit = {},
 ) {
+    val cloud = state.cloud
+    val cloudSelected = cloud != null && state.route == VoiceRoute.Cloud
+    val localPanel: @Composable (embedded: Boolean) -> Unit = { embedded ->
+        VoicePanel(
+            status = state.status,
+            agentName = state.agentName,
+            settings = true,
+            action = state.action,
+            micHidden = state.micHidden,
+            cleanupAvailable = state.cleanupSupported,
+            cleanUp = state.cleanUp,
+            cleanupError = state.cleanupError,
+            cleanupNoticeSeen = state.cleanupNoticeSeen,
+            onEnable = onEnable,
+            onCancelInstall = onCancelInstall,
+            onRetry = onRetry,
+            onRemove = onRemove,
+            onReinstall = onReinstall,
+            onShowMicChange = onShowMicChange,
+            onCleanUpChange = onCleanUpChange,
+            embedded = embedded,
+        )
+    }
     Column(
         modifier = modifier
             .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -720,37 +839,111 @@ fun VoiceSettingsSection(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(text = "Voice input", style = MaterialTheme.typography.titleMedium)
+        if (cloud != null) {
+            VoiceEngineSetting(
+                route = state.route,
+                localBlocker = when {
+                    !state.capabilityKnown -> "Checking ${state.agentName}…"
+                    else -> localBlocker(
+                        agentName = state.agentName,
+                        localSupported = state.capability != null,
+                        status = state.status,
+                        loadFailed = state.statusLoadFailed,
+                        probeFailed = state.capabilityLoadFailed,
+                    )
+                },
+                saveError = state.engine.error,
+                onEngineChange = onEngineChange,
+            )
+        }
         when {
+            // No engine yet: the computer's enable panel here would steer the
+            // user to the option that is not the recommended one.
+            cloud != null && state.route == VoiceRoute.Choose -> {
+                Text(
+                    text = "Choose one to turn on voice input for ${state.agentName}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("voice_engine_unchosen_note"),
+                )
+                ShowMicToggle(micHidden = state.micHidden, onShowMicChange = onShowMicChange)
+            }
+            cloud != null && cloudSelected -> {
+                CloudVoicePanel(
+                    cloud = cloud,
+                    agentName = state.agentName,
+                    settings = true,
+                    checking = state.cloudChecking,
+                    onRecheck = onRecheckCloud,
+                    rechecked = state.cloudRechecked,
+                    micHidden = state.micHidden,
+                    onShowMicChange = onShowMicChange,
+                )
+                // Under cloud voice input the computer's own voice only
+                // matters once it is enabled there: then it can still be
+                // removed or repaired from here.
+                if (state.capability != null && state.status?.enabled == true) {
+                    LocalVoiceDisclosure(agentName = state.agentName) { localPanel(true) }
+                }
+            }
             !state.capabilityKnown -> Text(
                 text = "Checking the connected agent…",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            state.capability == null -> Text(
-                text = "Dictate into the command field: your own computer transcribes what you say. " +
-                    "Connect to an agent that supports voice input (it updates itself) to set it up.",
+            // An agent that did not answer is not an agent without voice.
+            state.capabilityLoadFailed -> Text(
+                text = "Couldn’t reach ${state.agentName}. Is it online?",
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            else -> VoicePanel(
-                status = state.status,
-                agentName = state.agentName,
-                settings = true,
-                action = state.action,
-                micHidden = state.micHidden,
-                cleanupAvailable = state.cleanupSupported,
-                cleanUp = state.cleanUp,
-                cleanupError = state.cleanupError,
-                cleanupNoticeSeen = state.cleanupNoticeSeen,
-                onEnable = onEnable,
-                onCancelInstall = onCancelInstall,
-                onRetry = onRetry,
-                onRemove = onRemove,
-                onReinstall = onReinstall,
-                onShowMicChange = onShowMicChange,
-                onCleanUpChange = onCleanUpChange,
+            state.capability == null -> Text(
+                text = if (cloud != null) {
+                    "${state.agentName} runs a Mobaide agent without on-computer voice input. " +
+                        "It updates itself; check again after its next update."
+                } else {
+                    "Dictate into the command field: your own computer transcribes what you say. " +
+                        "Connect to an agent that supports voice input (it updates itself) to set it up."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            else -> localPanel(false)
+        }
+    }
+}
+
+/** The computer's own voice under cloud voice input: collapsed until asked for. */
+@Composable
+private fun LocalVoiceDisclosure(agentName: String, content: @Composable () -> Unit) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    role = Role.Button,
+                    onClickLabel = if (expanded) "Collapse" else "Expand",
+                    onClick = { expanded = !expanded },
+                )
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                .padding(vertical = 12.dp)
+                .testTag("voice_local_disclosure"),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "On-computer voice input on $agentName",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = null,
             )
         }
+        if (expanded) content()
     }
 }
 
@@ -758,10 +951,15 @@ fun VoiceSettingsSection(
  * The microphone permission, asked on the mic tap: straight to the system
  * prompt the first time, after a short rationale once the user has declined
  * before, and to the denied state (with a link to the app's settings) when
- * Android will no longer prompt.
+ * Android will no longer prompt. [cloud] says the rationale names Mobaide's
+ * speech service as where the audio goes, not the computer.
  */
 @Composable
-fun rememberMicPermissionRequest(onGranted: () -> Unit, onDenied: () -> Unit): () -> Unit {
+fun rememberMicPermissionRequest(
+    onGranted: () -> Unit,
+    onDenied: () -> Unit,
+    cloud: Boolean = false,
+): () -> Unit {
     val context = LocalContext.current
     var showRationale by remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -773,8 +971,14 @@ fun rememberMicPermissionRequest(onGranted: () -> Unit, onDenied: () -> Unit): (
             title = { Text("Microphone") },
             text = {
                 Text(
-                    "Mobaide records only while you dictate. The audio goes to your own computer, " +
-                        "which turns it into text for the command field.",
+                    if (cloud) {
+                        "Mobaide records only while you dictate. The audio goes over an encrypted " +
+                            "connection to Mobaide’s speech service, which turns it into text for the " +
+                            "command field."
+                    } else {
+                        "Mobaide records only while you dictate. The audio goes to your own computer, " +
+                            "which turns it into text for the command field."
+                    },
                 )
             },
             confirmButton = {
@@ -816,7 +1020,7 @@ private fun Context.openAppSettings() {
     )
 }
 
-private val previewStatus = VoiceStatusResponse(
+internal val previewStatus = VoiceStatusResponse(
     state = VoiceStatusResponse.STATE_NOT_INSTALLED,
     enabled = false,
     model = VoiceModelInfo(
@@ -852,20 +1056,26 @@ private fun VoicePreviewContent() {
                 onClick = {},
             )
             VoiceMicButton(VoiceMicMode.Failed, null, onClick = {})
+            VoiceMicButton(VoiceMicMode.Unavailable, null, onClick = {}, route = VoiceRoute.Cloud)
         }
         VoiceDictationBar(
             state = DictationState.Recording(elapsedMs = 12_000, level = 0.6f, remainingSeconds = null, lagging = false),
-            agentName = "MacBook-Pro",
+            transcriberName = "MacBook-Pro",
             onStop = {}, onCancel = {}, onRetry = {}, onDismiss = {}, onRecordAgain = {},
         )
         VoiceDictationBar(
             state = DictationState.Cleaning("um can you uh check the off service"),
-            agentName = "MacBook-Pro",
+            transcriberName = "MacBook-Pro",
             onStop = {}, onCancel = {}, onRetry = {}, onDismiss = {}, onRecordAgain = {},
         )
         VoiceDictationBar(
             state = DictationState.Failed(VoiceCodes.NETWORK, retryable = true, message = null, hasAudio = true),
-            agentName = "MacBook-Pro",
+            transcriberName = "MacBook-Pro",
+            onStop = {}, onCancel = {}, onRetry = {}, onDismiss = {}, onRecordAgain = {},
+        )
+        VoiceDictationBar(
+            state = DictationState.Failed(VoiceCodes.CLOUD_UNAVAILABLE, retryable = true, message = null, hasAudio = true),
+            transcriberName = CloudVoiceCopy.CLOUD_NAME,
             onStop = {}, onCancel = {}, onRetry = {}, onDismiss = {}, onRecordAgain = {},
         )
         VoicePanel(
@@ -890,6 +1100,15 @@ private fun VoicePreviewContent() {
                 status = previewStatus.copy(state = VoiceStatusResponse.STATE_READY),
                 cleanupSupported = true,
                 cleanUp = true,
+            ),
+            onEnable = {}, onCancelInstall = {}, onRetry = {}, onRemove = {}, onReinstall = {},
+            onShowMicChange = {},
+        )
+        VoiceSettingsSection(
+            state = previewUiState.copy(
+                status = previewStatus.copy(state = VoiceStatusResponse.STATE_READY, enabled = true),
+                route = VoiceRoute.Cloud,
+                cloud = previewCloudStatus,
             ),
             onEnable = {}, onCancelInstall = {}, onRetry = {}, onRemove = {}, onReinstall = {},
             onShowMicChange = {},

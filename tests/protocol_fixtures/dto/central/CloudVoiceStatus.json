@@ -1,0 +1,41 @@
+{
+  "type": "CloudVoiceStatus",
+  "cases": [
+    {
+      "name": "ready_with_choices",
+      "wire": {
+        "state": "ready",
+        "limits": { "sample_rate": 16000, "max_seconds": 120, "max_chunk_bytes": 65536 },
+        "usage": { "used_seconds": 742, "limit_seconds": 1800, "resets_at": "2026-11-23T00:00:00Z" },
+        "engines": { "a1b2c3d4e5f6": "cloud", "0f9e8d7c6b5a": "local" }
+      }
+    },
+    {
+      "name": "off",
+      "wire": {
+        "state": "off",
+        "limits": { "sample_rate": 16000, "max_seconds": 120, "max_chunk_bytes": 65536 },
+        "usage": { "used_seconds": 0, "limit_seconds": 1800, "resets_at": "2026-11-23T00:00:00Z" },
+        "engines": {}
+      }
+    },
+    {
+      "name": "limit_reached",
+      "wire": {
+        "state": "limit_reached",
+        "limits": { "sample_rate": 16000, "max_seconds": 120, "max_chunk_bytes": 65536 },
+        "usage": { "used_seconds": 1803, "limit_seconds": 1800, "resets_at": "2026-11-23T00:00:00Z" },
+        "engines": { "a1b2c3d4e5f6": "cloud" }
+      }
+    },
+    {
+      "name": "state_from_a_newer_server",
+      "wire": {
+        "state": "paused",
+        "limits": { "sample_rate": 16000, "max_seconds": 120, "max_chunk_bytes": 65536 },
+        "usage": { "used_seconds": 0, "limit_seconds": 1800, "resets_at": "2026-11-23T00:00:00Z" },
+        "engines": { "a1b2c3d4e5f6": "remote" }
+      }
+    }
+  ]
+}

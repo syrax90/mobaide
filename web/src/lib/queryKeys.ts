@@ -29,6 +29,11 @@ export const queryKeys = {
   /** The account's order of the create-session mode picker's cards. */
   sessionModeOrder: () => ['session-mode-order'] as const,
   /**
+   * Cloud voice input for the account: whether it is offered and works, the
+   * limits, today's use, and the per-agent engine choices.
+   */
+  cloudVoice: () => ['cloud-voice'] as const,
+  /**
    * One in-flight device-code pairing request.
    *
    * Polled rather than pushed: pairing is a short foreground handshake with no

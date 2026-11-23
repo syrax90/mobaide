@@ -92,6 +92,9 @@ enum FixtureRegistry {
         "AutoScanFilterDto": runner(AutoScanFilterDto.self),
         "LinearLabelDto": runner(LinearLabelDto.self),
         "LinearStateDto": runner(LinearStateDto.self),
+        // CloudVoiceDto.swift
+        "CloudVoiceStatus": runner(CloudVoiceStatus.self),
+        "CloudVoiceChangedPayload": runner(CloudVoiceChangedPayload.self),
         // ChatDto.swift
         "ChatStoredSessionsResponse": runner(ChatStoredSessionsResponse.self),
         // ClaudeOptionsModel.swift

@@ -1,12 +1,17 @@
 # Voice input (dictation)
 
-Voice input lets a user dictate into a session.
+Voice input lets a user dictate into a session. The app or browser records the microphone, and one of two engines turns the audio into text. The user chooses the engine for each agent:
 
-The app or browser records the microphone and streams the audio to the user's own agent: through the relay, or directly when a phone uses direct-connection mode. The agent transcribes it on that computer with NVIDIA Parakeet TDT 0.6B v3 and returns text. The text lands in the composer (mobile) or a review field (web).
+- **Mobaide Cloud** (recommended, preselected in the chooser). The client uploads the recording to the central server, which has a hosted speech service transcribe it. Nothing is installed on the computer. See [Cloud voice input](#cloud-voice-input).
+- **On this computer.** The client streams the audio to the user's own agent: through the relay, or directly when a phone uses direct-connection mode. The agent transcribes it on that computer with NVIDIA Parakeet TDT 0.6B v3.
+
+The text lands in the composer (mobile) or a review field (web).
 
 **Nothing is ever sent automatically**: the user reviews the text and sends it themselves.
 
-It is opt-in per agent. Nothing is downloaded until the user enables voice from the app. Enabling shows the real download, disk and memory cost the agent reports, plus a warning on low-spec computers.
+It is opt-in per agent. Nothing is recorded or downloaded until the user chooses an engine. For on-computer voice, the app first shows the real download, disk and memory cost the agent reports, plus a warning on low-spec computers.
+
+Most of this document describes on-computer voice. The dictation rules (audio format, buffering, retries, interruptions, insertion) are the same for both engines.
 
 Removing the agent with **Also uninstall Mobaide from this computer** stops voice and deletes the model and runtime too (docs/deployment.md, *Uninstalling the agent*).
 
@@ -14,8 +19,64 @@ References:
 
 - Agent half: GH #736 (`mobaide_agent/mobaide/voice/`).
 - Clients: GH #737 (Android, iOS, web).
-- Wire contract: PROTOCOL.md, proto-v7 delta "2026-10-14, on-PC voice input". It covers `capabilities.voice`, `/api/voice/*`, the `voice.changed` event and the error codes.
+- Wire contract: PROTOCOL.md, proto-v7 delta "2026-10-14, on-PC voice input". It covers `capabilities.voice`, `/api/voice/*`, the `voice.changed` event and the error codes. Cloud voice input is the delta "2026-11-22, cloud voice input".
 - Public explainer: `mobaide.com/voice-input` (`central_server/templates/marketing_voice_input.html`, docs/website.md *The voice input page*). It restates the costs, limits and setup steps below, so update it with them.
+
+## Cloud voice input
+
+The central server offers it when its configuration names a speech service (docs/deployment.md, *Cloud voice input*). Without that, `GET /api/voice/cloud` answers `off` and every client behaves as before.
+
+### Which engine an agent uses
+
+Clients read `GET /api/voice/cloud` (state, limits, today's use, the choice per agent) and resolve each agent the same way (web `voiceRoute` in `voice/voiceEngine.ts`):
+
+| Case | Engine |
+|---|---|
+| Cloud is not offered (`off`, an unknown state, an older server) | On this computer, as before |
+| The user chose for this agent | That choice |
+| No choice, and the agent's own voice is already enabled | On this computer |
+| No choice otherwise | The first mic tap opens the chooser |
+
+The choice is stored on the central server (`PUT /api/voice/cloud/engines/{agent_id}`) and the `cloud_voice.changed` user event brings it to the user's other devices. Because Mobaide Cloud needs nothing from the agent, the mic also shows for an agent without `capabilities.voice`.
+
+### What the user sees
+
+- **Chooser** (first mic tap). Two radio cards. **Mobaide Cloud** is first, marked *Recommended* and preselected. **On this computer** shows the agent's real costs, or the reason it cannot be chosen. **Continue** saves the choice. With the computer chosen, it also starts the download. Nothing is recorded before the user confirms.
+- **Mic.** With Mobaide Cloud, the mic records when the state is `ready`. For `unavailable` and `limit_reached` it shows the warning glyph, and a tap opens a sheet that says why. The sheet has **Try again** and, when the agent has voice of its own, **Use this computer instead**.
+- **Settings.** The agent's Voice input settings start with **Speech recognition**: Mobaide Cloud or On this computer.
+  - Before a choice, nothing is selected and one line says "Choose one to turn on voice input for {agent}." The on-computer install panel is not shown there.
+  - With Mobaide Cloud they show today's use and the limits. The on-computer controls stay available while the model is installed there.
+  - A disabled **On this computer** says why under the option: the agent is still being checked, did not answer, or cannot run voice input.
+  - When the agent did not answer, the section says "Couldn’t reach {agent}. Is it online?" and asks again every 5 s while a voice surface is shown, so it recovers when the agent returns. On web it also asks again at once when the agent list shows the agent online.
+- **Failures.** `cloud_unavailable` keeps the recording and offers **Retry**. The server checks the speech service when a dictation opens, so an outage stops the recording after a few words. `cloud_limit_reached` and `cloud_disabled` say so and do not offer Retry. A recording the speech service does not answer in time still counts against the daily allowance; a refusal or a failed connection does not.
+- **Held until it is over.** A cloud dictation keeps its controller until it ends, also when the status turns `unavailable` meanwhile. The failure and its buffered audio then stay on screen for Retry. On web, a review that waits for more dictation keeps its text the same way.
+- **No cleanup.** The speech service already returns clean text, so cloud transcripts skip the transcript cleanup below, and its toggle is hidden while Mobaide Cloud is selected.
+
+### Server side
+
+`central_server/central_server/cloud_voice/`:
+
+| File | Role |
+|---|---|
+| `router.py`, `models.py`, `errors.py` | The routes, bodies and refusals of PROTOCOL.md |
+| `service.py` | Dictations in memory (one per user, 64 in all), the daily limits, the health check of the speech service, the engine choices |
+| `speech_client.py` | The HTTP client of the speech service (an OpenAI-compatible chat API with inline audio) and the transcription instruction |
+| `audio.py` | Chunk decoding, the silence check, WAV wrapping, and the cleanup of the returned text (control characters, runaway repetition) |
+
+- **Limits.** 2 minutes per recording. 30 minutes per account per UTC day, and 20 hours for all accounts (both configurable). The counts are in SQLite (`cloud_voice_usage`), so a deploy does not reset them. At most 4 requests go to the speech service at once.
+- **Health.** A failed request marks the speech service as down. While it is down, the server asks it again at most every 5 s, and only when a client asks for the status, opens a dictation or retries one.
+- **Privacy.** The central server holds the audio in memory until the speech service answers, and stores neither audio nor text. It sends the account's internal id with each request, so the operator of the speech service can find and block an account that abuses it. `central_server/legal/privacy.md` §3.9 says what the speech service keeps.
+
+### Client files
+
+| Piece | Android (`android/app/src/main/java/com/mobaide/app/`) | iOS (`ios/Mobaide/`) | Web (`web/src/`) |
+|---|---|---|---|
+| Status, engine choice, cloud dictation routes | `data/repository/CloudVoiceRepository.kt` | `Data/Repository/CloudVoiceRepository.swift` | `api/cloudVoiceRepository.ts`, `voice/useCloudVoice.ts` |
+| Engine resolution, mic mode | `data/voice/VoiceEngine.kt` | `Data/Voice/VoiceRoute.swift` | `voice/voiceEngine.ts` |
+| Chooser, cloud panel, settings selector | `ui/voice/CloudVoiceComponents.kt` | `UI/Voice/CloudVoiceViews.swift` | `voice/VoiceEngineChooser.tsx`, `voice/CloudVoicePanel.tsx`, `voice/VoiceEngineSetting.tsx` |
+| Shared copy | `data/voice/CloudVoiceCopy.kt` | `Data/Voice/CloudVoiceCopy.swift` | `voice/cloudVoiceCopy.ts` |
+
+The uploader, buffer, controller and recorder are shared with on-computer voice: only the API behind them and the source of the limits differ.
 
 ## Client module (same shape on all three)
 
@@ -69,7 +130,7 @@ Both offer enable, cancel or stop, retry, remove, reinstall, the mic toggle, the
   - **Mobile:** the transcript goes at the composer's cursor, with a space added where needed, and the composer is focused. On iOS 17 it is appended, because SwiftUI exposes the selection only from iOS 18.
   - **Web:**
     - An editable review field, then **Insert**, which uses the Templates paste path (a sanitized bracketed paste, never Enter). Claude Code may display long text as `[Pasted text]`.
-    - The review's mic button records again. The new transcript goes in at the field's cursor (replacing a selection), a space apart from the words around it. A cancel, an empty result or a failure returns to the review.
+    - The review's mic button records again. The new transcript goes in at the field's cursor (replacing a selection), a space apart from the words around it. A cancel, an empty result or a failure returns to the review, with the cursor and scroll position as they were.
     - Its **Insert dictated text directly** checkbox skips the review for that agent from then on (stored per agent in the browser, `skipReviewAgents` in `mobaide-voice-prefs`). The transcript is pasted the same way as soon as it arrives, and only a paste the session refuses still opens the review. The agent's Voice input settings turn the review back on.
     - Once the session has ended, the toolbar mic and **Record again** are disabled, because a transcript can only be pasted into a running session (an unknown status, such as while connecting, keeps them enabled).
 
@@ -123,7 +184,7 @@ An opt-in, per-agent setting, off by default: **Clean up dictated text with the 
   - The browser prompts the first time; when denied, the app shows per-browser instructions.
   - Only the SPA origin allows `microphone=(self)` (both Caddyfiles); central_server pages keep `microphone=()` (docs/deployment.md).
   - The AudioWorklet is a static same-origin file, because the CSP is `script-src 'self'` with no `blob:`.
-- **Privacy policy** (`central_server/legal/privacy.md` §3.4, §3.7, §4): audio is used only while dictating, sent over TLS to the user's own agent (relayed in memory, or directly in mobile direct-connection mode), never stored or logged. The opt-in transcript cleanup above is the one path where the text leaves the computer, through the session's own AI agent (Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie or Pi); §3.4 and §6 say so. The public `/voice-input` page says so too (*Where your voice goes* and the FAQ).
+- **Privacy policy** (`central_server/legal/privacy.md` §3.4, §3.7, §3.9, §4): for on-computer voice, audio is used only while dictating, sent over TLS to the user's own agent (relayed in memory, or directly in mobile direct-connection mode), never stored or logged. §3.9 covers Mobaide Cloud: the audio is not stored, and the speech service keeps the recognised text for up to 14 days to stop abuse. The opt-in transcript cleanup above is the one path where the text leaves the computer, through the session's own AI agent (Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie or Pi); §3.4 and §6 say so. The public `/voice-input` page says so too (*Where your voice goes* and the FAQ).
 
 ## Release checklist (manual steps)
 
@@ -133,7 +194,12 @@ An opt-in, per-agent setting, off by default: **Clean up dictated text with the 
 2. Re-answer **Play Data Safety** (Audio → Voice or sound recordings: collected, processed ephemerally, not shared, optional, app functionality) and publish the **App Store App Privacy** Audio Data entry.
    - Both are recorded in docs/app-conversion-measurement.md.
    - Submit them with the first client release that has the mic.
-3. Run one real-model test on a real Android phone, an iPhone and a desktop browser.
+3. For cloud voice input:
+   - Set `CLOUD_VOICE_URL`, `CLOUD_VOICE_API_KEY` and `CLOUD_VOICE_MODEL` in the central server's `.env` (docs/deployment.md, *Cloud voice input*). Until then every client keeps on-computer voice only.
+   - The deploy ships the privacy policy (§3.9) and the `/voice-input` page, which both describe Mobaide Cloud. Do not turn the feature on before they are live.
+   - Re-check the store answers of step 2: the recording is still processed ephemerally, but the speech service keeps the recognised text for up to 14 days.
+   - Local checks use `tests/e2e/manual_stack.py up --fake-cloud-voice`.
+4. Run one real-model test on a real Android phone, an iPhone and a desktop browser.
    - Local checks use `tests/e2e/manual_stack.py up --fake-voice`.
    - Its fake engine answers `fake transcript <ms> ms` and needs voiced audio (RMS above about -44 dBFS, or about 10 dB above the room's noise floor).
    - Silence and steady background noise end as "No speech was recognised".

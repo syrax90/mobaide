@@ -228,6 +228,8 @@ On Windows, `up --wsl` also runs a second agent, `manual-e2e-wsl-agent`, inside 
 | `up --fresh` | wipe state first: new secret, account, agent, empty DB |
 | `up --fake-pty [--smoke]` | echo-backend infra check (no shells/CLIs needed) |
 | `up --fake-voice` | voice input against a tiny generated model with deterministic `fake transcript <n> ms` results (`MOBAIDE_VOICE_FAKE=1`), so the enable → dictate flows need no 670 MB download |
+| `up --fake-cloud-voice` | cloud voice input against a built-in fake speech service with deterministic `fake cloud transcript <n> ms` results. Create the file `fake-cloud-voice.down` in the state folder to make it answer 503 (the "unavailable" flows); delete it to bring it back |
+| `up --cloud-voice` | cloud voice input against a real speech service. It reads `CLOUD_VOICE_URL`, `CLOUD_VOICE_API_KEY`, `CLOUD_VOICE_MODEL` and the optional `CLOUD_VOICE_PROMPT` from `voice/cloud-voice.env` in the release dir (`~/.config/mobaide-release/`, or `MOBAIDE_RELEASE_DIR`; file mode 600, `KEY=value` or `export KEY='value'` lines). A variable exported in your shell overrides the file. Without one of these two flags the stack has no cloud voice input, whatever your environment holds |
 | `up --install-app` | build + install the app for every client that was synced |
 | `android --install-app` | also run `gradlew :app:installDebug` |
 | `ios --install-app [--simulator NAME_OR_UDID]` | also run `xcodebuild` + `xcrun simctl install`, then launch the app signed in; boots and shows a simulator when needed (uninstalling first when the URL changed) |

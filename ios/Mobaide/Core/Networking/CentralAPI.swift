@@ -256,6 +256,55 @@ struct CentralAPI: Sendable {
         )
     }
 
+    // MARK: - Cloud voice input
+
+    func getCloudVoice(userToken: String) async throws -> CloudVoiceStatus {
+        try await execute(method: "GET", path: "/api/voice/cloud", bearer: userToken)
+    }
+
+    func putCloudVoiceEngine(userToken: String, agentId: String, engine: VoiceEngine) async throws -> CloudVoiceStatus {
+        try await execute(
+            method: "PUT",
+            path: "/api/voice/cloud/engines/\(AgentAPI.encodePathSegment(agentId))",
+            body: CloudVoiceEngineRequest(engine: engine.rawValue),
+            bearer: userToken
+        )
+    }
+
+    func createCloudVoiceDictation(userToken: String) async throws -> VoiceDictationResponse {
+        try await execute(method: "POST", path: "/api/voice/cloud/dictations", rawBody: Data(), bearer: userToken)
+    }
+
+    func appendCloudVoiceAudio(userToken: String, dictationId: String, seq: Int, pcm16B64: String) async throws {
+        try await executeNoContent(
+            method: "POST",
+            path: "/api/voice/cloud/dictations/\(AgentAPI.encodePathSegment(dictationId))/audio",
+            body: VoiceDictationAudioRequest(seq: seq, pcm16_b64: pcm16B64),
+            bearer: userToken
+        )
+    }
+
+    func finishCloudVoiceDictation(
+        userToken: String,
+        dictationId: String,
+        lastSeq: Int
+    ) async throws -> VoiceDictationResultResponse {
+        try await execute(
+            method: "POST",
+            path: "/api/voice/cloud/dictations/\(AgentAPI.encodePathSegment(dictationId))/finish",
+            body: VoiceDictationFinishRequest(last_seq: lastSeq),
+            bearer: userToken
+        )
+    }
+
+    func deleteCloudVoiceDictation(userToken: String, dictationId: String) async throws {
+        try await executeNoContent(
+            method: "DELETE",
+            path: "/api/voice/cloud/dictations/\(AgentAPI.encodePathSegment(dictationId))",
+            bearer: userToken
+        )
+    }
+
     // MARK: - Plumbing
 
     private func baseURL() -> String {

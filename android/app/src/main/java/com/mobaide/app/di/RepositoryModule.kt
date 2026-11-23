@@ -19,6 +19,7 @@ import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.CloudVoiceRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.DeviceRepository
 import com.mobaide.app.data.repository.GitRepository
@@ -219,6 +220,15 @@ object RepositoryModule {
 
     @Provides
     @Singleton
+    fun provideCloudVoiceRepository(
+        centralApi: CentralApi,
+        userIdentityStore: UserIdentityStore,
+    ): CloudVoiceRepository {
+        return CloudVoiceRepository(centralApi, userIdentityStore)
+    }
+
+    @Provides
+    @Singleton
     fun provideUserEventBus(
         webSocketManager: WebSocketManager,
         sessionManager: SessionManager,
@@ -228,6 +238,7 @@ object RepositoryModule {
         shortcutsRepository: ShortcutsRepository,
         customAgentTypesRepository: CustomAgentTypesRepository,
         agentPairedConversion: AgentPairedConversion,
+        cloudVoiceRepository: CloudVoiceRepository,
     ): UserEventBus {
         return UserEventBus(
             webSocketManager,
@@ -238,6 +249,7 @@ object RepositoryModule {
             shortcutsRepository,
             customAgentTypesRepository,
             agentPairedConversion,
+            cloudVoiceRepository,
         )
     }
 

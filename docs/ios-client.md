@@ -883,7 +883,7 @@ none.
 | Email address | Linked | App functionality. |
 | User ID | Linked | App functionality. |
 | Device ID | Linked | App functionality plus analytics and developer's advertising. Google Analytics for Firebase keys its events by a Firebase app-instance id; IDFV collection is switched off. |
-| Audio data | Linked | App functionality. The dictated speech of voice input, relayed to the user's own agent and never stored; see docs/voice-input.md. |
+| Audio data | Linked | App functionality. The dictated speech of voice input, relayed to the user's own agent and never stored, or, with Mobaide Cloud, sent through the central server to a speech service that keeps the recognised text up to 14 days and never the audio; see docs/voice-input.md. |
 | Product interaction | Not linked | Analytics and developer's advertising. The SDK's automatic app-open / session events and the single `agent_paired` conversion. |
 | Coarse location | Not linked | Analytics. The location is derived by Google from the request IP. |
 

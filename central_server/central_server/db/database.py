@@ -229,6 +229,27 @@ CREATE TABLE IF NOT EXISTS user_session_mode_orders (
     updated_at TEXT NOT NULL
 );
 
+-- Where each agent's dictations are transcribed, as its owner chose:
+-- ``cloud`` (the hosted speech service) or ``local`` (the agent's own
+-- model). An agent without a row has no choice yet.
+CREATE TABLE IF NOT EXISTS voice_engine_choices (
+    user_id    TEXT NOT NULL REFERENCES users(id),
+    agent_id   TEXT NOT NULL,
+    engine     TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, agent_id)
+);
+
+-- Seconds of audio the hosted speech service transcribed for a user on one
+-- UTC day: what the daily limits count. Holds no audio and no text.
+CREATE TABLE IF NOT EXISTS cloud_voice_usage (
+    user_id  TEXT NOT NULL REFERENCES users(id),
+    day      TEXT NOT NULL,
+    seconds  INTEGER NOT NULL DEFAULT 0,
+    requests INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day)
+);
+
 -- Reversed-direction pairing: the browser mints a short typeable code,
 -- the operator retypes it on the agent host. ``code_hash`` is a peppered
 -- HMAC (the code is only ~34.6 bits). ``pairing_nonce_hash`` links to the
@@ -298,6 +319,8 @@ CREATE INDEX IF NOT EXISTS idx_pairing_device_codes_live
     WHERE redeemed_at IS NULL AND canceled_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_custom_agent_types_owner
     ON custom_agent_types(owner_user_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_cloud_voice_usage_day
+    ON cloud_voice_usage(day);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_agent_types_owner_name
     ON custom_agent_types(owner_user_id, name COLLATE NOCASE)
     WHERE deleted_at IS NULL;
@@ -834,6 +857,12 @@ class Database:
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 23")
 
+        if version < 24:
+            # Additive: voice_engine_choices and cloud_voice_usage tables
+            # (cloud voice input). Pure _SCHEMA re-run.
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 24")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -1042,6 +1071,9 @@ class Database:
             "WHERE agent_id = ? OR claimed_agent_id = ?",
             (agent_id, agent_id),
         )
+        await self.conn.execute(
+            "DELETE FROM voice_engine_choices WHERE agent_id = ?", (agent_id,)
+        )
         cursor = await self.conn.execute(
             "DELETE FROM agents WHERE agent_id = ?", (agent_id,)
         )
@@ -1097,7 +1129,8 @@ class Database:
           4. Drop ``email_verification_tokens``, ``password_reset_tokens``,
              ``account_deletion_cancel_tokens``, ``user_refresh_tokens``,
              ``mobile_devices``, ``prompt_templates``, ``user_shortcuts``,
-             ``custom_agent_types``, ``user_session_mode_orders`` and
+             ``custom_agent_types``, ``user_session_mode_orders``,
+             ``voice_engine_choices``, ``cloud_voice_usage`` and
              ``pairing_device_codes`` owned by the user.
           5. Drop the ``users`` row.
 
@@ -1160,6 +1193,12 @@ class Database:
         await self.conn.execute(
             "DELETE FROM user_session_mode_orders WHERE user_id = ?",
             (user_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM voice_engine_choices WHERE user_id = ?", (user_id,)
+        )
+        await self.conn.execute(
+            "DELETE FROM cloud_voice_usage WHERE user_id = ?", (user_id,)
         )
         await self.conn.execute(
             "DELETE FROM pairing_device_codes WHERE user_id = ?", (user_id,)
@@ -1715,6 +1754,77 @@ class Database:
         row = await cursor.fetchone()
         await self.conn.commit()
         return dict(row) if row else None
+
+    async def get_voice_engines(self, user_id: str) -> dict[str, str]:
+        """The user's voice engine choice per agent id (``cloud`` or
+        ``local``); agents without a choice are absent."""
+        cursor = await self.conn.execute(
+            "SELECT agent_id, engine FROM voice_engine_choices WHERE user_id = ?",
+            (user_id,),
+        )
+        return {row["agent_id"]: row["engine"] async for row in cursor}
+
+    async def set_voice_engine(self, user_id: str, agent_id: str, engine: str) -> bool:
+        """Store the user's voice engine for one agent. False when it was
+        already stored, so the caller does not re-broadcast."""
+        cursor = await self.conn.execute(
+            "INSERT INTO voice_engine_choices (user_id, agent_id, engine, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, agent_id) DO UPDATE SET "
+            "    engine = excluded.engine, updated_at = excluded.updated_at "
+            "WHERE voice_engine_choices.engine != excluded.engine",
+            (user_id, agent_id, engine, _now_iso()),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def get_cloud_voice_seconds(self, user_id: str, day: str) -> int:
+        """Seconds of audio transcribed for the user on the UTC ``day``."""
+        cursor = await self.conn.execute(
+            "SELECT seconds FROM cloud_voice_usage WHERE user_id = ? AND day = ?",
+            (user_id, day),
+        )
+        row = await cursor.fetchone()
+        return row["seconds"] if row else 0
+
+    async def get_cloud_voice_seconds_total(self, day: str) -> int:
+        """Seconds of audio transcribed for all users on the UTC ``day``."""
+        cursor = await self.conn.execute(
+            "SELECT COALESCE(SUM(seconds), 0) AS total "
+            "FROM cloud_voice_usage WHERE day = ?",
+            (day,),
+        )
+        row = await cursor.fetchone()
+        return row["total"] if row else 0
+
+    async def add_cloud_voice_usage(self, user_id: str, day: str, seconds: int) -> None:
+        await self.conn.execute(
+            "INSERT INTO cloud_voice_usage (user_id, day, seconds, requests) "
+            "VALUES (?, ?, ?, 1) "
+            "ON CONFLICT(user_id, day) DO UPDATE SET "
+            "    seconds = cloud_voice_usage.seconds + excluded.seconds, "
+            "    requests = cloud_voice_usage.requests + 1",
+            (user_id, day, seconds),
+        )
+        await self.conn.commit()
+
+    async def refund_cloud_voice_usage(self, user_id: str, day: str, seconds: int) -> None:
+        """Take back one request that ``add_cloud_voice_usage`` charged and
+        the speech service then refused."""
+        await self.conn.execute(
+            "UPDATE cloud_voice_usage SET "
+            "    seconds = MAX(seconds - ?, 0), requests = MAX(requests - 1, 0) "
+            "WHERE user_id = ? AND day = ?",
+            (seconds, user_id, day),
+        )
+        await self.conn.commit()
+
+    async def purge_cloud_voice_usage(self, before_day: str) -> None:
+        """Drop the usage rows of days before ``before_day``."""
+        await self.conn.execute(
+            "DELETE FROM cloud_voice_usage WHERE day < ?", (before_day,)
+        )
+        await self.conn.commit()
 
     _CUSTOM_TYPE_COLUMNS = (
         "id, owner_user_id, name, command, created_at, updated_at, deleted_at"

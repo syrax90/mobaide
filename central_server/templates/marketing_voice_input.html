@@ -16,7 +16,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Voice input for Claude Code, Codex, Copilot, Cursor and more | Mobaide</title>
-<meta name="description" content="Dictate prompts to Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI, Cursor CLI, Junie CLI and Pi from your phone or browser. Your own computer turns the audio into text with an open speech model — 25 languages, nothing stored, nothing sent until you send it.">
+<meta name="description" content="Dictate prompts to Claude Code, Codex CLI, Antigravity CLI, OpenCode, GitHub Copilot CLI, Cursor CLI, Junie CLI and Pi from your phone or browser. Mobaide Cloud turns the audio into text at once, or your own computer does it with an open speech model. Nothing is sent to your agent until you send it.">
 <link rel="canonical" href="{{ site_origin }}/voice-input">
 <meta name="theme-color" content="#121212">
 
@@ -24,7 +24,7 @@
 <meta property="og:site_name" content="Mobaide">
 <meta property="og:url" content="{{ site_origin }}/voice-input">
 <meta property="og:title" content="Mobaide voice input — dictate to your coding agents">
-<meta property="og:description" content="Speak your prompt on your phone or in the browser. Your own computer transcribes it in 25 languages, and the text waits in the command field until you send it.">
+<meta property="og:description" content="Speak your prompt on your phone or in the browser. Mobaide Cloud or your own computer transcribes it, and the text waits in the command field until you send it.">
 <meta property="og:image" content="{{ site_origin }}/static/site/img/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -33,7 +33,7 @@
 
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Mobaide voice input — dictate to your coding agents">
-<meta name="twitter:description" content="Speak your prompt on your phone or in the browser. Your own computer transcribes it in 25 languages, and the text waits in the command field until you send it.">
+<meta name="twitter:description" content="Speak your prompt on your phone or in the browser. Mobaide Cloud or your own computer transcribes it, and the text waits in the command field until you send it.">
 <meta name="twitter:image" content="{{ site_origin }}/static/site/img/og.png">
 
 <link rel="icon" href="/static/site/img/favicon.ico" sizes="16x16 32x32 48x48">
@@ -72,11 +72,11 @@
       <p class="hero-kicker"><span class="chip chip-brand chip-sm">New</span> Voice input</p>
       <h1>Dictate to your coding agents.</h1>
       <p class="lede">
-        <strong>Your own computer does the listening.</strong> Say your prompt
-        instead of thumb-typing it: Mobaide records while you talk, your
-        Windows, macOS or Linux machine turns the audio into text, and the text
-        waits in the command field for you to check. Nothing is sent until you
-        send it.
+        <strong>Say it instead of thumb-typing it.</strong> Mobaide records
+        while you talk and turns the audio into text: with Mobaide Cloud at
+        once, or privately on your own Windows, macOS or Linux machine. The
+        text waits in the command field for you to check. Nothing is sent
+        until you send it.
       </p>
       <div class="cta">
         <a class="btn" href="#setup">Set it up</a>
@@ -127,19 +127,54 @@
 
   <section class="strip" aria-label="At a glance">
     <ul class="strip-list">
-      <li><span class="px-bullet"></span><strong>25 languages</strong>, detected automatically</li>
-      <li><span class="px-bullet"></span>Runs on your CPU — no GPU</li>
-      <li><span class="px-bullet"></span>Audio and text are never stored</li>
+      <li><span class="px-bullet"></span><strong>Mobaide Cloud</strong>: nothing to install</li>
+      <li><span class="px-bullet"></span>Or <strong>your own computer</strong>: private, 25 languages</li>
+      <li><span class="px-bullet"></span>Your audio is never stored</li>
       <li><span class="px-bullet"></span>Free, and off until you turn it on</li>
     </ul>
+  </section>
+
+  <section id="choose" class="section" data-reveal>
+    <h2 class="h-pixel">Two ways to transcribe</h2>
+    <p class="section-lede">
+      The first time you tap the mic for a computer, Mobaide asks where your
+      speech becomes text. You can switch at any time in that computer's voice
+      input settings.
+    </p>
+    <div class="grid">
+
+      <article class="card notch">
+        <h3>Mobaide Cloud <span class="chip chip-brand chip-sm">Recommended</span></h3>
+        <p>
+          Works at once, with nothing to install and on any computer that runs
+          your agent. Your recording goes over an encrypted connection to
+          Mobaide's own speech service, which returns the text. The audio is
+          not kept; the text is kept for up to 14 days to prevent abuse. There
+          is a daily allowance, which the app shows.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>On your own computer</h3>
+        <p>
+          Private: the computer that runs your agent turns the speech into
+          text itself, and neither the audio nor the text is stored anywhere.
+          It needs a one-time download of about 0.7 GB and has no daily limit.
+          The rest of this page describes it in detail.
+        </p>
+      </article>
+
+    </div>
   </section>
 
   <section id="how" class="section" data-reveal>
     <h2 class="h-pixel">How it works</h2>
     <p class="section-lede">
-      Your voice takes the same path as your keystrokes: from your phone or
-      browser, through the Mobaide relay, to the agent on your own computer.
-      The difference is that your computer writes it down for you first.
+      With on-computer voice, your voice takes the same path as your
+      keystrokes: from your phone or browser, through the Mobaide relay, to
+      the agent on your own computer. The difference is that your computer
+      writes it down for you first. With Mobaide Cloud, steps 2 and 3 are one:
+      the recording goes to Mobaide's speech service, which returns the text.
     </p>
     <ol class="flow">
       <li class="flow-node">
@@ -173,7 +208,7 @@
         <h3>Your computer transcribes</h3>
         <p>
           The agent runs NVIDIA's open Parakeet speech model on its own CPU and
-          turns the audio into text. No cloud speech service is involved. If
+          turns the audio into text. Nothing outside your computer hears it. If
           you turn on cleanup, the session's own AI agent then tidies the text.
         </p>
       </li>
@@ -281,9 +316,9 @@
       <article class="card notch">
         <h3>Off until you want it</h3>
         <p>
-          Voice input is opt-in per computer. Nothing downloads until you
-          enable it, the app shows the cost first, and you can remove it again
-          at any time.
+          Voice input is opt-in per computer. Nothing is recorded or downloaded
+          until you choose, the app shows the cost first, and you can remove
+          the download again at any time.
         </p>
       </article>
 
@@ -293,8 +328,8 @@
   <section id="setup" class="section" data-reveal>
     <h2 class="h-pixel">Set it up</h2>
     <p class="section-lede">
-      Turn it on once for each computer. Your agent already supports voice input
-      if it has updated itself to version 0.3.17 or later — agents update on
+      Choose once for each computer. Mobaide Cloud works with any agent.
+      On-computer voice needs agent version 0.3.17 or later — agents update on
       their own.
     </p>
     <div class="grid">
@@ -303,7 +338,7 @@
         <h3>On Android</h3>
         <ol class="card-steps">
           <li>Open a session and tap the mic in the command field — or go to <strong>Settings → Voice input</strong>.</li>
-          <li>Check the download and memory cost, then tap <strong>Enable voice input</strong>.</li>
+          <li>Keep <strong>Mobaide Cloud</strong>, or choose <strong>On this computer</strong> and check its download and memory cost. Tap <strong>Continue</strong>.</li>
           <li>Allow the microphone the first time you dictate.</li>
         </ol>
       </article>
@@ -312,7 +347,7 @@
         <h3>On iPhone and iPad</h3>
         <ol class="card-steps">
           <li>Open a session and tap the mic in the message field — or go to <strong>Settings → Voice input</strong>.</li>
-          <li>Check the download and memory cost, then tap <strong>Enable voice input</strong>.</li>
+          <li>Keep <strong>Mobaide Cloud</strong>, or choose <strong>On this computer</strong> and check its download and memory cost. Tap <strong>Continue</strong>.</li>
           <li>Allow the microphone the first time you dictate.</li>
         </ol>
       </article>
@@ -321,14 +356,15 @@
         <h3>In the browser</h3>
         <ol class="card-steps">
           <li>At <a href="{{ app_origin }}/">app.mobaide.com</a>, open <strong>Agents</strong> and choose <strong>Voice input</strong> on your computer's card (it must be online).</li>
-          <li>Check the cost, then choose <strong>Enable voice input</strong>.</li>
+          <li>Under <strong>Speech recognition</strong>, keep <strong>Mobaide Cloud</strong>, or choose <strong>On this computer</strong> and then <strong>Enable voice input</strong>.</li>
           <li>In a session, press the mic in the toolbar and allow the microphone when the browser asks.</li>
         </ol>
       </article>
 
     </div>
     <p class="fineprint fineprint-after">
-      The download runs on your computer in the background, about 0.7 GB once.
+      For on-computer voice, the download runs on your computer in the
+      background, about 0.7 GB once.
       You can close the app meanwhile — the mic switches on by itself when voice
       input is ready.
     </p>
@@ -336,6 +372,9 @@
 
   <section id="requirements" class="section" data-reveal>
     <h2 class="h-pixel">What it needs</h2>
+    <p class="section-lede">
+      Mobaide Cloud needs nothing on your computer. On-computer voice needs:
+    </p>
     <dl class="spec">
       <div class="spec-row">
         <dt>Computer</dt>
@@ -394,8 +433,9 @@
       <li class="chip">Ukrainian</li>
     </ul>
     <p class="fineprint">
-      The model detects the language as you speak. Japanese, Chinese, Korean,
-      Arabic, Hindi and Turkish are not supported yet.
+      This list is for on-computer voice. The model detects the language as
+      you speak. Japanese, Chinese, Korean, Arabic, Hindi and Turkish are not
+      supported yet.
     </p>
   </section>
 
@@ -403,15 +443,17 @@
     <h2 class="h-pixel">Where your voice goes</h2>
     <ul class="checklist">
       <li><span class="px-bullet"></span>The microphone records only while you dictate, and only with Mobaide on screen.</li>
-      <li><span class="px-bullet"></span>Going through the relay, the audio is TLS-encrypted on every hop and goes only to your own agent.</li>
-      <li><span class="px-bullet"></span>The relay routes it in memory and keeps neither the audio nor the text.</li>
+      <li><span class="px-bullet"></span><strong>On your own computer:</strong> going through the relay, the audio is TLS-encrypted on every hop and goes only to your own agent. The relay routes it in memory and keeps neither the audio nor the text.</li>
       <li><span class="px-bullet"></span>Your agent holds the audio in memory until the text is ready, then drops it. It never logs or saves the audio or the text.</li>
-      <li><span class="px-bullet"></span>No third-party speech service is involved. The only extra downloads are the model and its runtime, once, from the Mobaide download mirror (Hugging Face as a fallback) and PyPI.</li>
-      <li><span class="px-bullet"></span>Transcript cleanup is optional and off until you turn it on. When it is on, your agent hands each transcript to the session's own AI agent on your computer, which cleans it up with its cheapest model under your own account — Claude Code uses Claude Haiku, Codex uses GPT Luna, Antigravity uses Gemini Flash and Junie uses Junie Lite; OpenCode, GitHub Copilot, Cursor and Pi use their default model. The text then goes to that agent's provider, like the prompts you send, and counts toward your usage. Mobaide still stores none of it.</li>
+      <li><span class="px-bullet"></span>The only extra downloads are the model and its runtime, once, from the Mobaide download mirror (Hugging Face as a fallback) and PyPI.</li>
+      <li><span class="px-bullet"></span><strong>Mobaide Cloud:</strong> the recording goes over TLS through the Mobaide server to Mobaide's own speech service. Both hold the audio only until the text is ready and never store it.</li>
+      <li><span class="px-bullet"></span>The speech service keeps the recognised text for up to 14 days with your account's internal ID, only to find and stop abuse, and then deletes it. It is not used for advertising or to train models.</li>
+      <li><span class="px-bullet"></span>No third-party speech service is involved, whichever you choose.</li>
+      <li><span class="px-bullet"></span>Transcript cleanup is for on-computer voice. It is optional and off until you turn it on. When it is on, your agent hands each transcript to the session's own AI agent on your computer, which cleans it up with its cheapest model under your own account — Claude Code uses Claude Haiku, Codex uses GPT Luna, Antigravity uses Gemini Flash and Junie uses Junie Lite; OpenCode, GitHub Copilot, Cursor and Pi use their default model. The text then goes to that agent's provider, like the prompts you send, and counts toward your usage. Mobaide still stores none of it.</li>
     </ul>
     <p class="fineprint">
       The <a href="/privacy.html">privacy policy</a> describes voice input in
-      full. The model is NVIDIA Parakeet TDT 0.6B v3, released under CC BY 4.0;
+      full. The on-computer model is NVIDIA Parakeet TDT 0.6B v3, released under CC BY 4.0;
       the apps show its license in the voice input settings.
     </p>
   </section>
@@ -424,7 +466,8 @@
         <summary>Is voice input free?</summary>
         <p>
           Yes. It is part of Mobaide, with no subscription and no per-minute
-          fee — the transcription runs on hardware you already own.
+          fee. Mobaide Cloud has a daily allowance, which the app shows.
+          On-computer voice has no limit: it runs on hardware you already own.
         </p>
       </details>
 
@@ -441,7 +484,8 @@
       <details>
         <summary>Can it tidy up what I said?</summary>
         <p>
-          Yes, if you want it to. Turn on <strong>Clean up dictated text</strong>
+          Mobaide Cloud already returns tidy text. For on-computer voice, yes,
+          if you want it to. Turn on <strong>Clean up dictated text</strong>
           in the voice input settings, and the session's own AI agent removes
           filler words and false starts and fixes punctuation and technical
           terms before the text appears. It uses your own AI agent with its
@@ -476,10 +520,11 @@
       <details>
         <summary>Why don't I see the mic?</summary>
         <p>
-          The agent must be online and at version 0.3.17 or later — it updates
-          itself. A computer the voice model cannot run on (for example a 32-bit
-          Python) shows no mic. If you chose <strong>Hide the mic for this
+          The agent must be online. If you chose <strong>Hide the mic for this
           agent</strong>, turn it back on in the agent's voice input settings.
+          Where Mobaide Cloud is not offered to your account, the mic also
+          needs an agent at version 0.3.17 or later (it updates itself) on a
+          computer the voice model can run on.
         </p>
       </details>
 
@@ -487,9 +532,9 @@
         <summary>Can I still use my keyboard's dictation?</summary>
         <p>
           Yes. The command field is an ordinary text field, so your phone's
-          keyboard dictation keeps working. Mobaide's voice input is the option
-          that keeps your audio between your device and your own computer, and
-          it works the same way in a desktop browser.
+          keyboard dictation keeps working. Mobaide's on-computer voice is the
+          option that keeps your audio between your device and your own
+          computer, and voice input works the same way in a desktop browser.
         </p>
       </details>
 
@@ -499,7 +544,9 @@
           Open <strong>Settings → Voice input</strong> in the app, or the
           agent's <strong>Voice input</strong> settings in the browser, and
           choose <strong>Remove</strong>. That deletes the model and frees the
-          disk space. Removing the agent from the app with
+          disk space. To stop using Mobaide Cloud, choose <strong>On this
+          computer</strong> under <strong>Speech recognition</strong> there, or
+          turn the mic off. Removing the agent from the app with
           <strong>Also uninstall Mobaide from this computer</strong> deletes it
           too.
         </p>
