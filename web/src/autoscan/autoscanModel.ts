@@ -67,12 +67,14 @@ export type DetailConnection = 'connecting' | 'replaying' | 'connected' | 'disco
  * Socket state is not on the wire — the agent sends only `snapshot`,
  * `caught_up` and `event` — so the channel's open/close is folded in here, and
  * so is `stopped`: a Stop this screen made succeed, in case its `scan_stopped`
- * event never arrives.
+ * event never arrives. `rescheduled` is a Run now's answer, which moves the
+ * countdown before the cycle's own events do, as on Android and iOS.
  */
 export type DetailFrame =
   | { kind: 'connected' }
   | { kind: 'disconnected' }
   | { kind: 'stopped' }
+  | { kind: 'rescheduled'; nextScanAt: string | undefined }
   | AutoScanFrame;
 
 export interface AutoScanDetailState {
@@ -249,6 +251,14 @@ function reducePhase(draft: Draft, payload: Extract<ScanPayload, { type: 'phase'
       if (idle) appendLog(draft, 'no matching issues — skipping remaining stages');
       break;
     }
+    case 'scan_failed':
+      draft.nextScanAt = payload.next_scan_at;
+      draft.activePhase = undefined;
+      for (const key of PHASE_ORDER) {
+        if (draft.phases[key] === 'active') draft.phases[key] = 'failed';
+      }
+      appendLog(draft, `--- Scan #${String(cycle)} failed ---`);
+      break;
     case 'scan_stopped':
       markStopped(draft);
       appendLog(draft, '--- Scan stopped ---');
@@ -329,6 +339,11 @@ function reduceFrame(draft: Draft, state: AutoScanDetailState, frame: DetailFram
     case 'stopped':
       markStopped(draft);
       break;
+    case 'rescheduled':
+      if (draft.stopped) return;
+      draft.nextScanAt = frame.nextScanAt;
+      draft.changed = true;
+      break;
     case 'snapshot': {
       // `scans` is `unknown[]` on the frame — the wire layer deliberately stops
       // short of modelling it — so each row is validated here rather than cast.
@@ -346,7 +361,10 @@ function reduceFrame(draft: Draft, state: AutoScanDetailState, frame: DetailFram
       // events, so a missing row must not reset it.
       draft.instance = match;
       draft.nextScanAt = match?.next_scan_at;
-      if (match !== undefined) {
+      if (match === undefined) {
+        // Not running: stopped elsewhere, or before this page was (re)loaded.
+        markStopped(draft);
+      } else {
         draft.cycleNumber = match.cycle_number;
         // Listed again: started again elsewhere, as iOS reads it.
         draft.stopped = false;

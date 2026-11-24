@@ -117,6 +117,8 @@ final class SessionListModel {
     func stopScan(_ workspaceName: String) async {
         do {
             try await autoScanRepository.stopScan(workspaceName: workspaceName)
+        } catch let error as APIError where error.code == 404 {
+            self.error = AutoScanRepository.notRunningMessage(verb: "stop")
         } catch {
             self.error = "Failed to stop auto scan: \(String(describing: error))"
         }

@@ -505,12 +505,15 @@ class AutoScanInstance:
                         "log",
                         {"line": f"Scan cycle failed: {exc}", "level": "error", "ansi": False},
                     )
+                    # The detail stream carries only events: without this one it
+                    # would keep counting down to the cycle that just failed.
+                    self._schedule_next_scan()
+                    self._emit_phase("scan_failed")
                 else:
                     self._status = ScanStatus.SCANNING
+                self._publish_status()
 
                 interval = self._interval_seconds
-                self._next_scan_at = datetime.now(timezone.utc) + timedelta(seconds=interval)
-                self._publish_status()
 
                 try:
                     await asyncio.wait_for(self._run_now_event.wait(), timeout=interval)
@@ -595,10 +598,13 @@ class AutoScanInstance:
                 logger.exception("autoscan.cleanup.failed")
 
         # Before the event: clients take the countdown from its next_scan_at.
+        self._schedule_next_scan()
+        self._emit_phase("scan_completed", issues_processed=processed_count)
+
+    def _schedule_next_scan(self) -> None:
         self._next_scan_at = datetime.now(timezone.utc) + timedelta(
             seconds=self._interval_seconds,
         )
-        self._emit_phase("scan_completed", issues_processed=processed_count)
 
     @property
     def _cli_name(self) -> str:

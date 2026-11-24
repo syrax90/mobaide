@@ -71,10 +71,9 @@ export async function stopAutoScan(agentId: string, workspaceName: string): Prom
  * Ask a scan to run its next cycle immediately.
  *
  * Unlike start and stop this shape *is* portable — the relay forwards the
- * handler's own `RunNowResponse` verbatim. Callers currently reconcile through
- * the list cache rather than reading `next_scan_at` off it; iOS instead writes
- * the value straight into its detail model, which is the parity gap to close if
- * the countdown's lag after Run now ever matters.
+ * handler's own `RunNowResponse` verbatim. The detail screen writes its
+ * `next_scan_at` straight into the countdown, as Android and iOS do; the list
+ * reconciles through its cache.
  */
 export async function runAutoScanNow(
   agentId: string,

@@ -56,6 +56,14 @@ final class AutoScanDetailModelTests: XCTestCase {
         XCTAssertEqual(model.activePhase, "scan")
     }
 
+    func testASnapshotWithoutTheScanShowsItStopped() async {
+        let model = makeModel()
+        // The PC no longer runs the scan: no event will come to hide the controls.
+        await model.handle(.snapshot(scans: [], events: [:]))
+        XCTAssertTrue(model.stopped)
+        XCTAssertNil(model.nextScanAt)
+    }
+
     func testEventForDifferentWorkspaceIsIgnored() async {
         let model = makeModel()
         await model.handle(phaseFrame(seq: 1, phase: "scan_started", workspace: "other"))
@@ -74,6 +82,17 @@ final class AutoScanDetailModelTests: XCTestCase {
         XCTAssertEqual(model.phases["state"]?.status, "skipped")
         XCTAssertEqual(model.phases["label"]?.status, "skipped")
         XCTAssertEqual(model.nextScanAt, "T2")
+    }
+
+    func testScanFailedTakesTheNextScanAtAndFailsTheActivePhase() async {
+        let model = makeModel()
+        await model.handle(phaseFrame(seq: 1, phase: "scan_started", cycle: 1))
+        await model.handle(phaseFrame(seq: 2, phase: "scan_failed", cycle: 1, next: "T3"))
+        XCTAssertEqual(model.nextScanAt, "T3")
+        XCTAssertNil(model.activePhase)
+        XCTAssertEqual(model.phases["scan"]?.status, "failed")
+        XCTAssertEqual(model.phases["state"]?.status, "pending")
+        XCTAssertFalse(model.stopped)
     }
 
     func testScanCompletedNonIdleKeepsPendingPhases() async {
@@ -205,6 +224,14 @@ final class AutoScanDetailModelTests: XCTestCase {
         await model.handle(.snapshot(scans: [instance(cycle: 3)], events: [:]))
         XCTAssertFalse(model.stopped)
         XCTAssertEqual(model.statusText, "scanning")
+    }
+
+    func testAStopThePCRefusesWith404ShowsStopped() async {
+        let model = await runningModelStopped(withAnswer: 404)
+
+        // The PC no longer runs the scan, so Run now and Stop must go.
+        XCTAssertTrue(model.stopped)
+        XCTAssertNil(model.nextScanAt)
     }
 
     func testAFailedStopKeepsTheScanControls() async {

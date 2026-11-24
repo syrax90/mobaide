@@ -21,7 +21,7 @@ data class AgentEventEnvelope(
 /** Represent the structured payload for an auto-scan progress event. */
 sealed class ScanProgressPayload {
     data class Phase(
-        val phase: String,           // scan_started | scan_completed | scan_stopped
+        val phase: String,           // scan_started | scan_completed | scan_failed | scan_stopped
         val cycleNumber: Int,
         val nextScanAt: String?,
         val issuesProcessed: Int = 0, // # of issues processed in just-completed cycle

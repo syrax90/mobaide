@@ -72,7 +72,7 @@ export const autoScanListResponseSchema = z.looseObject({
 });
 
 const scanPhasePayloadSchema = z.looseObject({
-  /** `scan_started` | `scan_completed` | `scan_stopped`. */
+  /** `scan_started` | `scan_completed` | `scan_failed` | `scan_stopped`. */
   phase: z.string(),
   cycle_number: z.number().default(0),
   next_scan_at: optionalWireString(),

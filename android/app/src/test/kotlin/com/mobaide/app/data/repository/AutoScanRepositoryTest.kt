@@ -281,6 +281,34 @@ class AutoScanRepositoryTest {
         assertEquals(2, repo.observeList().value.scans.size)
     }
 
+    @Test
+    fun stopScan_404_dropsTheRow_andSaysTheScanIsNotRunning() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.getAutoScanList() } returns AutoScanListResponse(
+            scans = listOf(instance("p1"), instance("p2")),
+            capacity = 2,
+            max_scans = 5,
+            available_workspaces = listOf("p1", "p2"),
+        )
+        repo.refresh()
+        coEvery { restApi.stopAutoScan("p1") } throws ApiException(404, """{"detail":"Not running"}""")
+
+        repo.events.test {
+            try {
+                repo.stopScan("p1")
+                fail("expected ApiException")
+            } catch (e: ApiException) {
+                assertEquals(404, e.code)
+            }
+            val evt = awaitItem() as AutoScanUiEvent.Error
+            assertTrue(evt.message.contains("no longer running"))
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        // No rollback: the PC does not run p1, so its row must not come back.
+        assertEquals(listOf("p2"), repo.observeList().value.scans.map { it.workspace_name })
+    }
+
     // ---- runNow: optimistic reset + reconcile --------------------------------
 
     @Test

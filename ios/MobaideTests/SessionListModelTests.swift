@@ -238,6 +238,26 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertEqual(model.error, "Failed to stop session: HTTP 503: agent offline")
     }
 
+    func testStopScanA404SaysTheScanIsNoLongerRunning() async {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 404, body: #"{"detail":"No auto scan running for p"}"#)
+        let model = makeRESTModel()
+
+        await model.stopScan("p")
+
+        XCTAssertEqual(model.error, AutoScanRepository.notRunningMessage(verb: "stop"))
+    }
+
+    func testStopScanSurfacesOtherHTTPFailures() async {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 503, body: "agent offline")
+        let model = makeRESTModel()
+
+        await model.stopScan("p")
+
+        XCTAssertEqual(model.error, "Failed to stop auto scan: HTTP 503: agent offline")
+    }
+
     // MARK: - Custom-type name map
 
     func testObserveCustomTypesMapsFullWireKindToName() async {
