@@ -114,6 +114,7 @@ CSP_BY_PATH = (
     ("/", LANDING_CSP),
     ("/privacy.html", SITE_CSP),
     ("/voice-input", SITE_CSP),
+    ("/agents/claude-code", SITE_CSP),
     ("/robots.txt", SITE_CSP),
     ("/sitemap.xml", SITE_CSP),
     ("/favicon.ico", SITE_CSP),

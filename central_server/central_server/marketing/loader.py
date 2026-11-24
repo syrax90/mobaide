@@ -19,6 +19,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoes
 
 from ..logging_setup import get_logger
 from ..templates_dir import resolve_templates_dir
+from .agent_pages import AGENT_PAGES, DEMO_UPLOAD_DATE
 
 logger = get_logger(__name__)
 
@@ -86,12 +87,38 @@ def render_voice_input(
     )
 
 
+def render_agent_pages(
+    site_origin: str,
+    app_origin: str,
+    asset_version: str,
+    *,
+    templates_dir: Path | None = None,
+) -> dict[str, str]:
+    """Render every ``/agents/<slug>`` page, keyed by slug; same contract as
+    :func:`render_landing`. Each page gets its own registry entry plus the full
+    list, which its "other agents" links are drawn from."""
+    return {
+        page.slug: _render_page(
+            page.template,
+            site_origin,
+            app_origin,
+            asset_version,
+            templates_dir,
+            agent=page,
+            agents=AGENT_PAGES,
+            demo_upload_date=DEMO_UPLOAD_DATE,
+        )
+        for page in AGENT_PAGES
+    }
+
+
 def _render_page(
     template_name: str,
     site_origin: str,
     app_origin: str,
     asset_version: str,
     templates_dir: Path | None,
+    **extra: object,
 ) -> str:
     target = templates_dir if templates_dir is not None else resolve_templates_dir()
     template_path = target / template_name
@@ -109,6 +136,7 @@ def _render_page(
         site_origin=site_origin,
         app_origin=app_origin,
         asset_version=asset_version,
+        **extra,
     )
 
 
@@ -171,6 +199,7 @@ def render_robots(site_origin: str) -> str:
 SITEMAP_PAGES = (
     ("/", "weekly", "1.0"),
     ("/voice-input", "monthly", "0.8"),
+    *((page.path, "monthly", "0.8") for page in AGENT_PAGES),
     ("/privacy.html", "monthly", "0.3"),
 )
 

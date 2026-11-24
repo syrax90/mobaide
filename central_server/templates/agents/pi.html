@@ -1,0 +1,119 @@
+{#
+  /agents/pi. Facts: docs/features.md (Chat Sessions: Pi sessions, Pi chat
+  options, Pi wizard, Code Mode, Sign-in; the control-key bar) and the Pi
+  options panels. See marketing_agent.html for the rules.
+#}{% extends "marketing_agent.html" %}
+
+{% block title %}Pi coding agent on your phone: iPhone, Android, web | Mobaide{% endblock %}
+
+{% block description %}Use the Pi coding agent from your iPhone, Android phone or browser. It runs on your own computer, and Mobaide gives it a native chat, a real terminal and voice input. Free.{% endblock %}
+
+{% block h1 %}The Pi coding agent, on your phone.{% endblock %}
+
+{% block lede %}
+  Run <strong>Pi</strong> on your own computer and talk to it from your
+  iPhone, Android phone or browser. Switch between the models of every
+  provider you signed in to, set the thinking level and steer a run mid-turn,
+  in a chat built for the phone.
+{% endblock %}
+
+{% block chat %}
+  Two chips: <strong>Model</strong>, with the models of every signed-in
+  provider, and <strong>Thinking</strong>. <strong>Send now</strong> steers a
+  running turn with your next message, <code>/compact</code> works, and the
+  top bar shows how much context is in use.
+{% endblock %}
+
+{% block voice_cleanup %}Pi's default model{% endblock %}
+
+{% block terminal %}
+  On Android and iPhone, a control-key bar sends Thinking (Shift+Tab), Ctrl+P
+  (next model), Ctrl+L (model list) and Ctrl+O (expand tool output), then Esc,
+  Ctrl+C, Enter, Tab and the arrow keys. Two taps on Esc open Pi's session
+  tree.
+{% endblock %}
+
+{% block made_for %}
+  <article class="card notch">
+    <h3>Sign in with the account you have</h3>
+    <p>
+      The Sign-in needed card offers a <strong>ChatGPT account</strong> or a
+      <strong>Claude account</strong>, or an OpenRouter, Gemini, OpenAI or
+      Anthropic API key. The Mobaide agent runs Pi's own
+      <code>pi auth login</code> on your computer.
+    </p>
+  </article>
+  <article class="card notch">
+    <h3>Your extensions come along</h3>
+    <p>
+      Pi's extension commands, prompt templates and skills are in the chat's
+      command list, and extension dialogs turn into approval cards or forms
+      you answer with a tap.
+    </p>
+  </article>
+  <article class="card notch">
+    <h3>Code Mode</h3>
+    <p>
+      Turn on <strong>Code Mode</strong> (Pi 1.1.0 or later), and Pi writes a
+      short script that makes several tool calls in one step. The chat shows
+      it as one <strong>Run script</strong> card with the output and the
+      script.
+    </p>
+  </article>
+{% endblock %}
+
+{% block options %}
+  <div class="spec-row">
+    <dt>Before you start</dt>
+    <dd>Code Mode. Pi runs commands and edits files without asking, as it does in a terminal; pick the model and the thinking level inside the session.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>In the chat</dt>
+    <dd>Model and Thinking chips, <strong>Send now</strong>, <code>/compact</code>, your extension commands, prompt templates and skills, and context use in the top bar.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Sign-in</dt>
+    <dd>A ChatGPT or Claude account, or an OpenRouter, Gemini, OpenAI or Anthropic API key, from the Sign-in needed card.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Earlier sessions</dt>
+    <dd>Pi's own session files — the same list as <code>pi --resume</code> — opened with their history.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Voice cleanup</dt>
+    <dd>Optional, with on-computer voice: Pi tidies each transcript with its default model under your account.</dd>
+  </div>
+{% endblock %}
+
+{% block setup_note %}
+  The chat view needs only the <code>pi</code> binary; Pi has no ACP server,
+  so the Mobaide agent brings its own bridge to Pi's RPC mode. Install Pi as
+  in the Pi quickstart.
+{% endblock %}
+
+{% block faq_signin %}
+  You normally stay signed in on the computer. If Pi has no provider, the
+  chat shows a <strong>Sign-in needed</strong> card: sign in with a ChatGPT
+  or Claude account, or paste an OpenRouter, Gemini, OpenAI or Anthropic API
+  key. Set up other providers with <code>/login</code> in Pi's terminal
+  interface.
+{% endblock %}
+
+{% block faq_continue %}
+  Yes. In <strong>New session</strong>, pick Pi and choose
+  <strong>Continue a session</strong>: it lists Pi's own session files, the
+  same list as <code>pi --resume</code>, and opens one with its history. The
+  chat does not sync live with a session open in Pi's terminal interface.
+{% endblock %}
+
+{% block faq_extra %}
+      <details>
+        <summary>Does Pi ask before it runs a command?</summary>
+        <p>
+          No — Pi runs its tools without asking, in Mobaide as in a terminal.
+          In a Git workspace you can opt in to a separate worktree for the
+          session, to keep its changes apart, and every tool call shows as a
+          card in the chat.
+        </p>
+      </details>
+{% endblock %}

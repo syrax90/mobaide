@@ -5,7 +5,7 @@ apex domain from content pre-rendered into ``app.state`` during ``create_app``.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 router = APIRouter(tags=["marketing"])
@@ -30,7 +30,7 @@ _CRAWLER_CACHE_CONTROL = "public, max-age=3600"
 
 # Security headers for every path here come from the `_SITE_PATHS` bucket of
 # `security_headers.SecurityHeadersMiddleware` (`/` alone takes the widened
-# `_LANDING_CSP`, for the consent-gated Ads tag). Both pages need no
+# `_LANDING_CSP`, for the consent-gated Ads tag). The pages need no
 # relaxation to satisfy the strict site policy: its CSS and JS are external same-origin
 # files, its icons are inline <svg> markup rather than data: URIs, its font is
 # same-origin, and the JSON-LD block is a data block that CSP does not treat as
@@ -49,6 +49,18 @@ async def landing_page(request: Request) -> HTMLResponse:
 @router.api_route("/voice-input", methods=_PUBLIC_METHODS, response_class=HTMLResponse)
 async def voice_input_page(request: Request) -> HTMLResponse:
     response = HTMLResponse(request.app.state.voice_input_html)
+    response.headers["Cache-Control"] = _CACHE_CONTROL
+    return response
+
+
+@router.api_route(
+    "/agents/{slug}", methods=_PUBLIC_METHODS, response_class=HTMLResponse
+)
+async def agent_page(request: Request, slug: str) -> HTMLResponse:
+    html = request.app.state.agent_pages_html.get(slug)
+    if html is None:
+        raise HTTPException(status_code=404)
+    response = HTMLResponse(html)
     response.headers["Cache-Control"] = _CACHE_CONTROL
     return response
 
