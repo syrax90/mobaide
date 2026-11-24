@@ -5,10 +5,11 @@ cache and hardening headers, CSP self-containment (no inline style/script, no
 cross-origin subresource), the consent-gated Google tag, the install
 one-liners rendered once each, absolute social URLs on ``site_base_url``,
 ``/robots.txt`` and ``/sitemap.xml``, the static cache tiers, and the
-``/voice-input`` page under the strict site policy.
+``/voice-input`` and ``/agents/<slug>`` pages under the strict site policy.
 """
 from __future__ import annotations
 
+import json
 import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
@@ -17,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from central_server.app import create_app
+from central_server.marketing.agent_pages import AGENT_PAGES
 from central_server.marketing.loader import (
     LASTMOD_STATE_FILENAME,
     asset_version,
@@ -58,7 +60,8 @@ HARDENING_HEADERS = (
 
 # Every path the marketing router owns.
 MARKETING_PATHS = (
-    "/", "/voice-input", "/robots.txt", "/sitemap.xml", "/favicon.ico"
+    "/", "/voice-input", "/robots.txt", "/sitemap.xml", "/favicon.ico",
+    *(page.path for page in AGENT_PAGES),
 )
 
 # Byte-identical to ``security_headers._SITE_CSP``: the voice page carries no
@@ -312,6 +315,8 @@ class TestCrawlerFiles:
         ]
         assert f"{config.site_base_url}/" in locs
         assert f"{config.site_base_url}/voice-input" in locs
+        for page in AGENT_PAGES:
+            assert f"{config.site_base_url}{page.path}" in locs
 
 
 class TestSitemapLastmod:
@@ -628,3 +633,68 @@ class TestVoiceInputPage:
         assert sources
         missing = [src for src in sources if not (static_dir / src).is_file()]
         assert missing == []
+
+
+_JSON_LD_RE = re.compile(
+    r'<script type="application/ld\+json">(.*?)</script>', re.DOTALL
+)
+# Everything the page makes the browser or a scraper fetch from this host:
+# images, the demo clips and their posters, and the social card.
+_SAME_ORIGIN_ASSET_RE = re.compile(
+    r'\s(?:src|poster|content)="(?:https?://[^/"]+)?/static/([^"?]+)'
+)
+
+
+@pytest.mark.parametrize("page", AGENT_PAGES, ids=lambda page: page.slug)
+class TestAgentPages:
+    """``/agents/<slug>``: one page per built-in agent, each the target of
+    searches for that agent on a phone, so it must index cleanly."""
+
+    async def test_takes_the_strict_policy_without_a_google_tag(
+        self, client, page
+    ) -> None:
+        """No consent banner here, so none of the landing page's Google origins
+        may be admitted; the clips load under ``default-src 'self'``."""
+        response = await client.get(page.path)
+        assert response.status_code == 200
+        assert response.headers["Content-Security-Policy"] == SITE_CSP
+        body = response.text
+        assert "data-consent-banner" not in body
+        assert "googletagmanager" not in body
+        assert _INLINE_STYLE_RE.search(body) is None
+        assert _INLINE_HANDLER_RE.search(body) is None
+        inline = [
+            tag
+            for tag in _SCRIPT_OPEN_TAG_RE.findall(body)
+            if "src=" not in tag and 'type="application/ld+json"' not in tag
+        ]
+        assert inline == []
+
+    async def test_every_referenced_asset_ships(self, client, page) -> None:
+        """A renamed clip, poster or social card would 404 silently behind a
+        cached page; each must exist under ``static/``. Every client has its
+        clip."""
+        body = (await client.get(page.path)).text
+        static_dir = resolve_static_dir()
+        assets = set(_SAME_ORIGIN_ASSET_RE.findall(body))
+        for clip in page.clips:
+            assert f"site/video/{page.slug}-{clip.platform}.mp4" in assets
+            assert f"site/video/{page.slug}-{clip.platform}.webp" in assets
+        assert f"site/img/og-{page.slug}.png" in assets
+        missing = [src for src in assets if not (static_dir / src).is_file()]
+        assert missing == []
+
+    async def test_structured_data_parses(self, client, page, config) -> None:
+        """Copy lands inside the JSON-LD block (title, description); one stray
+        double quote would void every rich result for the page."""
+        body = (await client.get(page.path)).text
+        graph = json.loads(_capture(body, _JSON_LD_RE))["@graph"]
+        videos = [node for node in graph if node["@type"] == "VideoObject"]
+        assert len(videos) == len(page.clips)
+        for video in videos:
+            assert video["contentUrl"].startswith(f"{config.site_base_url}/static/")
+
+
+async def test_unknown_agent_page_is_not_found(client) -> None:
+    response = await client.get("/agents/not-an-agent")
+    assert response.status_code == 404

@@ -1,5 +1,6 @@
 {#
-  Footer shared by the marketing pages (`/` and `/voice-input`). The
+  Footer shared by the marketing pages (`/`, `/voice-input` and the
+  `/agents/<slug>` pages). The
   "Cookie settings" control is rendered only where the consent banner lives
   (`with_consent_settings`): on a page without the banner, site.js never arms
   it, so it would stay hidden anyway — leaving it out keeps the markup honest.
@@ -23,6 +24,19 @@
       <a href="mailto:support@mobaide.com">Email support</a>
     </nav>
   </div>
+  {# Every page links every agent page: the crawl path to them that does not
+     depend on the landing page's chips. #}
+  <nav class="foot-agents" aria-label="Agents">
+    <span class="foot-agents-title">On your phone:</span>
+    <a href="/agents/claude-code">Claude Code</a>
+    <a href="/agents/codex">Codex CLI</a>
+    <a href="/agents/antigravity">Antigravity CLI</a>
+    <a href="/agents/opencode">OpenCode</a>
+    <a href="/agents/github-copilot">GitHub Copilot CLI</a>
+    <a href="/agents/cursor">Cursor CLI</a>
+    <a href="/agents/junie">Junie CLI</a>
+    <a href="/agents/pi">Pi</a>
+  </nav>
   <p class="disclaimer">
     Mobaide is an independent app and is not affiliated with or endorsed by
     Anthropic, OpenAI, Google, GitHub, Anysphere, JetBrains, Apple, NVIDIA,

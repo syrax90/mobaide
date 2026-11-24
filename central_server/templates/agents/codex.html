@@ -1,0 +1,119 @@
+{#
+  /agents/codex. Facts: docs/features.md (Chat Sessions: Codex modes, Codex
+  questions, Live Codex sessions; Codex and Antigravity sign-in) and the
+  Codex options panels. See marketing_agent.html for the rules.
+#}{% extends "marketing_agent.html" %}
+
+{% block title %}Codex CLI on your phone: iPhone, Android, web | Mobaide{% endblock %}
+
+{% block description %}Use OpenAI Codex CLI from your iPhone, Android phone or browser. It runs on your own computer, and Mobaide gives it a native chat, a real terminal and voice input. Free.{% endblock %}
+
+{% block lede %}
+  Run <strong>Codex CLI</strong> on your own computer and steer it from your
+  iPhone, Android phone or browser. Pick how much it may do, answer its
+  questions and review its diffs in a chat built for the phone — even in sync
+  with a Codex terminal on macOS and Linux.
+{% endblock %}
+
+{% block chat %}
+  Chips above the message field switch the mode, the model and the reasoning
+  effort. When Codex asks a question without stopping, the chat shows it as a
+  form while Codex keeps working, and your answer goes into the running turn.
+{% endblock %}
+
+{% block voice_cleanup %}GPT Luna{% endblock %}
+
+{% block terminal %}
+  On Android and iPhone, a control-key bar starts with Approve (y) and Reject
+  (n), then Mode (Shift+Tab), Rewind (Esc Esc), Esc, Ctrl+C, Enter, Tab, the
+  arrow keys, Ctrl+O, Ctrl+R and Ctrl+L. In the browser, your keyboard types
+  every chord straight in.
+{% endblock %}
+
+{% block made_for %}
+  <article class="card notch">
+    <h3>Autonomy, your way</h3>
+    <p>
+      Pick <strong>Read-only</strong> (reads, asks before any change),
+      <strong>Auto</strong> (edits within the workspace, asks before risky
+      actions) or <strong>Full access</strong>. Under Advanced, set the
+      sandbox and the approval policy yourself, next to the model and the
+      reasoning effort.
+    </p>
+  </article>
+  <article class="card notch">
+    <h3>Live with your terminal</h3>
+    <p>
+      When Codex runs in a terminal on your computer, a chat on the phone
+      joins the same session through Codex's shared app-server. A message
+      typed at your desk shows up on the phone, followed by its answer. On
+      macOS and Linux.
+    </p>
+  </article>
+  <article class="card notch">
+    <h3>Every Codex session</h3>
+    <p>
+      <strong>Continue a session</strong> lists the Codex sessions stored on
+      your computer, including the ones started in a terminal, and opens one
+      with its history. Delete moves a session to Codex's own archive.
+    </p>
+  </article>
+{% endblock %}
+
+{% block options %}
+  <div class="spec-row">
+    <dt>Before you start</dt>
+    <dd>Autonomy (Read-only, Auto or Full access), Model and Reasoning effort. Under Advanced: Sandbox and Approval.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>In the chat</dt>
+    <dd>Mode, model and effort chips, questions as forms while Codex works, slash-command suggestions, image attachments, prompt templates and <strong>Send now</strong> to steer with a queued message.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Sign-in</dt>
+    <dd>A <strong>Sign-in needed</strong> card when Codex is signed out: open the page and enter the one-time code from the card, or use an OpenAI API key.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Earlier sessions</dt>
+    <dd>Every Codex session stored on the computer, with its history. Live sync with a Codex terminal session on macOS and Linux.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Voice cleanup</dt>
+    <dd>Optional, with on-computer voice: Codex tidies each transcript with GPT Luna under your account.</dd>
+  </div>
+{% endblock %}
+
+{% block setup_note %}
+  The chat view also needs Node.js 22 or later on that computer; the Mobaide
+  agent installs the chat adapter for Codex by itself. Terminal sessions need
+  only Codex CLI.
+{% endblock %}
+
+{% block faq_signin %}
+  Codex keeps the sign-in it already has on your computer — a ChatGPT
+  account or an OpenAI API key. If it is signed out, the chat shows a
+  <strong>Sign-in needed</strong> card: open the page and enter the one-time
+  code from the card, or paste an OpenAI API key. The Mobaide agent runs
+  Codex's own login on your computer.
+{% endblock %}
+
+{% block faq_continue %}
+  Yes. In <strong>New session</strong>, pick Codex and choose
+  <strong>Continue a session</strong>: it lists the Codex sessions stored on
+  your computer and opens one with its history. On macOS and Linux, while
+  Codex runs in a terminal there, the chat even joins the same live session,
+  so both stay in sync.
+{% endblock %}
+
+{% block faq_extra %}
+      <details>
+        <summary>Can Codex run without asking for every command?</summary>
+        <p>
+          Yes, if you want it to. <strong>Auto</strong> lets Codex edit within
+          the workspace and asks before risky actions;
+          <strong>Full access</strong> turns off the sandbox and the approval
+          prompts. You choose in the new-session wizard, and the chat shows
+          the mode in effect on its mode chip.
+        </p>
+      </details>
+{% endblock %}

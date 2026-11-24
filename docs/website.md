@@ -5,9 +5,10 @@ aggregators and social cards scrape the apex and its Open Graph tags — before
 this page, `https://mobaide.com/` answered `{"detail":"Not Found"}`.
 
 It is served by `central_server`, not by a separate static host, so it ships and
-deploys with the relay and needs no extra infrastructure. A second marketing
-page, the voice input feature page at `/voice-input`, is served the same way —
-see *The voice input page* below.
+deploys with the relay and needs no extra infrastructure. The other marketing
+pages are served the same way: the voice input page at `/voice-input` and one
+page per built-in agent at `/agents/<slug>` — see *The voice input page* and
+*The agent pages* below.
 
 **On this page**
 
@@ -20,6 +21,7 @@ see *The voice input page* below.
 - [Accessibility invariants](#accessibility-invariants)
 - [Static-page styling](#static-page-styling)
 - [The voice input page](#the-voice-input-page)
+- [The agent pages](#the-agent-pages)
 - [Screenshots and the platform switch](#screenshots-and-the-platform-switch)
 - [Copyable command blocks](#copyable-command-blocks)
 - [Store badge rules](#store-badge-rules)
@@ -62,17 +64,21 @@ white.
 
 | Path | What |
 |---|---|
-| `central_server/central_server/marketing/router.py` | Routes: `GET /`, `/voice-input`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`. Owns the response headers. |
-| `central_server/central_server/marketing/loader.py` | Renders both pages + crawler files once at startup. |
+| `central_server/central_server/marketing/router.py` | Routes: `GET /`, `/voice-input`, `/agents/{slug}`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`. Owns the response headers. |
+| `central_server/central_server/marketing/loader.py` | Renders every page + crawler files once at startup. |
+| `central_server/central_server/marketing/agent_pages.py` | The agent page registry: slug, name, maker, and each demo clip's size and length. |
 | `central_server/templates/marketing_landing.html` | **All landing-page copy.** Edit here. |
 | `central_server/templates/marketing_voice_input.html` | **All `/voice-input` copy.** |
-| `central_server/templates/_site_foot.html` | Footer shared by both marketing pages (nav, trademark disclaimer). |
+| `central_server/templates/marketing_agent.html` | Shared layout of the agent pages (hero, demo switch, sections, FAQ, JSON-LD). |
+| `central_server/templates/agents/<slug>.html` | **Each agent page's own copy.** Extends `marketing_agent.html`. |
+| `central_server/templates/_site_foot.html` | Footer shared by every marketing page (nav, agent page links, trademark disclaimer). |
 | `central_server/static/site/site.css` | The "modern pixel" design system — **shared by the landing page and the `portal_base.html` pages.** Owns every token, the `@font-face`, the pixel kit, `.btn`, `.card` and the `.site-head`/`.site-foot` chrome. |
 | `central_server/static/site/portal.css` | Additions `site.css` lacks (the landing page has no forms): inputs, labels, radios, alerts, tables, choice fieldsets, legal-doc layout. Loaded **after** `site.css`. Declares no tokens and no `@font-face`. |
 | `central_server/templates/portal_base.html` | Shell for the static pages — loads both sheets, carries the shared chrome markup, and loads **no script at all**. |
 | `central_server/static/style.css` | **Admin dashboard only.** Light sheet (`--primary: #0d6efd`, `--radius: 6px`), not part of this design system. |
-| `central_server/static/site/site.js` | Reveal-on-scroll, the `/voice-input` hero typewriter, copy buttons, the Android/iOS screenshot switch, and the cookie-consent banner with its post-consent Google Ads gtag.js loader. The two marketing pages only — `portal_base.html` does not load it. |
+| `central_server/static/site/site.js` | Reveal-on-scroll, the `/voice-input` hero typewriter, copy buttons, the Android/iOS screenshot switch, the agent pages' demo clip switch, and the cookie-consent banner with its post-consent Google Ads gtag.js loader. The two marketing pages only — `portal_base.html` does not load it. |
 | `central_server/static/site/img/`, `fonts/` | Assets — see *Regenerating assets*. |
+| `central_server/static/site/video/` | The agent pages' demo clips (`<slug>-<web\|android\|ios>.mp4`) and their poster frames (`.webp`). |
 | `README.md` (repo root) | Embeds `og.png`, both store badges, five `shot-android-*.webp` and `shot-web-voice.webp` by relative path. Rename or remove one of those images and the README breaks. Its voice input numbers and section links mirror `/voice-input`, so change them together. |
 
 The page is **pre-rendered once in `create_app()`**, so **a template or copy change
@@ -130,7 +136,7 @@ Spell the products **Claude Code**, **Codex CLI**, **Antigravity CLI**, **OpenCo
 
 `marketing/router.py` sets only `Cache-Control: public, max-age=300` on `/` and the
 two crawler/favicon TTLs. Everything else is set site-wide by
-`central_server/central_server/security_headers.py`. `/voice-input`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico` and
+`central_server/central_server/security_headers.py`. `/voice-input`, the `/agents/<slug>` pages, `/robots.txt`, `/sitemap.xml`, `/favicon.ico` and
 `/privacy.html` get the strict site policy:
 
 ```
@@ -543,6 +549,100 @@ answer and the shared footer; the sitemap lists it.
   `shot-ios-voice.webp` in the `.device` phone frame, then `shot-web-voice.webp` in
   `.browser` (a drawn title bar with `app.mobaide.com`, capped at 880px to stay in
   proportion with the phones). All three are bare captures.
+
+## The agent pages
+
+One page per built-in agent, at `/agents/<slug>`: `claude-code`, `codex`,
+`antigravity`, `opencode`, `github-copilot`, `cursor`, `junie`, `pi`. Each page
+exists to rank for "<agent> on a phone" searches (iPhone, Android, web), so
+each one names its agent in the title, the H1, the URL and its own copy.
+
+**Layout.** `marketing_agent.html` holds every shared section; the agent's
+template fills the blocks.
+
+| Section | Shared or per agent |
+|---|---|
+| Hero: kicker, H1, lede, store badges and the web app button | Lede per agent |
+| Demo: one clip per client behind a tab switch, plus the three clip steps | Shared |
+| *Three ways to work with …*: chat, voice input, terminal | Per-agent paragraph in each card |
+| *Made for …*: three cards, then the *at a glance* list | Per agent |
+| *Set it up*: install commands, QR, start the agent | Shared, plus a per-agent note on what the computer needs |
+| *Also in every session*, FAQ, other agents, closing CTA | Shared, plus two or three per-agent FAQ answers |
+
+**The demo switch.** One clip at a time, behind Web app / Android / iPhone
+tabs; the page always opens on **Web app** (owner decision), whatever the
+device.
+
+- **Why a switch, not three clips side by side.** A visitor came for one
+  client. Three looping clips at once compete for attention, triple the
+  download, and a landscape browser clip cannot share a row with two tall
+  phone clips.
+- **Layout.** The web clip takes the full width in a `.browser` frame, with
+  the steps below. A phone clip sits in a `.device` frame with the steps
+  beside it (from 820px). `site.js` sets `data-layout` on the switch for this.
+- **Playback.** The selected clip plays muted and looped while at least a
+  quarter of it is on screen, and pauses off screen. A Pause by the
+  visitor holds until they press Play again. Under
+  `prefers-reduced-motion` nothing starts by itself; the poster (the
+  finished answer) stays.
+- **Controls.** A pixel bar under the frame: Play/Pause (the accessible
+  control), a decorative progress bar that seeks on click, and Full screen.
+  The native controls come back only in full screen.
+- **No-JS fallback.** Same `is-live` contract as the screenshot switch: the
+  markup ships every panel visible with native `controls`, and nothing plays
+  by itself. `wireTabs()` in `site.js` is shared by both switches.
+
+**Indexing.**
+
+- Each page has its own canonical URL, title, description, Open Graph and
+  Twitter tags, and a social card `img/og-<slug>.png`.
+- The sitemap lists every page; its `lastmod` comes from `stamp_lastmod`, like
+  the other pages.
+- JSON-LD `@graph`: `WebPage`, `BreadcrumbList` (Mobaide → agent),
+  `SoftwareApplication` and one `VideoObject` per clip. Clip and poster URLs
+  there carry no `?v=`, so a crawler keys each video on one stable URL.
+- The title, the description and the clip names are reused inside the JSON-LD,
+  so they must not contain a double quote or a backslash.
+  `TestAgentPages.test_structured_data_parses` catches one.
+- Internal links: the landing page's *Start any of these* chips, the shared
+  footer's agent row, the other-agents chips on every agent page, and the
+  README.
+
+**Copy rules.** The landing page's accuracy gate applies. Every per-agent
+fact comes from `docs/features.md` (*Chat Sessions*, *On-screen control-key
+bar*, *Session Notifications*) and the clients' options panels
+(`web/src/routes/sessions/create/panels/*OptionsPanel.tsx`). Change the page
+when that agent's launch options, chips, sign-in or Continue behaviour
+change. The voice cleanup model of each agent must match `/voice-input`.
+
+**Adding an agent.** Add an `AgentPage` to `AGENT_PAGES`, write
+`templates/agents/<slug>.html`, ship its three clips and posters plus
+`img/og-<slug>.png`, and add it to the landing chips, the footer row and the
+README links. The router, sitemap, security-header bucket and tests read the
+registry.
+
+**Regenerating the clips.** The sources are
+`~/Documents/ML/Projects/mobaide-related/videos/<agent>-plan-{web,android,ios}.mp4`
+(made with the `demo-video` skill). The site copies are re-encoded to keep the
+repository small, about 0.4–1 MB each:
+
+```
+# web: 1920 wide, CRF 33; phones: 720 wide, CRF 32
+ffmpeg -i <src>.mp4 -map 0:v:0 -an -map_metadata -1 \
+  -vf "scale=720:-2:flags=lanczos,fps=60,format=yuv420p" \
+  -c:v libx264 -preset veryslow -crf 32 -profile:v high -tune animation \
+  -g 300 -movflags +faststart <slug>-<platform>.mp4
+```
+
+- **Poster.** The frame 0.25 s before the end (the finished answer), as WebP
+  quality 72: 1600 wide for web, 540 for phones. Homebrew's ffmpeg has no
+  WebP encoder, so convert the frame with Pillow.
+- **Registry.** Update the clip's size and rounded length in
+  `agent_pages.py` (`ffprobe` gives both).
+- **Social card.** 1200×630 PNG: the wordmark, the agent name in Departure
+  Mono (`ios/Mobaide/UI/Theme/Fonts/DepartureMono-Regular.otf`), and the web
+  and iPhone posters in pixel frames. Draw it with Pillow, quantized to 256
+  colours.
 
 ## Screenshots and the platform switch
 

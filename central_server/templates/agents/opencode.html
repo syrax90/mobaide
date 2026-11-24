@@ -1,0 +1,107 @@
+{#
+  /agents/opencode. Facts: docs/features.md (Chat Sessions: OpenCode
+  sessions, Code Mode; OpenCode terminal sessions; the background-work notes
+  under Multi-Session) and the OpenCode options panels. See
+  marketing_agent.html for the rules.
+#}{% extends "marketing_agent.html" %}
+
+{% block title %}OpenCode on your phone: iPhone, Android, web | Mobaide{% endblock %}
+
+{% block description %}Use OpenCode from your iPhone, Android phone or browser. It runs on your own computer with your own providers, and Mobaide gives it a native chat, a real terminal and voice input. Free.{% endblock %}
+
+{% block lede %}
+  Run <strong>OpenCode</strong> on your own computer and use it from your
+  iPhone, Android phone or browser. Switch between Build and Plan, pick any
+  model your providers offer and follow its subagents in a chat built for the
+  phone.
+{% endblock %}
+
+{% block chat %}
+  The chips come straight from OpenCode: the model as
+  <code>provider/model</code>, the mode (Build or Plan) and, for models with
+  variants, the effort. With OpenCode 2.3 or later, the header shows
+  <strong>Working in background</strong> while a subagent runs, and its tool
+  calls carry the subagent's name.
+{% endblock %}
+
+{% block voice_cleanup %}OpenCode's default model{% endblock %}
+
+{% block terminal %}
+  On Android and iPhone, a control-key bar sends Mode (Shift+Tab, cycles the
+  agent) and Ctrl+P (the command palette), then Esc, Ctrl+C, Enter, Tab and
+  the arrow keys. In the browser, your keyboard types every chord straight
+  in.
+{% endblock %}
+
+{% block made_for %}
+  <article class="card notch">
+    <h3>Connect a provider from the phone</h3>
+    <p>
+      The OpenCode options screen has a <strong>Connect a provider</strong>
+      card. It runs <code>opencode auth login</code> on your computer in a
+      terminal session, so you can add a provider without walking back to
+      your desk.
+    </p>
+  </article>
+  <article class="card notch">
+    <h3>Code Mode, on by default</h3>
+    <p>
+      With OpenCode 2, Code Mode lets OpenCode write a short script that makes
+      several tool calls in one step. The chat shows it as one
+      <strong>Run script</strong> card with the output and the script. Turn it
+      off for a launch when you want each call on its own.
+    </p>
+  </article>
+  <article class="card notch">
+    <h3>Auto-approve for long runs</h3>
+    <p>
+      <strong>Auto-approve permissions (dangerous)</strong> answers each
+      permission request with <em>allow once</em>, so a long run never stops
+      for a tap. Leave it off, and every request waits for you as a card.
+    </p>
+  </article>
+{% endblock %}
+
+{% block options %}
+  <div class="spec-row">
+    <dt>Before you start</dt>
+    <dd>Auto-approve permissions (dangerous) and Code Mode. The model and the Build or Plan agent are picked inside the session.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>In the chat</dt>
+    <dd>Model, mode and effort chips, <strong>Run script</strong> cards, subagent activity, slash-command suggestions and prompt templates.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Sign-in</dt>
+    <dd>No sign-in card: use <strong>Connect a provider</strong> in the app, or <code>opencode auth login</code> on the computer. If a provider refuses, the chat says how to fix it.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Earlier sessions</dt>
+    <dd>The OpenCode sessions stored for the folder, opened with their history.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Voice cleanup</dt>
+    <dd>Optional, with on-computer voice: OpenCode tidies each transcript with its default model. Needs OpenCode 2.2.6 or later.</dd>
+  </div>
+{% endblock %}
+
+{% block setup_note %}
+  The chat view needs only the <code>opencode</code> binary — no adapter and
+  no Node.js. OpenCode asks no folder-trust question, so a new folder opens
+  at once.
+{% endblock %}
+
+{% block faq_signin %}
+  You may not need to: OpenCode starts without an account and has free
+  models. To use your own provider, tap <strong>Connect a provider</strong>
+  on the OpenCode options screen — it runs <code>opencode auth login</code>
+  on your computer — or run that command there yourself.
+{% endblock %}
+
+{% block faq_continue %}
+  Yes. In <strong>New session</strong>, pick OpenCode and choose
+  <strong>Continue a session</strong>: it lists the OpenCode sessions stored
+  for the folder and replays their history in the chat. Each chat runs its
+  own OpenCode process, so it does not sync live with a session open in the
+  OpenCode terminal interface.
+{% endblock %}

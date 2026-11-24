@@ -1,5 +1,6 @@
 /* Mobaide marketing site — reveal-on-scroll, the hero typewriter, the
- * install-command copy buttons, and the Android/iOS screenshot switch.
+ * install-command copy buttons, the Android/iOS screenshot switch, and the
+ * demo clip switch of the agent pages.
  *
  * Loaded synchronously from <head> (not deferred) so the `js` class lands
  * before first paint: site.css gates every animation start-state on that class,
@@ -162,32 +163,28 @@
     document.documentElement.classList.add("can-copy");
   }
 
-  /* ---- Android/iOS screenshot switch ---- */
+  /* ---- tab switches ---- */
 
-  /* Turns the two stacked screenshot panels into a tab pair. The markup ships
-   * with both panels visible and the tablist at display:none, so every early
-   * return below leaves a page that still shows every screenshot under its own
-   * heading — the `is-live` class at the end is what swaps in the switched
-   * presentation, and it is only reached once both tabs are wired.
+  /* The panel each tab names, or null when one is missing — the caller then
+   * leaves the markup's all-panels fallback in place.
    */
-  function setUpShotSwitch() {
-    var container = document.querySelector("[data-shots-switch]");
-    if (!container) {
-      return;
-    }
-    var tabs = container.querySelectorAll("[role=tab]");
-    if (tabs.length !== 2) {
-      return;
-    }
+  function tabPanels(tabs) {
     var panels = [];
     for (var i = 0; i < tabs.length; i++) {
       var panel = document.getElementById(tabs[i].getAttribute("aria-controls"));
       if (!panel) {
-        return;
+        return null;
       }
       panels.push(panel);
     }
+    return panels;
+  }
 
+  /* Wires a horizontal tablist over panels that already render on their own:
+   * click or Left/Right/Home/End selects (automatic activation, roving
+   * tabindex), and `onSelect` hears every selection, the first one included.
+   */
+  function wireTabs(tabs, panels, initial, onSelect) {
     function select(index, moveFocus) {
       for (var j = 0; j < tabs.length; j++) {
         var on = j === index;
@@ -199,6 +196,9 @@
       if (moveFocus) {
         tabs[index].focus();
       }
+      if (onSelect) {
+        onSelect(index);
+      }
     }
 
     for (var k = 0; k < tabs.length; k++) {
@@ -209,7 +209,7 @@
         tabs[index].addEventListener("keydown", function (event) {
           // Left/Right only: the tablist is horizontal, so Up/Down belong to
           // the page. Claiming them would swallow a scroll keypress — and
-          // switch platforms instead — whenever a tab holds focus.
+          // switch panels instead — whenever a tab holds focus.
           var next = null;
           if (event.key === "ArrowRight") {
             next = (index + 1) % tabs.length;
@@ -224,14 +224,33 @@
             return;
           }
           event.preventDefault();
-          // Automatic activation: the panels are already in the document and
-          // the hidden one's images are loading="lazy", so arrowing across
-          // costs nothing a click would not.
+          // Automatic activation: the hidden panels' media is lazy, so
+          // arrowing across costs nothing a click would not.
           select(next, true);
         });
       })(k);
     }
+    select(initial, false);
+  }
 
+  /* ---- Android/iOS screenshot switch ---- */
+
+  /* Turns the two stacked screenshot panels into a tab pair. The markup ships
+   * with both panels visible and the tablist at display:none, so every early
+   * return below leaves a page that still shows every screenshot under its own
+   * heading — the `is-live` class at the end is what swaps in the switched
+   * presentation, and it is only reached once both tabs are wired.
+   */
+  function setUpShotSwitch() {
+    var container = document.querySelector("[data-shots-switch]");
+    if (!container) {
+      return;
+    }
+    var tabs = container.querySelectorAll("[role=tab]");
+    var panels = tabPanels(tabs);
+    if (tabs.length !== 2 || !panels) {
+      return;
+    }
     // Most visitors arrive on the phone they would install on. An iPad carries
     // no iPad token: since iPadOS 13 Safari asks for desktop sites by default
     // and claims to be a Macintosh, so the only thing separating it from a real
@@ -241,7 +260,208 @@
     var onIos =
       /iPad|iPhone|iPod/.test(ua) ||
       (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1);
-    select(onIos ? 1 : 0, false);
+    wireTabs(tabs, panels, onIos ? 1 : 0, null);
+    container.classList.add("is-live");
+  }
+
+  /* ---- demo clip switch (the /agents/<slug> pages) ---- */
+
+  /* One clip per client behind a tab switch that opens on the first tab (the
+   * web app). The markup ships every panel visible with the browser's own
+   * video controls and nothing playing, so each early return leaves a page
+   * that still works. Once live, the selected clip plays muted while the
+   * switch is on screen, unless the visitor asked for reduced motion or
+   * paused it; the pixel control bar replaces the native controls, which come
+   * back only in full screen.
+   */
+  function setUpDemoSwitch() {
+    var container = document.querySelector("[data-demo-switch]");
+    if (!container) {
+      return;
+    }
+    var tabs = container.querySelectorAll("[role=tab]");
+    var panels = tabPanels(tabs);
+    if (!tabs.length || !panels) {
+      return;
+    }
+    var players = [];
+    for (var i = 0; i < panels.length; i++) {
+      var player = {
+        video: panels[i].querySelector("[data-demo-video]"),
+        play: panels[i].querySelector("[data-demo-play]"),
+        full: panels[i].querySelector("[data-demo-full]"),
+        bar: panels[i].querySelector("[data-demo-progress]"),
+        phone: panels[i].classList.contains("demo-panel-phone"),
+      };
+      if (!player.video || !player.play || !player.full || !player.bar) {
+        return;
+      }
+      player.fill = player.bar.firstElementChild;
+      players.push(player);
+    }
+
+    var current = 0;
+    // Per clip: a quarter of it on screen. Hidden panels report nothing in
+    // view, so a tab change waits for the new clip's own report.
+    var observing = "IntersectionObserver" in window;
+    var visible = players.map(function () {
+      return !observing;
+    });
+    // "auto" plays while on screen; "play" and "pause" are the visitor's own
+    // choice and outlast tab changes. Reduced motion starts paused: the poster
+    // shows the finished answer.
+    var intent = reduceMotion ? "pause" : "auto";
+    var frame = 0;
+
+    function fullscreenElement() {
+      return document.fullscreenElement || document.webkitFullscreenElement || null;
+    }
+
+    function paint(player) {
+      var video = player.video;
+      var share = video.duration > 0 ? video.currentTime / video.duration : 0;
+      player.fill.style.transform = "scaleX(" + Math.min(1, share) + ")";
+    }
+
+    function tick() {
+      paint(players[current]);
+      frame = players[current].video.paused ? 0 : window.requestAnimationFrame(tick);
+    }
+
+    function showState(player) {
+      var paused = player.video.paused;
+      player.play.classList.toggle("is-paused", paused);
+      player.play.setAttribute("aria-label", paused ? "Play the demo" : "Pause the demo");
+    }
+
+    function sync() {
+      for (var j = 0; j < players.length; j++) {
+        if (j !== current && !players[j].video.paused) {
+          players[j].video.pause();
+        }
+      }
+      var video = players[current].video;
+      if (visible[current] && intent !== "pause") {
+        var started = video.play();
+        if (started && started.catch) {
+          // Autoplay refused (a power-saving mode, a strict browser): the
+          // clip stays on its poster and the Play button takes over.
+          started.catch(function () {});
+        }
+      } else if (!video.paused && !fullscreenElement()) {
+        video.pause();
+      }
+    }
+
+    function toggle(player) {
+      intent = player.video.paused ? "play" : "pause";
+      sync();
+    }
+
+    function enterFullscreen(video) {
+      if (video.requestFullscreen) {
+        var entered = video.requestFullscreen();
+        if (entered && entered.catch) {
+          entered.catch(function () {});
+        }
+      } else if (video.webkitRequestFullscreen) {
+        video.webkitRequestFullscreen();
+      } else if (video.webkitEnterFullscreen) {
+        // iPhone Safari: only a <video> may go full screen, through this.
+        video.webkitEnterFullscreen();
+      }
+    }
+
+    players.forEach(function (player) {
+      var video = player.video;
+      video.controls = false;
+      if (
+        !video.requestFullscreen &&
+        !video.webkitRequestFullscreen &&
+        !video.webkitEnterFullscreen
+      ) {
+        player.full.hidden = true;
+      }
+      video.addEventListener("play", function () {
+        showState(player);
+        if (!frame) {
+          frame = window.requestAnimationFrame(tick);
+        }
+      });
+      video.addEventListener("pause", function () {
+        showState(player);
+      });
+      video.addEventListener("seeked", function () {
+        paint(player);
+      });
+      video.addEventListener("click", function () {
+        if (!fullscreenElement()) {
+          toggle(player);
+        }
+      });
+      // iPhone's own full-screen player brings its controls; leaving it may
+      // pause the clip, which the Play button then reflects.
+      video.addEventListener("webkitendfullscreen", function () {
+        showState(player);
+      });
+      player.play.addEventListener("click", function () {
+        toggle(player);
+      });
+      player.full.addEventListener("click", function () {
+        enterFullscreen(video);
+      });
+      player.bar.addEventListener("click", function (event) {
+        var box = player.bar.getBoundingClientRect();
+        if (box.width > 0 && video.duration > 0) {
+          video.currentTime = ((event.clientX - box.left) / box.width) * video.duration;
+          paint(player);
+        }
+      });
+      showState(player);
+    });
+
+    // Native controls only while a clip fills the screen: there the pixel
+    // bar is out of sight, and the browser's own bar is the way back out.
+    var onFullscreen = function () {
+      var element = fullscreenElement();
+      players.forEach(function (player) {
+        player.video.controls = element === player.video;
+      });
+    };
+    document.addEventListener("fullscreenchange", onFullscreen);
+    document.addEventListener("webkitfullscreenchange", onFullscreen);
+
+    wireTabs(tabs, panels, 0, function (index) {
+      if (index !== current) {
+        players[index].video.currentTime = 0;
+        paint(players[index]);
+      }
+      current = index;
+      container.setAttribute("data-layout", players[index].phone ? "phone" : "wide");
+      sync();
+    });
+
+    if (observing) {
+      var observer = new IntersectionObserver(
+        function (entries) {
+          if (fullscreenElement()) {
+            return;
+          }
+          entries.forEach(function (entry) {
+            for (var j = 0; j < players.length; j++) {
+              if (players[j].video === entry.target) {
+                visible[j] = entry.intersectionRatio >= 0.25;
+              }
+            }
+          });
+          sync();
+        },
+        { threshold: [0, 0.25, 0.5] }
+      );
+      players.forEach(function (player) {
+        observer.observe(player.video);
+      });
+    }
     container.classList.add("is-live");
   }
 
@@ -731,6 +951,8 @@
     setUpConsentBanner();
     // Also not motion: a reduced-motion visitor still picks their platform.
     setUpShotSwitch();
+    // Plays nothing by itself under reduced motion; see its `intent`.
+    setUpDemoSwitch();
 
     if (reduceMotion) {
       // The `.js` class has already armed the hidden states, so hand the

@@ -26,6 +26,18 @@
   <a href="https://github.com/syrax90/mobaide-community/discussions"><b>Community</b></a>
 </p>
 
+<p align="center"><sub>
+  See it run on the web, Android and iPhone:
+  <a href="https://mobaide.com/agents/claude-code">Claude Code</a> ·
+  <a href="https://mobaide.com/agents/codex">Codex CLI</a> ·
+  <a href="https://mobaide.com/agents/antigravity">Antigravity CLI</a> ·
+  <a href="https://mobaide.com/agents/opencode">OpenCode</a> ·
+  <a href="https://mobaide.com/agents/github-copilot">GitHub Copilot CLI</a> ·
+  <a href="https://mobaide.com/agents/cursor">Cursor CLI</a> ·
+  <a href="https://mobaide.com/agents/junie">Junie CLI</a> ·
+  <a href="https://mobaide.com/agents/pi">Pi</a>
+</sub></p>
+
 <table align="center">
   <tr>
     <td align="center"><img src="central_server/static/site/img/shot-android-chat.webp" width="165" alt="An Antigravity CLI chat: a Markdown answer with a table, mode, model and effort chips, and the command field."></td>

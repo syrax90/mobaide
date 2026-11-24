@@ -30,6 +30,7 @@ from .marketing.loader import (
     LASTMOD_STATE_FILENAME,
     asset_version,
     read_favicon,
+    render_agent_pages,
     render_landing,
     render_robots,
     render_sitemap,
@@ -515,12 +516,19 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.state.voice_input_html = render_voice_input(
         _site_origin, app.state.web_app_origin, app.state.asset_version
     )
+    app.state.agent_pages_html = render_agent_pages(
+        _site_origin, app.state.web_app_origin, app.state.asset_version
+    )
     app.state.marketing_robots = render_robots(_site_origin)
     _lastmods = stamp_lastmod(
         Path(config.db_path).parent / LASTMOD_STATE_FILENAME,
         {
             "/": app.state.marketing_html,
             "/voice-input": app.state.voice_input_html,
+            **{
+                f"/agents/{slug}": html
+                for slug, html in app.state.agent_pages_html.items()
+            },
             "/privacy.html": app.state.privacy_toc_html + app.state.privacy_html,
         },
         datetime.now(UTC),

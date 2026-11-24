@@ -52,6 +52,8 @@ from __future__ import annotations
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .marketing.agent_pages import AGENT_PAGE_PATHS
+
 _UNIVERSAL_HEADERS = (
     ("X-Content-Type-Options", "nosniff"),
     ("Referrer-Policy", "strict-origin-when-cross-origin"),
@@ -162,11 +164,14 @@ _DENIED_FEATURES = "camera=(), microphone=(), geolocation=(), payment=(), usb=()
 _BASELINE_PERMISSIONS_POLICY = f"{_DENIED_FEATURES}, identity-credentials-get=()"
 
 # `/` is deliberately absent: the landing page has its own `_LANDING_CSP`
-# bucket, matched ahead of these sets in `_headers_for()`. `/voice-input` loads
-# the landing page's own same-origin assets but carries no consent banner, so
-# no Google origin may load there and the strict policy is all it needs.
+# bucket, matched ahead of these sets in `_headers_for()`. `/voice-input` and
+# the `/agents/<slug>` pages load the landing page's own same-origin assets
+# (the demo clips included: `media-src` falls back to `default-src 'self'`) but
+# carry no consent banner, so no Google origin may load there and the strict
+# policy is all they need.
 _SITE_PATHS = frozenset(
     {"/robots.txt", "/sitemap.xml", "/favicon.ico", "/privacy.html", "/voice-input"}
+    | AGENT_PAGE_PATHS
 )
 
 # The subset of `_SITE_PATHS` that marketing/router.py already served in

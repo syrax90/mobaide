@@ -409,7 +409,7 @@ Headers are applied with `setdefault`, so a route that sets its own value still 
 | Surface | Policy |
 | --- | --- |
 | `/` (the landing page) | `default-src 'self'; script-src 'self' https://www.googletagmanager.com https://www.googleadservices.com https://www.google.com https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net; img-src 'self' https://www.googletagmanager.com https://googleads.g.doubleclick.net https://www.google.com https://www.googleadservices.com https://pagead2.googlesyndication.com; connect-src 'self' https://pagead2.googlesyndication.com https://www.googleadservices.com https://googleads.g.doubleclick.net https://ad.doubleclick.net https://www.google.com; frame-src https://www.googletagmanager.com; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'` (note 1) |
-| `/robots.txt`, `/sitemap.xml`, `/favicon.ico`, `/privacy.html` | `default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'` |
+| `/robots.txt`, `/sitemap.xml`, `/favicon.ico`, `/privacy.html`, `/voice-input`, `/agents/<slug>` | `default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'` |
 | `/portal/*`, `/dashboard/*` | `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` (note 2) |
 | everything else — `/api/*`, `/proxy/*`, `/relay/*`, `/static/*`, 404s | `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
 | `/docs`, `/redoc` | **no CSP** — see below |

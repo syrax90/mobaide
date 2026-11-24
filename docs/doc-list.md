@@ -67,7 +67,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [website.md](website.md) | The mobaide.com site and the shared "modern pixel" design system: where files live, the copy-accuracy gate, CSP and headers, assets, consent-gated Google Ads tag, static-page styling. |
+| [website.md](website.md) | The mobaide.com site and the shared "modern pixel" design system: where files live, the copy-accuracy gate, CSP and headers, assets, consent-gated Google Ads tag, static-page styling, the per-agent pages with their demo clips. |
 | [agent-paired-conversion.md](agent-paired-conversion.md) | Umbrella doc for the "Agent paired" Google Ads rollout: stages, history, traps, configuration inventory, monitoring, pause / change / remove runbook. Read this first for that topic. |
 | [app-conversion-measurement.md](app-conversion-measurement.md) | The Firebase lane of that rollout: client rules, consent defaults, per-platform integration, DebugView, store privacy answers. |
 

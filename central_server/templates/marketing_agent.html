@@ -1,0 +1,565 @@
+{#
+  Shared layout of the per-agent pages (/agents/<slug>). Each agent's copy is
+  in templates/agents/<slug>.html, which extends this file and fills the
+  blocks; the registry is central_server/marketing/agent_pages.py. Rendered
+  once at startup by marketing/loader.py, under the same two hard constraints
+  as the landing page (central_server/tests/test_marketing.py enforces them):
+
+  1. NO inline `style="..."`, NO inline <script>, NO `on...=` handler. The page
+     takes the strict site CSP (`default-src 'self'`), so it carries no consent
+     banner, and the demo clips are same-origin files under static/site/video.
+  2. Every claim is checked against the code and docs/features.md. Never write
+     "end-to-end", never describe a direct/LAN mode, and state worktrees only
+     with both qualifiers (opt-in per launch, Git workspaces only).
+
+  The title, description and FAQ answers are reused inside the JSON-LD block,
+  so they must not contain a double quote or a backslash.
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{% set page_url = site_origin ~ agent.path %}
+<title>{% block title %}{% endblock %}</title>
+<meta name="description" content="{{ self.description() }}">
+<link rel="canonical" href="{{ page_url }}">
+<meta name="theme-color" content="#121212">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mobaide">
+<meta property="og:url" content="{{ page_url }}">
+<meta property="og:title" content="{{ self.title() }}">
+<meta property="og:description" content="{{ self.description() }}">
+<meta property="og:image" content="{{ site_origin }}/static/site/img/og-{{ agent.slug }}.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="{{ agent.name }} in Mobaide on a phone and in the browser">
+<meta property="og:locale" content="en_US">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ self.title() }}">
+<meta name="twitter:description" content="{{ self.description() }}">
+<meta name="twitter:image" content="{{ site_origin }}/static/site/img/og-{{ agent.slug }}.png">
+
+<link rel="icon" href="/static/site/img/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="apple-touch-icon" href="/static/site/img/apple-touch-icon.png?v={{ asset_version }}">
+{# Byte-identical to the landing page's preload and the @font-face url() —
+   see the note there on why the font carries no `?v=`. #}
+<link rel="preload" href="/static/site/fonts/DepartureMono-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/site/site.css?v={{ asset_version }}">
+{# Not deferred, for the same reason as on the landing page: its first
+   statement sets the `js` class the reveal start states key on. #}
+<script src="/static/site/site.js?v={{ asset_version }}"></script>
+
+{# A data block, not executable script — CSP's script-src does not apply.
+   The clip and poster URLs carry no `?v=`: crawlers key a video on its URL,
+   and the files answer without the query. #}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "{{ page_url }}#page",
+      "url": "{{ page_url }}",
+      "name": "{{ self.title() }}",
+      "description": "{{ self.description() }}",
+      "inLanguage": "en",
+      "isPartOf": {"@type": "WebSite", "name": "Mobaide", "url": "{{ site_origin }}/"},
+      "breadcrumb": {"@id": "{{ page_url }}#breadcrumb"},
+      "about": {"@id": "{{ page_url }}#app"},
+      "primaryImageOfPage": "{{ site_origin }}/static/site/video/{{ agent.slug }}-web.webp",
+      "video": [{% for clip in agent.clips %}{"@id": "{{ page_url }}#video-{{ clip.platform }}"}{% if not loop.last %}, {% endif %}{% endfor %}]
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "{{ page_url }}#breadcrumb",
+      "itemListElement": [
+        {"@type": "ListItem", "position": 1, "name": "Mobaide", "item": "{{ site_origin }}/"},
+        {"@type": "ListItem", "position": 2, "name": "{{ agent.name }}", "item": "{{ page_url }}"}
+      ]
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "{{ page_url }}#app",
+      "name": "Mobaide",
+      "url": "{{ site_origin }}/",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Android, iOS, Web",
+      "description": "Mobaide runs {{ agent.name }} on your own Windows, macOS or Linux computer and puts it on your phone and in your browser: a native chat, a real terminal and voice input.",
+      "downloadUrl": [
+        "https://play.google.com/store/apps/details?id=com.mobaide.app",
+        "https://apps.apple.com/app/id6797191741"
+      ],
+      "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
+    }{% for clip in agent.clips %},
+    {
+      "@type": "VideoObject",
+      "@id": "{{ page_url }}#video-{{ clip.platform }}",
+      "name": "{{ agent.name }} {{ clip.where }} with Mobaide",
+      "description": "A new {{ agent.name }} session {{ clip.where }}: the prompt is dictated with voice input, and {{ agent.name }} answers with a plan in the native chat.",
+      "thumbnailUrl": "{{ site_origin }}/static/site/video/{{ agent.slug }}-{{ clip.platform }}.webp",
+      "contentUrl": "{{ site_origin }}/static/site/video/{{ agent.slug }}-{{ clip.platform }}.mp4",
+      "uploadDate": "{{ demo_upload_date }}",
+      "duration": "{{ clip.iso_duration }}",
+      "width": {{ clip.width }},
+      "height": {{ clip.height }}
+    }{% endfor %}
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <a class="brand" href="/" aria-label="Mobaide home">
+    <img class="brand-mark" src="/static/site/img/wordmark.png?v={{ asset_version }}"
+         width="227" height="40" alt="Mobaide">
+  </a>
+  <nav class="site-nav" aria-label="Site">
+    <a href="#demo">Demo</a>
+    <a href="#features">Features</a>
+    <a href="#setup">Set up</a>
+    <a href="#faq">FAQ</a>
+    <a class="btn btn-ghost" href="{{ app_origin }}/login">Sign in</a>
+    <a class="nav-gh" href="https://github.com/syrax90/mobaide" rel="noopener" aria-label="Mobaide source code on GitHub" title="Source code on GitHub">
+      <svg width="20" height="20" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+    </a>
+  </nav>
+</header>
+
+<main id="main">
+
+  <section class="hero hero-agent">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Mobaide</a></li>
+        <li><a href="/#agents">Agents</a></li>
+        <li aria-current="page">{{ agent.name }}</li>
+      </ol>
+    </nav>
+    <p class="hero-kicker"><span class="chip chip-brand chip-sm">{{ agent.label }}</span> iPhone · Android · Web</p>
+    <h1>{% block h1 %}{{ agent.name }} on your phone.{% endblock %}</h1>
+    <p class="lede">{% block lede %}{% endblock %}</p>
+    {# One row: the demo below is the main content, so the hero stays short.
+       Unmodified official badges — see docs/website.md, Store badge rules. #}
+    <div class="cta">
+      <a class="badge-link" href="https://play.google.com/store/apps/details?id=com.mobaide.app" rel="noopener">
+        <img src="/static/site/img/google-play-badge.png?v={{ asset_version }}"
+             width="323" height="125" alt="Get it on Google Play">
+      </a>
+      <a class="badge-link badge-apple" href="https://apps.apple.com/app/id6797191741" rel="noopener">
+        <img src="/static/site/img/app-store-badge.svg?v={{ asset_version }}"
+             width="120" height="40" alt="Download on the App Store">
+      </a>
+      <a class="btn" href="{{ app_origin }}/">Open the web app</a>
+    </div>
+  </section>
+
+  {# The demo is the page's main content: one clip per client, behind a tab
+     switch that opens on the web app. With scripting off, or before site.js
+     wires it (see setUpDemoSwitch), every panel renders under its own heading
+     with the browser's own video controls, and nothing plays by itself. #}
+  <section id="demo" class="demo" aria-labelledby="demo-title">
+    <h2 id="demo-title" class="sr-only">Watch {{ agent.name }} in Mobaide</h2>
+    <div class="demo-switch" data-demo-switch>
+      <div class="shots-tabs" role="tablist" aria-label="Choose where to watch the demo">
+        {% for clip in agent.clips %}
+        <button class="shots-tab" type="button" role="tab" id="demo-tab-{{ clip.platform }}"
+                aria-controls="demo-panel-{{ clip.platform }}" aria-selected="{{ 'true' if loop.first else 'false' }}">{{ clip.tab_label }}</button>
+        {% endfor %}
+      </div>
+
+      <div class="demo-stage">
+        {% for clip in agent.clips %}
+        <div class="shots-panel demo-panel demo-panel-{{ 'wide' if clip.platform == 'web' else 'phone' }}"
+             id="demo-panel-{{ clip.platform }}" role="tabpanel" aria-labelledby="demo-tab-{{ clip.platform }}">
+          <h3 class="shots-panel-title">{{ clip.heading }}</h3>
+          <figure class="demo-figure">
+            <div class="{{ 'browser' if clip.platform == 'web' else 'device' }}">
+              {% if clip.platform == 'web' %}
+              <div class="browser-bar" aria-hidden="true"><span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-url">app.mobaide.com</span></div>
+              {% endif %}
+              <video class="demo-video" data-demo-video
+                     src="/static/site/video/{{ agent.slug }}-{{ clip.platform }}.mp4?v={{ asset_version }}"
+                     poster="/static/site/video/{{ agent.slug }}-{{ clip.platform }}.webp?v={{ asset_version }}"
+                     width="{{ clip.width }}" height="{{ clip.height }}"
+                     muted loop playsinline controls preload="{{ 'metadata' if loop.first else 'none' }}"
+                     aria-label="Demo: {{ agent.name }} {{ clip.where }} with Mobaide — a new session, a dictated prompt, and the plan {{ agent.name }} writes back"
+                     aria-describedby="demo-steps">
+                <a href="/static/site/video/{{ agent.slug }}-{{ clip.platform }}.mp4">Download the {{ clip.tab_label }} demo</a>
+              </video>
+            </div>
+            <div class="demo-ctl">
+              <button class="demo-btn" type="button" data-demo-play aria-label="Pause the demo">
+                <svg class="ico-pause" viewBox="0 0 16 16" width="16" height="16" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="3" y="2" width="4" height="12"/><rect x="9" y="2" width="4" height="12"/></svg>
+                <svg class="ico-play" viewBox="0 0 16 16" width="16" height="16" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="4" y="2" width="2" height="12"/><rect x="6" y="3" width="2" height="10"/><rect x="8" y="4" width="2" height="8"/><rect x="10" y="5" width="2" height="6"/><rect x="12" y="7" width="2" height="2"/></svg>
+              </button>
+              <span class="demo-progress" data-demo-progress aria-hidden="true"><span class="demo-progress-fill"></span></span>
+              <button class="demo-btn" type="button" data-demo-full aria-label="Watch the demo full screen">
+                <svg viewBox="0 0 16 16" width="16" height="16" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path d="M1 1h5v2H3v3H1zM10 1h5v5h-2V3h-3zM1 10h2v3h3v2H1zM13 10h2v5h-5v-2h3z"/></svg>
+              </button>
+            </div>
+          </figure>
+        </div>
+        {% endfor %}
+
+        <div class="demo-side">
+          <ol class="demo-steps" id="demo-steps">
+            <li>
+              <h3>Start {{ agent.name }}</h3>
+              <p>New session, a workspace, then {{ agent.name }}. It opens as a chat on your own computer.</p>
+            </li>
+            <li>
+              <h3>Say the prompt</h3>
+              <p>Tap the mic and talk. The text waits in the message field until you send it.</p>
+            </li>
+            <li>
+              <h3>Read the plan</h3>
+              <p>{{ agent.name }} answers in a native chat: headings, lists and code, as it writes them.</p>
+            </li>
+          </ol>
+          <p class="fineprint">Recorded in the real apps. The wait for the answer is sped up.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="strip" aria-label="At a glance">
+    <ul class="strip-list">
+      <li><span class="px-bullet"></span>Runs on <strong>your own computer</strong></li>
+      <li><span class="px-bullet"></span><strong>iPhone, Android</strong> and the web</li>
+      <li><span class="px-bullet"></span>Chat, terminal and <strong>voice input</strong></li>
+      <li><span class="px-bullet"></span>Free, no paywalled features</li>
+    </ul>
+  </section>
+
+  <section id="features" class="section" data-reveal>
+    <h2 class="h-pixel">Three ways to work with {{ agent.name }}</h2>
+    <p class="section-lede">
+      Read and steer it in a chat, talk to it, or drop into its own terminal
+      interface — from the phone in your pocket or any browser.
+    </p>
+    <div class="grid grid-3">
+
+      <article class="card card-feature notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M2 3h20v13H2zM4 5v9h16V5z"/><rect x="5" y="16" width="4" height="2"/><rect x="5" y="18" width="2" height="2"/><rect x="7" y="7" width="10" height="2"/><rect x="7" y="10" width="6" height="2"/></svg>
+          </span>
+        </div>
+        <h3>A chat built for the phone</h3>
+        <p>
+          {{ agent.name }} opens as a native chat, not a squeezed terminal:
+          Markdown answers, one card per tool call with its diff, approval
+          buttons, questions and plan progress. Messages you send while it
+          works wait in a queue.
+        </p>
+        <p>{% block chat %}{% endblock %}</p>
+      </article>
+
+      <article class="card card-feature notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="11"/><rect x="5" y="9" width="2" height="5"/><rect x="17" y="9" width="2" height="5"/><rect x="7" y="14" width="10" height="2"/><rect x="11" y="16" width="2" height="3"/><rect x="7" y="19" width="10" height="2"/></svg>
+          </span>
+        </div>
+        <h3>Talk instead of typing</h3>
+        <p>
+          Tap the mic and say what you want. Mobaide Cloud turns your speech
+          into text at once in 28 languages, or your own computer does it
+          privately in 25. The text waits in the message field until you send
+          it, and the audio is never stored.
+        </p>
+        <p>
+          With on-computer voice, {{ agent.name }} itself can tidy the
+          transcript first — filler words out, punctuation and technical terms
+          fixed — with {% block voice_cleanup %}{% endblock %}.
+        </p>
+        <p><a class="card-link" href="/voice-input">How voice input works <span aria-hidden="true">→</span></a></p>
+      </article>
+
+      <article class="card card-feature notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M1 3h22v18H1zM3 5v14h18V5z"/><rect x="5" y="8" width="2" height="2"/><rect x="7" y="10" width="2" height="2"/><rect x="5" y="12" width="2" height="2"/><rect x="11" y="14" width="7" height="2"/></svg>
+          </span>
+        </div>
+        <h3>Its own terminal, too</h3>
+        <p>
+          Want the {{ agent.name }} interface you know? Set
+          <strong>Open sessions in</strong> to <strong>Terminal</strong> and
+          get it in a real two-way terminal, sized for your screen.
+        </p>
+        <p>{% block terminal %}{% endblock %}</p>
+      </article>
+
+    </div>
+  </section>
+
+  <section id="options" class="section" data-reveal>
+    <h2 class="h-pixel">{% block made_for_title %}Made for {{ agent.name }}{% endblock %}</h2>
+    <div class="grid grid-3">
+      {% block made_for %}{% endblock %}
+    </div>
+    <h3 class="chips-title spec-title">{{ agent.name }} in Mobaide, at a glance</h3>
+    <dl class="spec">
+      {% block options %}{% endblock %}
+    </dl>
+  </section>
+
+  <section id="setup" class="section" data-reveal>
+    <h2 class="h-pixel">Set it up</h2>
+    <p class="section-lede">
+      One install on the computer that runs {{ agent.name }}, one QR scan on
+      your phone. Your computer dials out to the relay, so it works behind any
+      router, NAT or firewall — on mobile data or any Wi-Fi.
+    </p>
+    <ol class="steps">
+      <li class="step notch">
+        <span class="step-n">01</span>
+        <h3>Install the Mobaide agent</h3>
+        <p>On the computer where {{ agent.name }} is installed and signed in.</p>
+        {# One block per command; site.js copies from the <code>, the only
+           place the command lives. #}
+        <div class="copyblock">
+          <div class="copyblock-head">
+            <span class="copyblock-label c-dim"># macOS / Linux</span>
+            <button type="button" class="copy-btn" data-copy aria-label="Copy the macOS and Linux install command">
+              <svg class="copy-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.75 5.75h8.5v8.5h-8.5z"/><path d="M10.25 5.75V1.75H1.75v8.5h4"/></svg>
+              <svg class="copy-ico-done" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m2.5 8.25 3.5 3.5 7.5-7.5"/></svg>
+            </button>
+            <span class="sr-only" role="status"></span>
+          </div>
+          <pre class="code px-frame"><code>curl -fsSL https://get.mobaide.com/install.sh | bash</code></pre>
+        </div>
+        <div class="copyblock">
+          <div class="copyblock-head">
+            <span class="copyblock-label c-dim"># Windows (PowerShell)</span>
+            <button type="button" class="copy-btn" data-copy aria-label="Copy the Windows install command">
+              <svg class="copy-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.75 5.75h8.5v8.5h-8.5z"/><path d="M10.25 5.75V1.75H1.75v8.5h4"/></svg>
+              <svg class="copy-ico-done" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m2.5 8.25 3.5 3.5 7.5-7.5"/></svg>
+            </button>
+            <span class="sr-only" role="status"></span>
+          </div>
+          <pre class="code px-frame"><code>irm https://get.mobaide.com/install.ps1 | iex</code></pre>
+        </div>
+      </li>
+      <li class="step notch">
+        <span class="step-n">02</span>
+        <h3>Scan the pairing QR</h3>
+        <p>
+          The agent prints a QR code when it finishes installing. Scan it in the
+          app and you are paired — no tokens to copy, nothing to type on the
+          phone. In the browser, sign in at
+          <a href="{{ app_origin }}/login">app.mobaide.com</a> instead.
+        </p>
+      </li>
+      <li class="step notch">
+        <span class="step-n">03</span>
+        <h3>Start {{ agent.name }}</h3>
+        <p>
+          Tap <strong>New session</strong>, pick a workspace, then
+          {{ agent.name }}. It opens as a chat; choose
+          <strong>Terminal</strong> under <strong>Open sessions in</strong>
+          for its own interface.
+        </p>
+      </li>
+    </ol>
+    <p class="fineprint fineprint-after">{% block setup_note %}{% endblock %}</p>
+  </section>
+
+  <section id="more" class="section" data-reveal>
+    <h2 class="h-pixel">Also in every session</h2>
+    <div class="grid grid-3 grid-compact">
+
+      <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="5" y="2" width="4" height="4"/><rect x="6" y="6" width="2" height="12"/><rect x="5" y="18" width="4" height="4"/><rect x="15" y="4" width="4" height="4"/><rect x="16" y="8" width="2" height="5"/><rect x="8" y="13" width="10" height="2"/></svg>
+          </span>
+          <h3>Git, in the session</h3>
+        </div>
+        <p>
+          Read diffs, stage, commit, pull and push from the session's Changes
+          view — run by Git on your computer, with the credentials it already
+          has.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M3 3h18v18H3zM5 5v14h14V5z"/><rect x="11" y="7" width="2" height="10"/><rect x="7" y="11" width="10" height="2"/></svg>
+          </span>
+          <h3>Optional worktrees</h3>
+        </div>
+        <p>
+          Start a session in its own Git worktree, so parallel runs never
+          collide. <strong>Opt-in per launch, and Git workspaces only</strong>.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="10" y="2" width="4" height="2"/><rect x="7" y="4" width="10" height="2"/><rect x="6" y="6" width="12" height="8"/><rect x="4" y="14" width="16" height="2"/><rect x="3" y="16" width="18" height="2"/><rect x="10" y="19" width="4" height="2"/></svg>
+          </span>
+          <h3>Alerts when it needs you</h3>
+        </div>
+        <p>
+          The apps notify you when a chat needs a permission, finishes its turn
+          or fails. A tap opens the session, and the first answer from any of
+          your devices wins.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="2" y="3" width="4" height="4"/><rect x="8" y="4" width="14" height="2"/><rect x="2" y="10" width="4" height="4"/><rect x="8" y="11" width="14" height="2"/><rect x="2" y="17" width="4" height="4"/><rect x="8" y="18" width="14" height="2"/></svg>
+          </span>
+          <h3>Several at once</h3>
+        </div>
+        <p>
+          Up to 32 concurrent sessions on one agent, side by side in the
+          session list — {{ agent.name }} next to any other agent or a shell.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M4 2h12l4 4v16H4zM6 4v16h12V7h-3V4z"/><rect x="8" y="10" width="8" height="2"/><rect x="8" y="14" width="8" height="2"/></svg>
+          </span>
+          <h3>Prompt templates</h3>
+        </div>
+        <p>
+          Save a prompt once and insert it at the cursor in any session. Your
+          templates sync across your devices.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="3" y="7" width="12" height="2"/><rect x="15" y="5" width="2" height="6"/><rect x="17" y="6" width="2" height="4"/><rect x="19" y="7" width="2" height="2"/><rect x="9" y="15" width="12" height="2"/><rect x="7" y="13" width="2" height="6"/><rect x="5" y="14" width="2" height="4"/><rect x="3" y="15" width="2" height="2"/></svg>
+          </span>
+          <h3>Works from anywhere</h3>
+        </div>
+        <p>
+          No public IP, port forwarding, VPN or SSH. Going through the relay,
+          every hop is TLS-encrypted, and the relay never stores your session
+          traffic.
+        </p>
+      </article>
+
+    </div>
+  </section>
+
+  <section id="faq" class="section" data-reveal>
+    <h2 class="h-pixel">Questions</h2>
+    <div class="faq">
+
+      <details>
+        <summary>Is Mobaide the official {{ agent.name }} app?</summary>
+        <p>
+          No. Mobaide is an independent app and is not made by
+          {{ agent.maker }}. It starts the {{ agent.name }} you already have
+          installed and signed in on your own computer, with your settings, and
+          shows it on your phone and in your browser.
+        </p>
+      </details>
+
+      <details>
+        <summary>Does {{ agent.name }} run on my phone?</summary>
+        <p>
+          No — it runs on your Windows, macOS or Linux computer, in your
+          folders and with your tools. Your phone, tablet or browser is the
+          screen and the keyboard. That is why it can build, test and use Git
+          exactly as it does at your desk.
+        </p>
+      </details>
+
+      <details>
+        <summary>Is it free?</summary>
+        <p>
+          Yes. Mobaide has no subscription and no paywalled features.
+          {{ agent.name }} uses your own account or API key as it does today:
+          Mobaide does not resell or proxy any model provider.
+        </p>
+      </details>
+
+      <details>
+        <summary>How do I sign in to {{ agent.name }} from my phone?</summary>
+        <p>{% block faq_signin %}{% endblock %}</p>
+      </details>
+
+      <details>
+        <summary>Can I continue a {{ agent.name }} session I started on my computer?</summary>
+        <p>{% block faq_continue %}{% endblock %}</p>
+      </details>
+
+      {% block faq_extra %}{% endblock %}
+
+      <details>
+        <summary>What leaves my computer?</summary>
+        <p>
+          Session traffic is relayed, not stored: your messages, the agent's
+          replies and any dictation audio pass through the relay's in-memory
+          routing and are then discarded. The relay keeps only what has to sync
+          across your devices — your account, paired devices, prompt templates,
+          saved shortcuts and custom agent types. If you choose Mobaide Cloud
+          for voice input, its speech service keeps the recognised text for up
+          to 14 days to prevent abuse, never the audio. The
+          <a href="/privacy.html">privacy policy</a> lists every field.
+        </p>
+      </details>
+
+    </div>
+  </section>
+
+  <section class="section section-tight" data-reveal>
+    <h2 class="chips-title">More agents on your phone</h2>
+    <ul class="chips" aria-label="Other agents">
+      {% for other in agents if other.slug != agent.slug %}
+      <li><a class="chip chip-link" href="{{ other.path }}">{{ other.label }}</a></li>
+      {% endfor %}
+      <li><a class="chip chip-link" href="/voice-input">Voice input</a></li>
+    </ul>
+    <p class="fineprint">
+      Mobaide runs them all from one app, side by side — plus raw shells and
+      agent types you define yourself.
+    </p>
+  </section>
+
+  <section class="section" data-reveal>
+    <div class="cta-panel notch">
+      <h2 class="h-pixel">Take {{ agent.name }} with you</h2>
+      <p class="section-lede">
+        Install the agent on your computer, pair your phone with one QR scan,
+        and start {{ agent.name }} from wherever you are.
+      </p>
+      <div class="cta">
+        <a class="badge-link" href="https://play.google.com/store/apps/details?id=com.mobaide.app" rel="noopener">
+          <img src="/static/site/img/google-play-badge.png?v={{ asset_version }}"
+               width="323" height="125" alt="Get it on Google Play" loading="lazy">
+        </a>
+        <a class="badge-link badge-apple" href="https://apps.apple.com/app/id6797191741" rel="noopener">
+          <img src="/static/site/img/app-store-badge.svg?v={{ asset_version }}"
+               width="120" height="40" alt="Download on the App Store" loading="lazy">
+        </a>
+      </div>
+      <div class="cta">
+        <a class="btn" href="{{ app_origin }}/">Open the web app</a>
+        <a class="btn btn-ghost" href="#setup">Install the agent</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+{% include "_site_foot.html" %}
+</body>
+</html>

@@ -1,0 +1,114 @@
+{#
+  /agents/junie. Facts: docs/features.md (Chat Sessions: Junie sessions and
+  options, Delete a stored session; Session Notifications on Junie terminal
+  sessions) and the Junie options panels. See marketing_agent.html for the
+  rules.
+#}{% extends "marketing_agent.html" %}
+
+{% block title %}Junie CLI on your phone: iPhone, Android, web | Mobaide{% endblock %}
+
+{% block description %}Use JetBrains Junie CLI from your iPhone, Android phone or browser. It runs on your own computer, and Mobaide gives it a native chat, a real terminal and voice input. Free.{% endblock %}
+
+{% block lede %}
+  Start <strong>Junie CLI</strong> from JetBrains on your own computer from
+  your iPhone, Android phone or browser. Begin in Plan mode, switch to
+  Goal or Brave when you are ready, and follow every step in a chat built for
+  the phone.
+{% endblock %}
+
+{% block chat %}
+  Chips set Junie's mode (Default, Plan or Goal), the model, the effort and
+  Brave mode (Auto, Brave or Safe). Junie's approvals and questions arrive as
+  cards you answer with a tap.
+{% endblock %}
+
+{% block voice_cleanup %}Junie Lite{% endblock %}
+
+{% block terminal %}
+  On Android and iPhone, a control-key bar sends Mode (Shift+Tab, toggles
+  Plan) and Ctrl+P (opens the plan), then Esc, Ctrl+C, Enter, Tab, the arrow
+  keys, Ctrl+O and Ctrl+R. On macOS and Linux, Junie's own hooks tell your
+  phone when a terminal session needs you or finishes.
+{% endblock %}
+
+{% block made_for %}
+  <article class="card notch">
+    <h3>Plan first, then act</h3>
+    <p>
+      <strong>Start in Plan mode</strong> has Junie prepare a plan and ask
+      before it changes files. <strong>Brave mode (dangerous)</strong> runs
+      every command without asking, for that session only.
+    </p>
+  </article>
+  <article class="card notch">
+    <h3>Your terminal sessions too</h3>
+    <p>
+      <strong>Continue a session</strong> lists your Junie sessions —
+      including the ones you started in Junie's own terminal interface — and
+      opens one with its history. Delete the ones you no longer need from the
+      same list.
+    </p>
+  </article>
+  <article class="card notch">
+    <h3>Trust, like the CLI</h3>
+    <p>
+      Junie loads a folder's MCP servers, skills and commands, so the chat
+      asks <strong>Trust this folder?</strong> first. A folder you already
+      trusted in Junie's terminal interface needs no question.
+    </p>
+  </article>
+{% endblock %}
+
+{% block options %}
+  <div class="spec-row">
+    <dt>Before you start</dt>
+    <dd>Start in Plan mode and Brave mode (dangerous). The model and the effort are chips inside the chat.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>In the chat</dt>
+    <dd>Default, Plan and Goal modes, model, effort and Brave chips, approval cards, question forms, slash-command suggestions and prompt templates.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Sign-in</dt>
+    <dd>Sign in once in a Junie terminal session, then restart the chat.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Earlier sessions</dt>
+    <dd>Every Junie session on the computer, also ones from Junie's terminal interface, with its history. Delete removes one.</dd>
+  </div>
+  <div class="spec-row">
+    <dt>Voice cleanup</dt>
+    <dd>Optional, with on-computer voice: Junie tidies each transcript with Junie Lite.</dd>
+  </div>
+{% endblock %}
+
+{% block setup_note %}
+  The chat view needs only the <code>junie</code> binary — no adapter and no
+  Node.js. Terminal sessions run Junie's own interface.
+{% endblock %}
+
+{% block faq_signin %}
+  The chat has no sign-in card of its own. Start a Junie session with
+  <strong>Open sessions in</strong> set to <strong>Terminal</strong>, sign in
+  there as Junie asks, then restart the chat. If you are already signed in to
+  Junie on the computer, there is nothing to do.
+{% endblock %}
+
+{% block faq_continue %}
+  Yes. In <strong>New session</strong>, pick Junie and choose
+  <strong>Continue a session</strong>: it lists your Junie sessions,
+  including the ones started in Junie's own terminal interface, and opens one
+  with its history.
+{% endblock %}
+
+{% block faq_extra %}
+      <details>
+        <summary>Can I use Junie Lite in the chat?</summary>
+        <p>
+          No — Junie Lite works only in Junie's terminal interface and in
+          JetBrains apps. Pick another model on the chat's model chip, or run a
+          terminal session to use Junie Lite. If no model can answer, the chat
+          says how to get one.
+        </p>
+      </details>
+{% endblock %}
