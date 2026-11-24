@@ -215,10 +215,10 @@ class TerminalSession:
         # badge even if it missed the one-shot ``session.attention`` event.
         self._attention: str | None = None
         self._exit_reason: str | None = None
-        # ``working`` / ``waiting`` / ``idle`` as Claude Code's hooks report it;
-        # ``None`` until the first hook, and for good on a session without hooks
-        # (Codex, Antigravity, OpenCode, Copilot, Cursor, Junie, Pi, Terminal), whose
-        # activity the agent cannot see.
+        # ``working`` / ``waiting`` / ``idle`` as the hooks or, for a hookless
+        # session, the OSC 7501 reports give it; ``None`` until the first one,
+        # and for good on a session whose program reports nothing (Cursor, a
+        # plain shell).
         self._activity: str | None = None
         # Decides which Claude Code hooks actually become an alert. ``Stop``
         # fires once per model turn — including every re-invocation a completing
@@ -245,6 +245,7 @@ class TerminalSession:
             self._status_gate = ProgramStatusGate(
                 on_alert=self._raise_program_attention,
                 on_clear_permission=self.clear_attention,
+                on_activity=self.set_activity,
                 is_running=lambda: self._state == SessionState.RUNNING,
                 current_attention=lambda: self._attention,
                 quiet_seconds=config.attention_quiet_seconds,

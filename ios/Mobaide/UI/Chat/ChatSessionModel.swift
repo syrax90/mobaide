@@ -102,7 +102,11 @@ final class ChatSessionModel {
     @ObservationIgnored private var detachTask: Task<Void, Never>?
     @ObservationIgnored private let outbound: AsyncStream<Outbound>
     @ObservationIgnored private let outboundContinuation: AsyncStream<Outbound>.Continuation
-    @ObservationIgnored private var screenVisible = false
+    /// Chat screens showing this model. Usually one, but two can overlap: a
+    /// push of the same session, or a new screen that appears before the old one
+    /// disappears. A single flag would read "hidden" while one is on screen.
+    @ObservationIgnored private var visibleScreens = 0
+    private var screenVisible: Bool { visibleScreens > 0 }
     @ObservationIgnored private var appActive = true
     /// Healthy use of this visit, for the review prompt.
     @ObservationIgnored private var reviewMeter = HealthyTimeMeter()
@@ -187,20 +191,26 @@ final class ChatSessionModel {
     // MARK: - Lifecycle
 
     func markVisible() {
-        reviewPrompt.terminalVisitStarted()
-        screenVisible = true
+        visibleScreens += 1
+        if visibleScreens == 1 {
+            reviewPrompt.terminalVisitStarted()
+        }
         foregroundSessionTracker.setVisible(sessionId)
         syncWatch()
     }
 
     func markHidden() {
+        guard visibleScreens > 0 else { return }
+        visibleScreens -= 1
+        guard visibleScreens == 0 else { return }
         reportReviewVisit()
-        screenVisible = false
         foregroundSessionTracker.clearVisible(sessionId)
         syncWatch()
     }
 
     func setAppActive(_ active: Bool) {
+        // Every appearing screen reports the scene phase; only a change matters.
+        guard active != appActive else { return }
         appActive = active
         syncWatch()
     }

@@ -25,6 +25,7 @@ struct ChatScreen: View {
     @State private var pickingConfig: ChatConfigOption?
     @State private var screenHeight: CGFloat = 0
     @FocusState private var signInFieldFocused: Bool
+    @FocusState private var composerFocused: Bool
 
     private let container: AppContainer
     private let sessionId: String
@@ -35,6 +36,9 @@ struct ChatScreen: View {
     @Environment(DeepLinkCoordinator.self) private var deepLink
     @Environment(\.mobaideColors) private var colors
     @Environment(\.scenePhase) private var scenePhase
+    /// The model counts the screens showing it, and SwiftUI can fire `onAppear`
+    /// again without an `onDisappear`, so each instance counts once per visit.
+    @State private var countedVisible = false
 
     init(
         container: AppContainer,
@@ -102,7 +106,7 @@ struct ChatScreen: View {
                 )
                     .overlay(alignment: .leading) { edgePanStrip }
                 // The timeline gives up its height first; inside the dock,
-                // the request card's capped body gives way next.
+                // the request card gives way next (see `dock`).
                 dock.layoutPriority(1)
             }
             if !model.isLive && !model.sessionClosed {
@@ -226,11 +230,17 @@ struct ChatScreen: View {
         }
         .onAppear {
             model.setAppActive(scenePhase != .background)
-            model.markVisible()
+            if !countedVisible {
+                countedVisible = true
+                model.markVisible()
+            }
             container.notificationService.remove(sessionId: sessionId)
         }
         .onDisappear {
-            model.markHidden()
+            if countedVisible {
+                countedVisible = false
+                model.markHidden()
+            }
             voice.leave()
             UIApplication.shared.isIdleTimerDisabled = false
         }
@@ -325,13 +335,16 @@ struct ChatScreen: View {
                     request: request,
                     moreWaiting: model.state.requests.count - 1,
                     bodyCap: max(120, screenHeight * 0.3),
-                    signInFieldFocused: $signInFieldFocused
+                    signInFieldFocused: $signInFieldFocused,
+                    collapsed: requestCollapsed
                 )
                 .id(request.id)
                 .padding(EdgeInsets(top: signInTyping ? 4 : 12, leading: 12, bottom: hasPlanOrQueue && !signInTyping ? 0 : 4, trailing: 12))
             }
-            // While the sign-in code is typed, the card alone stays above
-            // the keyboard: on a small phone there is no room for the rest.
+            // On a small phone there is no room above the keyboard for the
+            // card and the composer both: while the sign-in code is typed,
+            // the card alone stays; while a message is typed, the card
+            // shrinks to its header line.
             if !signInTyping {
                 if hasPlanOrQueue {
                     ChatCappedScroll(maxHeight: planQueueCap) { planAndQueue }
@@ -340,6 +353,7 @@ struct ChatScreen: View {
                 ChatComposer(
                     model: model,
                     voice: voice,
+                    focused: $composerFocused,
                     onOpenTemplates: { showTemplates = true },
                     onSaveTemplate: {
                         templateName = ""
@@ -358,6 +372,10 @@ struct ChatScreen: View {
     private var signInTyping: Bool {
         guard signInFieldFocused, case .signIn(let signIn) = model.state.requests.first else { return false }
         return signIn.waiting && signIn.input != nil
+    }
+
+    private var requestCollapsed: Bool {
+        composerFocused && !signInTyping
     }
 
     private var hasPlanOrQueue: Bool {

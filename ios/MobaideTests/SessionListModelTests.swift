@@ -339,6 +339,34 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertEqual(model.notice, "That session has ended.")
     }
 
+    func testAutoResumeNeverFiresOnceTheListIsCovered() async throws {
+        let prefs = isolatedPrefs()
+        prefs.setLastUsedSessionId("a")
+        let (model, repo, bus, factory) = makeStack(prefs: prefs)
+        let collector = StreamCollector(model.autoResumeEvents())
+        let observe = Task { await model.observeSessions() }
+        let observeSynced = Task { await model.observeSessionsSynced() }
+        defer {
+            observe.cancel()
+            observeSynced.cancel()
+        }
+        repo.start()
+        await bus.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+
+        // The user opened a session before the first snapshot came, and that
+        // session is the new last-used one.
+        model.endAutoResume()
+        connection.emit(.text(snapshot("a", "running")))
+
+        let noResume = await collector.expectNoElement(within: .milliseconds(300))
+        XCTAssertTrue(noResume, "a covered list must not push the last-used session again")
+        let late = StreamCollector(model.autoResumeEvents())
+        let noReplay = await late.expectNoElement(within: .milliseconds(100))
+        XCTAssertTrue(noReplay, "nothing is cached for a returning list either")
+    }
+
     func testAutoResumeNotReplayedAfterClear() async throws {
         let prefs = isolatedPrefs()
         prefs.setLastUsedSessionId("a")
