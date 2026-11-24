@@ -44,6 +44,16 @@ function renderHarness(agentId = 'a1', sessionId = 's1') {
 
 const label = (): string | null => screen.getByTestId('label').textContent;
 
+/**
+ * React Query hands observer updates to its notify manager, which flushes them
+ * in a `setTimeout(0)`, not a microtask. A zero timeout queued after that one
+ * runs after it, so awaiting it inside `act` always lands the update.
+ */
+const notifyManagerTick = () =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   api.sessions = [];
@@ -77,9 +87,7 @@ describe('useSessionHeaderLabel', () => {
 
     await act(async () => {
       client.setQueryData(queryKeys.sessions('a1'), [session({ title: '* Fix the header' })]);
-      // React Query notifies its subscribers on a microtask; yielding here
-      // spends it inside `act`, so the render is flushed on the way out.
-      await Promise.resolve();
+      await notifyManagerTick();
     });
 
     expect(label()).toBe('* Fix the header');
@@ -99,7 +107,7 @@ describe('useSessionHeaderLabel', () => {
     // case proves an update lands inside one `act`, so this is not vacuous.
     await act(async () => {
       client.setQueryData(queryKeys.sessions('a1'), []);
-      await Promise.resolve();
+      await notifyManagerTick();
     });
 
     expect(label()).toBe('* Fix the header');
