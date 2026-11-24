@@ -63,17 +63,41 @@ class AgentSettingsService:
         self._keep_awake = keep_awake if keep_awake is not None else KeepAwake(*detect_backend())
         self._keep_awake.on_change = self._announce
         self._lock = asyncio.Lock()
+        self._starting: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Apply the stored choice: a computer kept awake before a restart
         stays awake after it."""
-        if load_settings(self._file).get("keep_awake") is True:
+        try:
             async with self._lock:
+                # Read under the lock: a PUT that ran first has the last word.
+                if load_settings(self._file).get("keep_awake") is not True:
+                    return
                 await self._keep_awake.set(True)
             self._announce()
+        except Exception:
+            logger.exception("agent_settings.start_failed")
 
-    async def shutdown(self) -> None:
-        await self._keep_awake.close()
+    async def bridge(self) -> None:
+        """For an update restart, before shutdown steps that may hang: the
+        restart watchdog exits hard, with no shutdown, after 60 s."""
+        await self._keep_awake.bridge()
+
+    def start_soon(self) -> None:
+        """``start`` in the background, so boot never waits for an inhibitor."""
+        if self._starting is None:
+            self._starting = asyncio.create_task(self.start(), name="agent-settings-start")
+
+    async def shutdown(self, *, restarting: bool = False) -> None:
+        """``restarting``: the supervisor starts the agent again at once, so
+        the computer stays awake across the gap."""
+        starting, self._starting = self._starting, None
+        if starting is not None:
+            starting.cancel()
+            # wait() does not raise the task's CancelledError, so a cancel
+            # aimed at this shutdown still gets through.
+            await asyncio.wait({starting})
+        await self._keep_awake.close(bridge=restarting)
 
     def status(self) -> AgentSettingsResponse:
         state, message = self._keep_awake.snapshot()

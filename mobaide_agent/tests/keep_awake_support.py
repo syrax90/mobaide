@@ -13,7 +13,8 @@ from collections.abc import Callable
 class FakeBackend:
     """``refuse`` makes every acquire raise it; with a ``gate`` an acquire
     waits on it, like a slow inhibitor. ``lose`` and ``regain`` act like
-    the OS taking the lock away and giving it back."""
+    the OS taking the lock away and giving it back. ``bridges`` counts the
+    restart bridges."""
 
     def __init__(self) -> None:
         self.on_change: Callable[[], None] | None = None
@@ -23,6 +24,7 @@ class FakeBackend:
         self.gate: asyncio.Event | None = None
         self.acquires = 0
         self.cancelled = 0
+        self.bridges = 0
 
     async def acquire(self) -> None:
         self.acquires += 1
@@ -38,6 +40,9 @@ class FakeBackend:
 
     async def release(self) -> None:
         self.held = False
+
+    async def bridge(self) -> None:
+        self.bridges += 1
 
     def lose(self, error: str) -> None:
         self.held, self.error = False, error

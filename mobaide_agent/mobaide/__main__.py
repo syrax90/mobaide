@@ -326,6 +326,8 @@ def main(argv: list[str] | None = None) -> None:
         # ``asyncio.to_thread(subprocess.run, ...)`` in
         # ``mobaide.linear.worktree._run_git`` (so Linear-driven worktree
         # operations keep working on Windows under either loop policy).
+        # ``mobaide.agent.settings.keep_awake`` uses it in its Linux
+        # backend only.
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     parser = _build_parser()

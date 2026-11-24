@@ -204,6 +204,61 @@ class TestAgentSettingsService:
         assert json.loads(settings_file.read_text(encoding="utf-8"))["keep_awake"] is False
         assert published[-1] == (EVENT_TYPE, _wire(False, "off"))
 
+    async def test_a_start_waiting_behind_toggles_does_not_undo_the_last_one(
+        self, settings_file, backend, published
+    ):
+        """The boot re-apply runs in the background, so a toggle can take the
+        lock before it. The start must read the choice when its turn comes,
+        not the "on" it would have read while it waited."""
+        backend.gate = asyncio.Event()
+        service = _service(settings_file, backend, published)
+        turning_on = asyncio.create_task(service.set_keep_awake(True))
+        await asyncio.wait_for(_until(lambda: backend.acquires == 1), 5)
+        turning_off = asyncio.create_task(service.set_keep_awake(False))
+        await asyncio.sleep(0)
+        starting = asyncio.create_task(service.start())
+        await asyncio.sleep(0)
+
+        backend.gate.set()
+        await asyncio.wait_for(asyncio.gather(turning_on, turning_off, starting), 5)
+
+        assert backend.acquires == 1
+        assert not backend.held
+        assert service.status().model_dump(mode="json") == _wire(False, "off")
+        assert published[-1] == (EVENT_TYPE, _wire(False, "off"))
+
+    async def test_a_shutdown_during_a_slow_start_cancels_it_and_holds_nothing(
+        self, settings_file, backend, published
+    ):
+        await _service(settings_file, FakeBackend(), []).set_keep_awake(True)
+        backend.gate = asyncio.Event()
+        service = _service(settings_file, backend, published)
+        service.start_soon()
+        await asyncio.wait_for(_until(lambda: backend.acquires == 1), 5)
+
+        await asyncio.wait_for(service.shutdown(restarting=True), 5)
+
+        assert backend.cancelled == 1
+        assert not backend.held
+        assert published == []
+
+    @pytest.mark.parametrize(
+        ("refuse", "restarting", "bridges"),
+        [(None, True, 1), (None, False, 0), (KeepAwakeError("Access denied"), True, 0)],
+        ids=["restart_while_awake", "stop", "restart_while_failed"],
+    )
+    async def test_shutdown_bridges_only_a_restart_while_the_lock_holds(
+        self, settings_file, backend, published, refuse, restarting, bridges
+    ):
+        backend.refuse = refuse
+        service = _service(settings_file, backend, published)
+        await service.set_keep_awake(True)
+
+        await service.shutdown(restarting=restarting)
+
+        assert backend.bridges == bridges
+        assert not backend.held
+
 
 async def _until(predicate) -> None:
     while not predicate():

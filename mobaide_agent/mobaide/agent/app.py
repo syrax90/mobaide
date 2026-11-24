@@ -455,6 +455,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("agent.starting")
+        # First, before anything slow: after an update restart the computer
+        # must not fall asleep while this process boots.
+        app.state.agent_settings.start_soon()
         # macOS-only: ``False`` means no Full Disk Access, so protected-folder
         # reads pop a host-desktop TCC modal the remote client can't see (the
         # per-session startup-stall watchdog surfaces that). Logged once.
@@ -616,9 +619,10 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         # for the restart; start no voice work in a process that is stopping.
         if not restart_requested():
             await app.state.voice.start()
-            await app.state.agent_settings.start()
         yield
         logger.info("agent.shutting_down")
+        if restart_requested():
+            await app.state.agent_settings.bridge()
         models_warmup = getattr(app.state, "cli_models_warmup", None)
         if models_warmup is not None and not models_warmup.done():
             models_warmup.cancel()
@@ -651,7 +655,6 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         if relay_client is not None:
             await relay_client.stop()
         await app.state.voice.shutdown()
-        await app.state.agent_settings.shutdown()
         autoscan_mgr = getattr(app.state, "autoscan_manager", None)
         if autoscan_mgr is not None:
             await autoscan_mgr.shutdown()
@@ -661,6 +664,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             fanout.stop()
         await app.state.session_manager.shutdown()
         await app.state.chat_catalog.close()
+        # Last, so the computer stays awake while the sessions stop; an update
+        # restart hands the lock over to the next process.
+        await app.state.agent_settings.shutdown(restarting=restart_requested())
         shutdown_logging()
 
     # Default-deny on the doc routes: the agent binds every interface, so
