@@ -3002,9 +3002,10 @@ export interface components {
          * @description Whether the agent keeps this computer from idle-sleeping.
          *
          *     ``enabled`` is the stored choice. ``state``: ``off`` (the choice is
-         *     off), ``active`` (the computer stays awake now), ``failed`` (on, but the
-         *     OS refused; ``message`` says why) or ``unsupported`` (this computer has
-         *     no way to stay awake, whatever the choice; ``message`` says why).
+         *     off), ``active`` (the computer stays awake now; ``message`` is a note on
+         *     how, or null), ``failed`` (on, but the OS refused; ``message`` says why)
+         *     or ``unsupported`` (this computer has no way to stay awake, whatever the
+         *     choice; ``message`` says why).
          */
         KeepAwakeStatus: {
             /** Enabled */

@@ -37,7 +37,8 @@ object KeepAwakeCopy {
 
     fun hint(agentName: String) =
         "Stops $agentName from going to sleep while it is idle, so your sessions stay reachable. " +
-            "The screen can still turn off. Closing a laptop lid still puts it to sleep."
+            "The screen can still turn off, except on some Windows laptops on battery, " +
+            "where it stays on and does not lock by itself. Closing a laptop lid still puts it to sleep."
 
     fun checking(agentName: String) = "Checking $agentName…"
 
@@ -57,7 +58,7 @@ object KeepAwakeCopy {
 /**
  * Keep awake for the connected agent: a checkbox row, the whole row one
  * target, and a line that says why the computer is not kept awake when the
- * agent could not do it.
+ * agent could not do it, or the agent's note on how it keeps it awake.
  */
 @Composable
 fun KeepAwakeSection(
@@ -119,6 +120,7 @@ private fun KeepAwakeRow(
         unsupported -> Note(KeepAwakeCopy.unsupported(name, status.message))
         state.saving == null && status.enabled && status.state != KeepAwakeStatus.STATE_ACTIVE ->
             Note(KeepAwakeCopy.failed(name, status.message), error = true)
+        status.state == KeepAwakeStatus.STATE_ACTIVE && status.message != null -> Note(status.message)
     }
 }
 

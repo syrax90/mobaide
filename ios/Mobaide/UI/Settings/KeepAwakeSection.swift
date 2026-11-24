@@ -11,7 +11,8 @@ enum KeepAwakeCopy {
 
     static func hint(_ agent: String) -> String {
         "Stops \(agent) from going to sleep while it is idle, so your sessions stay reachable. "
-            + "The screen can still turn off. Closing a laptop lid still puts it to sleep."
+            + "The screen can still turn off, except on some Windows laptops on battery, "
+            + "where it stays on and does not lock by itself. Closing a laptop lid still puts it to sleep."
     }
 
     static func checking(_ agent: String) -> String { "Checking \(agent)…" }
@@ -35,7 +36,8 @@ enum KeepAwakeCopy {
 
 /// Keep awake for the connected agent (Android `KeepAwakeSection`): a
 /// checkbox row, and a line that says why the computer is not kept awake
-/// when the agent could not do it.
+/// when the agent could not do it, or the agent's note on how it keeps it
+/// awake.
 struct KeepAwakeSection: View {
     let model: KeepAwakeModel
 
@@ -76,6 +78,7 @@ struct KeepAwakeSection: View {
     private func row(_ status: KeepAwakeStatus) -> some View {
         let name = model.agentName
         let unsupported = status.state == KeepAwakeStatus.stateUnsupported
+        let shown = rowNote(status)
         return VStack(alignment: .leading, spacing: 6) {
             Toggle(isOn: binding(status)) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -87,15 +90,29 @@ struct KeepAwakeSection: View {
             }
             .disabled(model.saving != nil || (unsupported && !status.enabled))
             .accessibilityIdentifier("keep_awake_checkbox")
-            if model.saveFailed {
-                note(KeepAwakeCopy.saveFailed(name), error: true)
-            } else if unsupported {
-                note(KeepAwakeCopy.unsupported(name, message: status.message))
-            } else if model.saving == nil, status.enabled, status.state != KeepAwakeStatus.stateActive {
-                note(KeepAwakeCopy.failed(name, message: status.message), error: true)
+            if let shown {
+                note(shown.text, error: shown.error)
             }
         }
         .padding(.vertical, 4)
+        // Android's polite live region and web's role="status" read a new note aloud.
+        .onChange(of: shown?.text) { _, text in
+            if let text { AccessibilityNotification.Announcement(text).post() }
+        }
+    }
+
+    private func rowNote(_ status: KeepAwakeStatus) -> (text: String, error: Bool)? {
+        let name = model.agentName
+        if model.saveFailed {
+            return (KeepAwakeCopy.saveFailed(name), true)
+        } else if status.state == KeepAwakeStatus.stateUnsupported {
+            return (KeepAwakeCopy.unsupported(name, message: status.message), false)
+        } else if model.saving == nil, status.enabled, status.state != KeepAwakeStatus.stateActive {
+            return (KeepAwakeCopy.failed(name, message: status.message), true)
+        } else if status.state == KeepAwakeStatus.stateActive, let message = status.message {
+            return (message, false)
+        }
+        return nil
     }
 
     private func note(_ text: String, error: Bool = false) -> some View {

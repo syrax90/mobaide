@@ -3703,7 +3703,7 @@
         "type": "object"
       },
       "KeepAwakeStatus": {
-        "description": "Whether the agent keeps this computer from idle-sleeping.\n\n``enabled`` is the stored choice. ``state``: ``off`` (the choice is\noff), ``active`` (the computer stays awake now), ``failed`` (on, but the\nOS refused; ``message`` says why) or ``unsupported`` (this computer has\nno way to stay awake, whatever the choice; ``message`` says why).",
+        "description": "Whether the agent keeps this computer from idle-sleeping.\n\n``enabled`` is the stored choice. ``state``: ``off`` (the choice is\noff), ``active`` (the computer stays awake now; ``message`` is a note on\nhow, or null), ``failed`` (on, but the OS refused; ``message`` says why)\nor ``unsupported`` (this computer has no way to stay awake, whatever the\nchoice; ``message`` says why).",
         "properties": {
           "enabled": {
             "title": "Enabled",

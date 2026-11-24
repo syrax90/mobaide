@@ -20,6 +20,7 @@ class FakeBackend:
         self.on_change: Callable[[], None] | None = None
         self.held = False
         self.error: str | None = None
+        self.note: str | None = None
         self.refuse: Exception | None = None
         self.gate: asyncio.Event | None = None
         self.acquires = 0

@@ -16,7 +16,8 @@ interface AgentSettingsDialogProps {
 export function keepAwakeHint(agentName: string): string {
   return (
     `Stops ${agentName} from going to sleep while it is idle, so your sessions stay reachable. ` +
-    'The screen can still turn off. Closing a laptop lid still puts it to sleep.'
+    'The screen can still turn off, except on some Windows laptops on battery, ' +
+    'where it stays on and does not lock by itself. Closing a laptop lid still puts it to sleep.'
   );
 }
 
@@ -106,6 +107,8 @@ function KeepAwakeSetting({
   } else if (!save.isPending && status.enabled && status.state !== KEEP_AWAKE_STATE.active) {
     const reason = status.message ?? 'The computer did not say why.';
     note = { text: `${agentName} can’t stay awake: ${reason}`, alert: true };
+  } else if (status.state === KEEP_AWAKE_STATE.active && status.message) {
+    note = { text: status.message, alert: false };
   }
   return (
     <>

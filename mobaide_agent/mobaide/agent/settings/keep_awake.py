@@ -3,8 +3,9 @@
 Every backend is tied to the agent process, so a crash or a kill releases it.
 Linux holds locks in child processes whose stdin pipe closes when the agent
 dies. Only an update restart's bridge outlives the process: for
-``BRIDGE_SECONDS``, or one sleep timeout on Windows. None stops the screen
-turning off or a lid close from sleeping.
+``BRIDGE_SECONDS``, or one sleep timeout on Windows. Only a Windows Modern
+Standby laptop on battery also keeps its screen on; none stops a lid close
+from sleeping.
 """
 from __future__ import annotations
 
@@ -42,6 +43,11 @@ class Backend(Protocol):
     @property
     def error(self) -> str | None: ...
 
+    @property
+    def note(self) -> str | None:
+        """What the user should know about how the lock is held, shown with ``active``."""
+        ...
+
     on_change: Callable[[], None] | None
 
     async def acquire(self) -> None: ...
@@ -51,7 +57,7 @@ class Backend(Protocol):
     async def bridge(self) -> None:
         """Keep the computer awake past this process while the supervisor
         starts the agent again: ``BRIDGE_SECONDS`` on macOS and Linux, one
-        idle-timer reset on Windows."""
+        reset of the idle timers on Windows."""
         ...
 
 
@@ -76,6 +82,10 @@ class MacBackend:
 
     @property
     def error(self) -> str | None:
+        return None
+
+    @property
+    def note(self) -> str | None:
         return None
 
     def _load(self) -> tuple[ctypes.CDLL, ctypes.CDLL]:
@@ -171,17 +181,81 @@ class _ReasonContext(ctypes.Structure):
     _fields_ = [("Version", ctypes.c_uint32), ("Flags", ctypes.c_uint32), ("Reason", _ReasonUnion)]
 
 
+class _PowerStatus(ctypes.Structure):
+    """``SYSTEM_POWER_STATUS``."""
+
+    _fields_ = [
+        ("ACLineStatus", ctypes.c_ubyte),
+        ("BatteryFlag", ctypes.c_ubyte),
+        ("BatteryLifePercent", ctypes.c_ubyte),
+        ("SystemStatusFlag", ctypes.c_ubyte),
+        ("BatteryLifeTime", ctypes.c_uint32),
+        ("BatteryFullLifeTime", ctypes.c_uint32),
+    ]
+
+
+class _BatteryScale(ctypes.Structure):
+    _fields_ = [("Granularity", ctypes.c_uint32), ("Capacity", ctypes.c_uint32)]
+
+
+class _PowerCapabilities(ctypes.Structure):
+    """``SYSTEM_POWER_CAPABILITIES``: ``CallNtPowerInformation`` refuses a
+    smaller buffer, so every field is here."""
+
+    _fields_ = [
+        *(
+            (name, ctypes.c_ubyte)
+            for name in (
+                "PowerButtonPresent", "SleepButtonPresent", "LidPresent",
+                "SystemS1", "SystemS2", "SystemS3", "SystemS4", "SystemS5",
+                "HiberFilePresent", "FullWake", "VideoDimPresent", "ApmPresent",
+                "UpsPresent", "ThermalControl", "ProcessorThrottle",
+                "ProcessorMinThrottle", "ProcessorMaxThrottle", "FastSystemS4",
+                "Hiberboot", "WakeAlarmPresent", "AoAc", "DiskSpinDown",
+                "HiberFileType", "AoAcConnectivitySupported",
+            )
+        ),
+        ("spare3", ctypes.c_ubyte * 6),
+        ("SystemBatteriesPresent", ctypes.c_ubyte),
+        ("BatteriesAreShortTerm", ctypes.c_ubyte),
+        ("BatteryScale", _BatteryScale * 3),
+        ("AcOnLineWake", ctypes.c_int),
+        ("SoftLidWake", ctypes.c_int),
+        ("RtcWake", ctypes.c_int),
+        ("MinDeviceWakeState", ctypes.c_int),
+        ("DefaultLowLatencyWake", ctypes.c_int),
+    ]
+
+
 _POWER_REQUEST_CONTEXT_VERSION = 0
 _POWER_REQUEST_CONTEXT_SIMPLE_STRING = 0x1
+_POWER_REQUEST_DISPLAY_REQUIRED = 0
 _POWER_REQUEST_SYSTEM_REQUIRED = 1
 _ES_SYSTEM_REQUIRED = 0x00000001
+_ES_DISPLAY_REQUIRED = 0x00000002
+_SYSTEM_POWER_CAPABILITIES = 4
+_AC_OFFLINE = 0
+_AC_ONLINE = 1
 _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+# How often a Modern Standby laptop's power source is read: well inside the
+# shortest screen timeout Windows offers (1 minute).
+_POWER_CHECK_SECONDS = 30.0
+
+STANDBY_SCREEN_NOTE = (
+    "Windows lets this laptop sleep on battery unless its screen is on. "
+    "So on battery, the screen stays on and does not lock by itself."
+)
 
 
 class WindowsBackend:
     """A power request, as ``powercfg /requests`` lists it; Windows closes
     the handle, and so drops the request, when the process exits. Unlike
-    ``SetThreadExecutionState`` it does not belong to the calling thread."""
+    ``SetThreadExecutionState`` it does not belong to the calling thread.
+
+    On battery, a Modern Standby laptop ends a system request 5 minutes
+    after its sleep timeout; only a display request keeps it awake. So
+    there the request also keeps the screen on while the power source,
+    read every ``_POWER_CHECK_SECONDS``, is the battery."""
 
     def __init__(self) -> None:
         self.on_change: Callable[[], None] | None = None
@@ -189,6 +263,9 @@ class WindowsBackend:
         # The request keeps pointing at the reason string while it lives.
         self._context: _ReasonContext | None = None
         self._kernel32: ctypes.CDLL | None = None
+        self._standby_laptop: bool | None = None
+        self._display = False
+        self._power_watch: asyncio.Task[None] | None = None
 
     @property
     def held(self) -> bool:
@@ -197,6 +274,10 @@ class WindowsBackend:
     @property
     def error(self) -> str | None:
         return None
+
+    @property
+    def note(self) -> str | None:
+        return STANDBY_SCREEN_NOTE if self._handle is not None and self._standby_laptop else None
 
     def _load(self) -> ctypes.CDLL:
         kernel32 = self._kernel32
@@ -212,8 +293,67 @@ class WindowsBackend:
             kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
             kernel32.SetThreadExecutionState.restype = ctypes.c_uint32
             kernel32.SetThreadExecutionState.argtypes = [ctypes.c_uint32]
+            kernel32.GetSystemPowerStatus.restype = ctypes.c_int
+            kernel32.GetSystemPowerStatus.argtypes = [ctypes.POINTER(_PowerStatus)]
             self._kernel32 = kernel32
         return kernel32
+
+    def _modern_standby_laptop(self) -> bool:
+        """Modern Standby (``AoAc``) with a system battery. Read once: neither changes while Windows runs."""
+        if self._standby_laptop is None:
+            caps = _PowerCapabilities()
+            try:
+                powrprof = ctypes.WinDLL("powrprof")  # type: ignore[attr-defined]
+                powrprof.CallNtPowerInformation.restype = ctypes.c_long
+                powrprof.CallNtPowerInformation.argtypes = [
+                    ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+                ]
+                status = powrprof.CallNtPowerInformation(
+                    _SYSTEM_POWER_CAPABILITIES, None, 0, ctypes.byref(caps), ctypes.sizeof(caps)
+                )
+            except (OSError, AttributeError) as exc:
+                logger.warning("keep_awake.windows_power_capabilities_failed: %s", exc)
+                status = -1
+            self._standby_laptop = status == 0 and bool(caps.AoAc) and bool(caps.SystemBatteriesPresent)
+            logger.info("keep_awake.windows_power modern_standby_laptop=%s", self._standby_laptop)
+        return self._standby_laptop
+
+    def _on_battery(self) -> bool | None:
+        """``None`` when Windows cannot tell."""
+        assert self._kernel32 is not None
+        status = _PowerStatus()
+        if not self._kernel32.GetSystemPowerStatus(ctypes.byref(status)):
+            return None
+        if status.ACLineStatus not in (_AC_OFFLINE, _AC_ONLINE):  # 255: unknown
+            return None
+        return status.ACLineStatus == _AC_OFFLINE
+
+    def _sync_display(self) -> None:
+        """Hold the display request exactly while the laptop runs on battery."""
+        handle, kernel32 = self._handle, self._kernel32
+        battery = self._on_battery() if handle is not None else None
+        if battery is None or battery == self._display:
+            return
+        assert kernel32 is not None
+        if battery:
+            if not kernel32.PowerSetRequest(handle, _POWER_REQUEST_DISPLAY_REQUIRED):
+                logger.warning("keep_awake.windows_display_request_failed: %s", self._last_error())
+                return
+            # The request keeps a screen on but may not wake one that already
+            # idled off; this resets the idle timers once, which does.
+            kernel32.SetThreadExecutionState(_ES_SYSTEM_REQUIRED | _ES_DISPLAY_REQUIRED)
+        elif not kernel32.PowerClearRequest(handle, _POWER_REQUEST_DISPLAY_REQUIRED):
+            logger.warning("keep_awake.windows_display_clear_failed: %s", self._last_error())
+        self._display = battery
+        logger.info("keep_awake.windows_display_request on=%s", battery)
+
+    async def _watch_power(self) -> None:
+        while True:
+            await asyncio.sleep(_POWER_CHECK_SECONDS)
+            try:
+                self._sync_display()
+            except Exception:
+                logger.exception("keep_awake.windows_power_check_failed")
 
     @staticmethod
     def _last_error() -> str:
@@ -240,11 +380,23 @@ class WindowsBackend:
             raise KeepAwakeError(f"Windows refused to keep the computer awake: {message}")
         self._handle, self._context = handle, context
         logger.info("keep_awake.windows_request_set")
+        if self._modern_standby_laptop():
+            self._sync_display()
+            self._power_watch = asyncio.create_task(self._watch_power(), name="keep-awake-power")
 
     async def release(self) -> None:
+        watch, self._power_watch = self._power_watch, None
+        if watch is not None:
+            watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch
         if self._handle is None or self._kernel32 is None:
             return
         handle, self._handle = self._handle, None
+        if self._display:
+            self._display = False
+            if not self._kernel32.PowerClearRequest(handle, _POWER_REQUEST_DISPLAY_REQUIRED):
+                logger.warning("keep_awake.windows_display_clear_failed: %s", self._last_error())
         if not self._kernel32.PowerClearRequest(handle, _POWER_REQUEST_SYSTEM_REQUIRED):
             logger.warning("keep_awake.windows_clear_failed: %s", self._last_error())
         self._kernel32.CloseHandle(handle)
@@ -252,16 +404,18 @@ class WindowsBackend:
         logger.info("keep_awake.windows_request_cleared")
 
     async def bridge(self) -> None:
-        # Without ES_CONTINUOUS this only resets the idle timer, so the next
-        # process has a full sleep timeout to take its own request.
+        # Without ES_CONTINUOUS this only resets the idle timers, so the next
+        # process has a full sleep timeout, and a screen kept on a full
+        # screen timeout, to take its own request.
         if self._kernel32 is None:
             return
+        flags = _ES_SYSTEM_REQUIRED | (_ES_DISPLAY_REQUIRED if self._display else 0)
         ctypes.set_last_error(0)  # type: ignore[attr-defined]
         # It returns the previous state, which may itself be 0.
-        if not self._kernel32.SetThreadExecutionState(_ES_SYSTEM_REQUIRED) and ctypes.get_last_error():  # type: ignore[attr-defined]
+        if not self._kernel32.SetThreadExecutionState(flags) and ctypes.get_last_error():  # type: ignore[attr-defined]
             logger.warning("keep_awake.windows_bridge_failed: %s", self._last_error())
             return
-        logger.info("keep_awake.windows_bridge reset=idle_timer")
+        logger.info("keep_awake.windows_bridge reset=idle_timer display=%s", self._display)
 
 
 # Runs under the inhibitor once it holds the lock: the line says so, then
@@ -492,6 +646,10 @@ class LinuxBackend:
     def error(self) -> str | None:
         errors = [h.error for h in (self._logind, self._gnome) if h.error]
         return " ".join(errors) or None
+
+    @property
+    def note(self) -> str | None:
+        return None
 
     def _changed(self) -> None:
         if self.on_change is not None:
@@ -779,7 +937,7 @@ class KeepAwake:
         if not self._enabled:
             return "off", None
         if self._backend.held:
-            return "active", None
+            return "active", self._backend.note
         return "failed", self._error or self._backend.error or "Cannot keep this computer awake."
 
     async def bridge(self) -> None:
