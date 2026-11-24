@@ -1085,7 +1085,12 @@ reviewable file by file:
   `[0x72, rows>>8, rows&0xFF, cols>>8, cols&0xFF]`.
 - **WebSocketCore** mirrors `WebSocketConnection`:
   - 1 s→30 s doubling backoff (reset on open and forceReconnect).
-  - A generation counter that drops events from superseded sockets.
+  - A generation counter that drops events from superseded sockets;
+    `disconnect()` and `forceReconnect()` also bump it, so a connect still
+    waiting on the URL provider never opens a second socket.
+  - `NWWebSocketConnection` pings every 30 s and fails the connection with
+    `ETIMEDOUT` when the previous ping got no pong, so a half-open socket
+    reconnects through the backoff (OkHttp `pingInterval` parity).
   - Terminal close codes 4001/4010/4002 (HTTP 401 at upgrade ≡ 4001).
   - 4011/4012 deliberately fall through to reconnect.
 - **RelayRouting** ports `mapToRelayPath` and the URL assembly, including the raw

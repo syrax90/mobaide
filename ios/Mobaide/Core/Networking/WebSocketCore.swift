@@ -20,9 +20,10 @@ enum WebSocketEvent: Equatable, Sendable {
 /// - Backoff starts at 1 s; each scheduled reconnect sleeps the *current*
 ///   value, then doubles it (capped at 30 s). A successful open and
 ///   `forceReconnect()` reset it to 1 s.
-/// - A generation counter (incremented only by `forceReconnect()`) drops every
-///   event from a superseded transport, so a stale socket cannot emit a
-///   phantom `.disconnected` or trigger a reconnect.
+/// - A generation counter (incremented by `forceReconnect()` and
+///   `disconnect()`) drops every event from a superseded transport, so a stale
+///   socket cannot emit a phantom `.disconnected` or trigger a reconnect, and a
+///   connect still waiting on `urlProvider` never opens a second socket.
 /// - Close codes 4001/4010/4002 (and HTTP 401 at upgrade ≡ 4001) are terminal;
 ///   everything else — including 4011 admin-force-disconnect and 4012
 ///   agent-transient-offline — falls through to the backoff reconnect loop.
@@ -74,6 +75,7 @@ actor WebSocketCore {
 
     func disconnect() {
         shouldReconnect = false
+        generation += 1
         reconnectTask?.cancel()
         reconnectTask = nil
         consumeTask?.cancel()
@@ -88,9 +90,10 @@ actor WebSocketCore {
         reconnectTask?.cancel()
         reconnectTask = nil
         backoff = Self.initialBackoff
+        let myGeneration = generation
         connection?.close(code: Self.normalCloseCode, reason: "Force reconnect")
         connection = nil
-        guard shouldReconnect, await isAuthenticated() else { return }
+        guard shouldReconnect, await isAuthenticated(), myGeneration == generation else { return }
         await doConnect()
     }
 
@@ -113,20 +116,25 @@ actor WebSocketCore {
     }
 
     private func doConnect() async {
+        // The actor is reentrant across the await: a newer `forceReconnect()` or
+        // a `disconnect()` that ran meanwhile owns the connection, and opening
+        // another here would leak a socket that is never closed.
+        let myGeneration = generation
         let urlString: String?
         do {
             urlString = try await urlProvider()
         } catch {
+            guard shouldReconnect, myGeneration == generation else { return }
             eventSink.yield(.error(String(describing: error)))
             return
         }
+        guard shouldReconnect, myGeneration == generation else { return }
         guard let urlString, let url = URL(string: urlString) else {
             eventSink.yield(.disconnected)
             return
         }
         let transport = transportFactory.makeConnection(url: url)
         connection = transport
-        let myGeneration = generation
         consumeTask = Task { [weak self] in
             for await event in transport.events {
                 guard let self else { return }
