@@ -6,6 +6,7 @@ import threading
 import pytest
 from starlette.testclient import TestClient
 
+from mobaide.agent.settings.models import AgentSettingsResponse, KeepAwakeStatus
 from tests.conftest import TEST_USERNAME
 
 
@@ -17,6 +18,32 @@ def test_client(app):
 @pytest.fixture
 def auth_token(app) -> str:
     return app.state.jwt_service.create_access_token(TEST_USERNAME)
+
+
+def _settings(enabled: bool, state: str) -> AgentSettingsResponse:
+    return AgentSettingsResponse(
+        keep_awake=KeepAwakeStatus(enabled=enabled, state=state, message=None)
+    )
+
+
+class _SettingsChangedDuringSnapshot:
+    """Stands in for the settings service. The first ``status()`` answers
+    "off" and publishes "active", like a boot re-apply or a PUT that lands
+    while the connect snapshot is sent."""
+
+    def __init__(self, bus) -> None:
+        self._bus = bus
+        self._changed = False
+
+    def status(self) -> AgentSettingsResponse:
+        snapshot = _settings(enabled=False, state="off")
+        if not self._changed:
+            self._changed = True
+            self._bus.publish(
+                "agent_settings.changed",
+                _settings(enabled=True, state="active").model_dump(mode="json"),
+            )
+        return snapshot
 
 
 class TestWsEventsSnapshots:
@@ -134,6 +161,38 @@ class TestWsEventsLiveForwarding:
             assert saw_sessions_changed_with_one, (
                 "expected sessions.changed with >=1 session after POST /api/sessions"
             )
+
+    def test_settings_change_during_the_snapshot_reaches_the_client_after_it(
+        self, test_client, auth_token, app,
+    ):
+        """The settings snapshot is taken after the subscribe, so a change
+        published while it is sent is queued and arrives next: the client
+        ends on the newest state, not on the stale snapshot.
+        """
+        bus = app.state.event_bus
+        app.state.agent_settings = _SettingsChangedDuringSnapshot(bus)
+
+        with test_client.websocket_connect(
+            f"/ws/events?token={auth_token}",
+        ) as ws:
+            frames = [ws.receive_json() for _ in range(5)]
+            assert [f["type"] for f in frames] == [
+                "sessions.changed",
+                "projects.changed",
+                "autoscan.list.changed",
+                "voice.changed",
+                "agent_settings.changed",
+            ]
+            assert frames[-1]["payload"]["keep_awake"]["state"] == "off"
+
+            # A lost change would leave nothing queued: the marker keeps the
+            # next read from blocking forever.
+            ws.portal.call(bus.publish, "test.marker", {})
+
+            assert ws.receive_json() == {
+                "type": "agent_settings.changed",
+                "payload": {"keep_awake": {"enabled": True, "state": "active", "message": None}},
+            }
 
     def test_unsubscribe_on_disconnect(self, test_client, auth_token, app):
         """Subscriber count must return to its pre-connect value after the
