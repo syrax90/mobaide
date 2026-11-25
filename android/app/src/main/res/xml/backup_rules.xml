@@ -7,9 +7,15 @@
   a fresh device does NOT inherit the source device's UUID — without
   this exclusion two physical devices could share `mobile_device_id`,
   defeating CLA-62's per-device identity guarantee.
+
+  Every EncryptedSharedPreferences file (`EncryptedPrefsFiles.ALL`) is
+  excluded: its keyset is wrapped by a Keystore key that is never restored,
+  so a restored file cannot be decrypted.
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="mobaide_auth.xml" />
+    <exclude domain="sharedpref" path="mobaide_connections.xml" />
+    <exclude domain="sharedpref" path="mobaide_user_identity.xml" />
     <exclude domain="file" path="datastore/device_identity.preferences_pb" />
     <exclude domain="file" path="datastore/ads_conversion.preferences_pb" />
 </full-backup-content>

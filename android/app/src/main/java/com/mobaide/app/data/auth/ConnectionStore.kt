@@ -2,8 +2,6 @@ package com.mobaide.app.data.auth
 
 import android.content.Context
 import android.content.SharedPreferences
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -33,13 +31,7 @@ class ConnectionStore(context: Context) {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
-        "mobaide_connections",
-        MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
-        context,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
+    private val prefs: SharedPreferences = openEncryptedPrefs(context, EncryptedPrefsFiles.CONNECTIONS)
 
     fun listProfiles(): List<ConnectionProfile> {
         val raw = prefs.getString(KEY_PROFILES, null) ?: return emptyList()
