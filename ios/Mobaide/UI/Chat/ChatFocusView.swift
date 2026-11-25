@@ -146,15 +146,35 @@ enum ChatFocusView {
             || node.children.contains { needsYou($0, waitingToolIds: waitingToolIds) }
     }
 
+    /// Where a card sits in its group: the ones still working first, then failed, stopped, done.
+    private static func rank(_ node: ChatSubagentNode) -> Int {
+        switch node.subagent.state {
+        case "requires_action": return 0
+        case "running": return 1
+        case "idle":
+            switch node.subagent.stopReason {
+            case "error": return 3
+            case "cancelled": return 4
+            default: return 5
+            }
+        default: return 2
+        }
+    }
+
     /// Two or more calm cards form one group, keyed by the first card of all;
     /// the cards that need the user follow it on their own, so a request is
-    /// never hidden. With fewer than two calm cards every card shows on its
-    /// own, in order.
+    /// never hidden. Inside the group the cards still working come first and
+    /// the finished ones last, each in launch order. With fewer than two calm
+    /// cards every card shows on its own, in order.
     static func subagentEntries(_ cards: [ChatSubagentNode], waitingToolIds: Set<String>) -> [ChatSubagentEntry] {
         let urgent = cards.filter { needsYou($0, waitingToolIds: waitingToolIds) }
         let calm = cards.filter { !needsYou($0, waitingToolIds: waitingToolIds) }
         guard let first = cards.first, calm.count >= 2 else { return cards.map { .card($0) } }
-        return [.group(id: subagentGroupId(firstCardId: first.item.id), cards: calm)] + urgent.map { .card($0) }
+        // Enumerated so equal ranks keep launch order: Swift's sort is not stable.
+        let ordered = calm.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map(\.element)
+        return [.group(id: subagentGroupId(firstCardId: first.item.id), cards: ordered)] + urgent.map { .card($0) }
     }
 
     /// "2 running · 5 done · 1 failed": the states of a group's cards, busiest first.

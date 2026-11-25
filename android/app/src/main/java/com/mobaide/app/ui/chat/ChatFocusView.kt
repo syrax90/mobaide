@@ -57,10 +57,24 @@ fun subagentNeedsYou(card: ChatItem.Subagent, tree: ChatSubagentTree, waitingToo
         tree.tools[card.subagentId].orEmpty().any { it.id in waitingToolIds } ||
         tree.children[card.subagentId].orEmpty().any { subagentNeedsYou(it, tree, waitingToolIds) }
 
+/** Where a card sits in its group: the ones still working first, then failed, stopped, done. */
+private fun subagentRank(card: ChatItem.Subagent): Int = when (card.state) {
+    SubagentState.REQUIRES_ACTION -> 0
+    SubagentState.RUNNING -> 1
+    SubagentState.IDLE -> when (card.stopReason) {
+        "error" -> 3
+        "cancelled" -> 4
+        else -> 5
+    }
+    else -> 2
+}
+
 /**
  * Two or more calm cards form one group, keyed by the first card of all; the
  * cards that need the user follow it on their own, so a request is never
- * hidden. With fewer than two calm cards every card shows on its own, in order.
+ * hidden. Inside the group the cards still working come first and the
+ * finished ones last, each in launch order. With fewer than two calm cards
+ * every card shows on its own, in order.
  */
 fun subagentEntries(
     cards: List<ChatItem.Subagent>,
@@ -69,7 +83,8 @@ fun subagentEntries(
 ): List<SubagentEntry> {
     val (urgent, calm) = cards.partition { subagentNeedsYou(it, tree, waitingToolIds) }
     if (calm.size < 2) return cards.map { SubagentEntry.Card(it) }
-    return listOf(SubagentEntry.Group(subagentGroupKey(cards.first().id), calm)) + urgent.map { SubagentEntry.Card(it) }
+    val ordered = calm.sortedBy(::subagentRank)
+    return listOf(SubagentEntry.Group(subagentGroupKey(cards.first().id), ordered)) + urgent.map { SubagentEntry.Card(it) }
 }
 
 /** "2 running · 5 done · 1 failed": the states of a group's cards, busiest first. */

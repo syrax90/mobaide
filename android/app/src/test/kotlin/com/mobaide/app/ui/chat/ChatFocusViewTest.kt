@@ -242,6 +242,13 @@ class ChatFocusViewTest {
     }
 
     @Test
+    fun aGroup_listsTheCardsStillWorkingFirst_andTheFinishedOnesLast_eachInLaunchOrder() {
+        val items = listOf(card("c1", state = "idle"), card("c2"), card("c3", state = "idle"), card("c4"))
+
+        assertEquals(listOf("subagents:sa:c1 [sa:c2 sa:c4 sa:c1 sa:c3]"), outline(rows(items)))
+    }
+
+    @Test
     fun resultPreview_isTheFirstTextLineWithoutMarkdownMarks() {
         assertEquals("Found the login handler", subagentResultPreview("\n## **Found** the `login` handler\nmore"))
         assertEquals("one item", subagentResultPreview("---\n- one item"))

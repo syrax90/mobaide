@@ -264,10 +264,28 @@ export function subagentNeedsYou(
   return (tree.children.get(card.subagent_id) ?? []).some((child) => subagentNeedsYou(child, tree, waitingTools));
 }
 
+/** Where a card sits in its group: the ones still working first, then failed, stopped, done. */
+function subagentRank(card: SubagentItem): number {
+  switch (card.state) {
+    case 'requires_action':
+      return 0;
+    case 'running':
+      return 1;
+    case 'unknown':
+      return 2;
+    case 'idle':
+      if (card.stop_reason === 'error') return 3;
+      if (card.stop_reason === 'cancelled') return 4;
+      return 5;
+  }
+}
+
 /**
  * Sibling cards as shown: two or more calm cards form one group, keyed by the
  * first card of all; the cards that need the user follow it on their own.
- * With fewer than two calm cards every card shows on its own, in order.
+ * Inside the group the cards still working come first and the finished ones
+ * last, each in launch order. With fewer than two calm cards every card shows
+ * on its own, in order.
  */
 export function subagentEntries(
   cards: readonly SubagentItem[],
@@ -279,7 +297,7 @@ export function subagentEntries(
   const calm = urgent.length === 0 ? cards : cards.filter((card) => !urgent.includes(card));
   if (first === undefined || calm.length < 2) return cards.map((card) => ({ kind: 'card', card }));
   return [
-    { kind: 'group', id: subagentGroupId(first.id), cards: calm },
+    { kind: 'group', id: subagentGroupId(first.id), cards: [...calm].sort((a, b) => subagentRank(a) - subagentRank(b)) },
     ...urgent.map((card): SubagentEntry => ({ kind: 'card', card })),
   ];
 }

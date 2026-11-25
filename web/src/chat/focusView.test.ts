@@ -289,6 +289,14 @@ describe('subagent groups', () => {
   });
 });
 
+describe('subagent group order', () => {
+  it('lists the cards still working first and the finished ones last, each in launch order', () => {
+    const items = [card('c1', null, 'idle'), card('c2'), card('c3', null, 'idle'), card('c4')];
+
+    expect(outline(rows(items))).toEqual([`${subagentGroupId('sa:c1')} [sa:c2 sa:c4 sa:c1 sa:c3]`]);
+  });
+});
+
 describe('resultPreview', () => {
   it('returns the first text line without Markdown marks', () => {
     expect(resultPreview('\n## **Found** the `login` handler\nmore')).toBe('Found the login handler');

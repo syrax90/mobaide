@@ -252,6 +252,12 @@ final class ChatFocusViewTests: XCTestCase {
         XCTAssertEqual(outline(rows(items, waiting: ["c3:run"])), ["sa:c1", "sa:c2"])
     }
 
+    func testAGroupListsTheCardsStillWorkingFirstAndTheFinishedOnesLastEachInLaunchOrder() {
+        let items = [card("c1", state: "idle"), card("c2"), card("c3", state: "idle"), card("c4")]
+
+        XCTAssertEqual(outline(rows(items)), ["subagents:sa:c1 [sa:c2 sa:c4 sa:c1 sa:c3]"])
+    }
+
     func testResultPreviewIsTheFirstTextLineWithoutMarkdownMarks() {
         XCTAssertEqual(ChatFocusView.resultPreview("\n## **Found** the `login` handler\nmore"), "Found the login handler")
         XCTAssertEqual(ChatFocusView.resultPreview("---\n- one item"), "one item")
