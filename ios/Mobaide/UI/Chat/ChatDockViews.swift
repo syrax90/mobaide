@@ -85,14 +85,32 @@ struct ChatPlanBar: View {
             .accessibilityHint(expanded ? "Collapse" : "Expand")
             if expanded {
                 PixelDivider()
-                ChatCappedScroll(maxHeight: 240) { entries }
+                ChatCappedScroll(maxHeight: 240) {
+                    ChatPlanEntries(plan: plan)
+                        .padding(12)
+                }
             }
         }
         .background(colors.bg2)
         .pixelRing(colors.surface2)
     }
 
-    private var entries: some View {
+    static func statusLabel(_ status: String) -> String {
+        switch status {
+        case "completed": return "Done"
+        case "in_progress": return "In progress"
+        default: return "Pending"
+        }
+    }
+}
+
+/// The plan entries, each with its status mark.
+struct ChatPlanEntries: View {
+    let plan: [ChatPlanEntry]
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(plan.enumerated()), id: \.offset) { _, entry in
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -108,7 +126,6 @@ struct ChatPlanBar: View {
                 .accessibilityValue(ChatPlanBar.statusLabel(entry.status))
             }
         }
-        .padding(12)
     }
 
     @ViewBuilder
@@ -120,14 +137,6 @@ struct ChatPlanBar: View {
             Image(systemName: "square.lefthalf.filled").foregroundStyle(colors.accent)
         default:
             Image(systemName: "square").foregroundStyle(colors.gray)
-        }
-    }
-
-    static func statusLabel(_ status: String) -> String {
-        switch status {
-        case "completed": return "Done"
-        case "in_progress": return "In progress"
-        default: return "Pending"
         }
     }
 }

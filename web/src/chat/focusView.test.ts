@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatItem } from './chatWire';
-import { stepsRowId, timelineRows, type TimelineRow, type TimelineRowOptions } from './focusView';
+import { stepsRowId, subagentTree, timelineRows, type TimelineRow, type TimelineRowOptions } from './focusView';
 
 function user(id: string): ChatItem {
   return { id, type: 'user', text: 'Fix the login bug', attachments: [], at: null };
@@ -25,6 +25,27 @@ function tool(id: string, title = 'Run tests'): ChatItem {
     locations: [],
     content: [],
     input: null,
+  };
+}
+
+function ownedTool(id: string, subagentId: string): ChatItem {
+  return { ...tool(id), subagent_id: subagentId } as ChatItem;
+}
+
+function card(subagentId: string, parent: string | null = null): ChatItem {
+  return {
+    id: `sa:${subagentId}`,
+    type: 'subagent',
+    subagent_id: subagentId,
+    parent_subagent_id: parent,
+    title: 'Explore',
+    description: null,
+    task: null,
+    state: 'running',
+    stop_reason: null,
+    result: null,
+    can_cancel: false,
+    plan: [],
   };
 }
 
@@ -162,5 +183,52 @@ describe('timelineRows', () => {
       'm:8',
     ]);
     expect(stepsRows(list).map((row) => row.open)).toEqual([true, false]);
+  });
+});
+
+describe('subagentTree', () => {
+  const ids = (list: readonly ChatItem[] | undefined) => list?.map((item) => item.id);
+
+  it('moves the tool calls of a card and the cards nested in it out of the main flow', () => {
+    const items = [
+      user('u:1'),
+      card('c1'),
+      ownedTool('c1:read', 'c1'),
+      card('c2', 'c1'),
+      ownedTool('c2:grep', 'c2'),
+      ownedTool('c9:run', 'c9'),
+      agent('m:2'),
+    ];
+
+    const tree = subagentTree(items);
+
+    expect(ids(tree.visible)).toEqual(['u:1', 'sa:c1', 'c9:run', 'm:2']);
+    expect(ids(tree.tools.get('c1'))).toEqual(['c1:read']);
+    expect(ids(tree.tools.get('c2'))).toEqual(['c2:grep']);
+    expect(ids(tree.children.get('c1'))).toEqual(['sa:c2']);
+    expect(tree.tools.has('c9')).toBe(false);
+  });
+
+  it('keeps a card in the main flow when its parent card is absent or the parents loop', () => {
+    const orphan = subagentTree([card('c2', 'gone'), ownedTool('c2:grep', 'c2')]);
+    expect(ids(orphan.visible)).toEqual(['sa:c2']);
+    expect(ids(orphan.tools.get('c2'))).toEqual(['c2:grep']);
+
+    const loop = subagentTree([card('c1', 'c2'), card('c2', 'c1'), card('c3', 'c1')]);
+    expect(ids(loop.visible)).toEqual(['sa:c1', 'sa:c2', 'sa:c3']);
+    expect(loop.children.size).toBe(0);
+  });
+
+  it('returns the same list when no card takes anything', () => {
+    const items = [user('u:1'), ownedTool('c1:read', 'c1'), agent('m:2')];
+
+    expect(subagentTree(items).visible).toBe(items);
+  });
+
+  it('never folds a card and folds the agent message before it as work', () => {
+    const tree = subagentTree([user('u:1'), agent('m:2'), card('c1'), ownedTool('c1:read', 'c1'), agent('m:3')]);
+
+    expect(outline(rows([...tree.visible]))).toEqual(['u:1', 'steps:m:2 ×1', 'sa:c1', 'm:3']);
+    expect(outline(rows([...tree.visible], { focus: false }))).toEqual(['u:1', 'm:2', 'sa:c1', 'm:3']);
   });
 });

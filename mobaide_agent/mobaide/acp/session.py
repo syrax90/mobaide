@@ -38,6 +38,7 @@ from mobaide.core.models import (
 
 from . import cursor_ext as cx
 from . import normalize as nz
+from . import subagents as sa
 from . import wake as wk
 from .agents import ChatLaunchPlan, ConfigIntent
 from .install import INSTALL_POOL, PROBE_POOL, AdapterInstallError
@@ -146,6 +147,8 @@ class _PendingRequest:
     public: dict[str, Any]
     tool_call_id: str | None = None
     fields: list[dict[str, Any]] = field(default_factory=list)
+    # The child session that asked (see :mod:`.subagents`).
+    subagent_id: str | None = None
 
 
 @dataclass
@@ -242,6 +245,11 @@ class ChatSession:
         self._children: dict[str, str | None] = {}
         # A finished turn's "turn finished" alert waits for those subagents.
         self._alert_held = False
+        # ACP subagent sessions of this conversation (``ChatLaunchPlan.subagents``).
+        self._subagents = sa.Subagents()
+        # A ``session/load`` replays the conversation: subagent updates until
+        # its reply are history, the ones after it are current.
+        self._replaying = False
         # Copilot sends its session events: they start and end self turns.
         self._copilot_events = False
         # Copilot: the foreground settled, but attached background work (an
@@ -610,6 +618,8 @@ class ChatSession:
             return await self._cmd_steer(cmd)
         if op == "sign_in":
             return await self._cmd_sign_in(cmd)
+        if op == "cancel_subagent":
+            return self._cmd_cancel_subagent(cmd)
         raise ChatCommandError(f"Unknown command: {op}")
 
     async def _spawn(self) -> None:
@@ -713,9 +723,16 @@ class ChatSession:
                     raise AcpProcessError("This agent cannot open earlier sessions")
                 tl.patch_state(status="loading")
                 self._acp_session_id = load_id
-                result = await conn.request(
-                    "session/load", {**setup_params, "sessionId": load_id}, SETUP_TIMEOUT
-                )
+                self._replaying = True
+                try:
+                    result = await conn.request(
+                        "session/load",
+                        {**setup_params, "sessionId": load_id},
+                        SETUP_TIMEOUT,
+                        on_reply=self._end_replay,
+                    )
+                finally:
+                    self._end_replay()
             else:
                 result = await conn.request("session/new", setup_params, SETUP_TIMEOUT)
                 sid = result.get("sessionId") if isinstance(result, dict) else None
@@ -782,9 +799,12 @@ class ChatSession:
             self._fail_start(str(exc) or "The agent did not respond")
 
     def _client_capabilities(self) -> dict[str, Any]:
-        if not self._plan.client_meta:
-            return CLIENT_CAPABILITIES
-        return {**CLIENT_CAPABILITIES, "_meta": dict(self._plan.client_meta)}
+        caps = dict(CLIENT_CAPABILITIES)
+        if self._plan.subagents:
+            caps["subagents"] = {}
+        if self._plan.client_meta:
+            caps["_meta"] = dict(self._plan.client_meta)
+        return caps
 
     async def _ensure_trusted(self) -> bool:
         """Ask the user to trust the folder unless the agent already does."""
@@ -1256,7 +1276,7 @@ class ChatSession:
         finally:
             self._disarm_cancel_watchdog()
             self._close_streaming_items()
-            self._resolve_all_requests_cancelled()
+            self._resolve_all_requests_cancelled(keep_running_subagents=True)
             self._foreground_idle = False
             self._wake_grace_until = time.monotonic() + WAKE_GRACE_SECONDS
         if reload:
@@ -1281,7 +1301,7 @@ class ChatSession:
             # The agent took a message again: the refused ones are stale.
             self._auth_retry.clear()
         if stop_reason == "cancelled":
-            self._mark_running_tools("cancelled")
+            self._mark_running_tools("cancelled", subagents=False)
         if stop_reason and stop_reason != "end_turn":
             tl.upsert(
                 {
@@ -1380,11 +1400,12 @@ class ChatSession:
             if conn is None or not conn.alive or not self._acp_session_id:
                 return {"cancelled": False}
             conn.notify("session/cancel", {"sessionId": self._acp_session_id})
-            self._resolve_all_requests_cancelled()
+            # ACP: a subagent that goes on keeps its requests.
+            self._resolve_all_requests_cancelled(keep_running_subagents=True)
             if self._self_turn:
                 # Nothing reports the end of an interrupted turn of the agent's
                 # own (no Stop hook, no prompt answer), so it ends here.
-                self._mark_running_tools("cancelled")
+                self._mark_running_tools("cancelled", subagents=False)
                 self._settle_gate()
                 self._drop_wake_turn()
                 self._on_agent_busy(False)
@@ -1400,7 +1421,7 @@ class ChatSession:
         elif conn is not None and conn.alive and self._acp_session_id:
             conn.notify("session/cancel", {"sessionId": self._acp_session_id})
             self._arm_cancel_watchdog(conn)
-        self._resolve_all_requests_cancelled()
+        self._resolve_all_requests_cancelled(keep_running_subagents=True)
         self._timeline.patch_state(cancelling=True, urgent=True)
         return {"cancelled": True}
 
@@ -2028,9 +2049,12 @@ class ChatSession:
         if method != "session/update" or not isinstance(params, dict):
             return
         sid = params.get("sessionId")
-        if self._acp_session_id is not None and sid != self._acp_session_id:
-            return
         update = params.get("update")
+        if self._acp_session_id is not None and sid != self._acp_session_id:
+            child = self._subagents.get(sid)
+            if child is not None and isinstance(update, dict):
+                self._apply_subagent_update(child, update)
+            return
         if isinstance(update, dict):
             self._note_wake_update(update)
             self._apply_update(update)
@@ -2097,6 +2121,10 @@ class ChatSession:
                         else "",
                     }
                 )
+        elif kind in sa.LIFECYCLE_UPDATES:
+            self._apply_subagent_lifecycle(self._acp_session_id, update)
+        elif kind == sa.SESSION_MESSAGE:
+            self._apply_session_message(update)
         elif kind == "compaction_update":
             self._apply_compaction(update)
         elif kind == "compaction_summary_chunk":
@@ -2294,6 +2322,133 @@ class ChatSession:
             # end, or this window does when no turn comes.
             self._arm_wake_timer()
 
+    def _apply_subagent_update(self, child: sa.Subagent, update: dict[str, Any]) -> None:
+        """An update of an announced subagent session. Only what its card
+        needs is kept: its tool calls (tool items of their own), its
+        checklist, its own subagents and its messages. Its text stays out of
+        the timeline: the card shows its answer when it ends."""
+        kind = update.get("sessionUpdate")
+        if kind in sa.TOOL_UPDATES:
+            if self._is_decision_tool(update.get("toolCallId")):
+                return
+            projected = sa.child_tool_update(child, update)
+            if projected is not None:
+                if kind == "tool_call":
+                    self._subagents.note_tool(child)
+                self._apply_tool_update(projected, create=kind == "tool_call", subagent=child)
+        elif kind == "plan":
+            # The child's checklist, never the chat's plan.
+            child.plan = nz.plan_entries(update.get("entries"))
+            self._show_subagent(child, urgent=False)
+        elif kind == "agent_message_chunk":
+            self._subagents.note_text(child, update)
+        elif kind in sa.LIFECYCLE_UPDATES:
+            self._apply_subagent_lifecycle(child.child_id, update)
+        elif kind == sa.SESSION_MESSAGE:
+            self._apply_session_message(update)
+
+    def _apply_subagent_lifecycle(self, session_id: str | None, update: dict[str, Any]) -> None:
+        change = self._subagents.lifecycle(
+            session_id, self._acp_session_id, update, replay=self._replaying
+        )
+        if change is None:
+            return
+        child = change.child
+        if change.new and child.parent_id is None:
+            # The parent's text after the card goes below it.
+            self._current_agent_item = self._current_thought_item = self._current_user_item = None
+        if change.launch_tool_id is not None:
+            item = self._timeline.get(change.launch_tool_id)
+            if item is not None and item.get("subagent_id") != child.child_id:
+                item["subagent_id"] = child.child_id
+                self._timeline.touch(change.launch_tool_id)
+        if change.ended:
+            self._end_subagent_work(child)
+            if child.launch_tool_id is not None:
+                self._subagents.adopt_launch_result(child, self._timeline.get(child.launch_tool_id))
+        # Last: an urgent upsert sends the changes above in the same frame.
+        self._show_subagent(child)
+        self._publish_activity()
+
+    def _apply_session_message(self, update: dict[str, Any]) -> None:
+        child = self._subagents.message(update)
+        if child is not None:
+            self._show_subagent(child)
+
+    def _show_subagent(self, child: sa.Subagent, *, urgent: bool = True) -> None:
+        tl = self._timeline
+        tl.upsert(self._subagents.item(child), urgent=urgent and tl.state.get("status") != "loading")
+
+    def _end_subagent_work(self, child: sa.Subagent) -> None:
+        """A subagent's work ended: its open requests are void, and a stopped
+        or failed one ends the tool calls it left running."""
+        status = sa.ENDED_TOOL_STATUS.get(child.stop_reason or "")
+        if status is not None:
+            tl = self._timeline
+            prefix = f"{child.child_id}:"
+            for item in tl.items():
+                if (
+                    item.get("type") == "tool"
+                    and item["id"].startswith(prefix)
+                    and item.get("status") in ("pending", "in_progress")
+                ):
+                    item["status"] = status
+                    tl.touch(item["id"])
+        self._resolve_all_requests_cancelled(subagent_id=child.child_id)
+
+    def _end_replay(self) -> None:
+        """The ``session/load`` reply: a subagent the replay left running is
+        unknown until the agent reports its current state, which follows."""
+        if not self._replaying:
+            return
+        self._replaying = False
+        for child in self._subagents.children():
+            if child.running:
+                child.state = "unknown"
+                child.stop_reason = None
+                child.can_cancel = False
+                self._show_subagent(child, urgent=False)
+
+    def _end_subagents(self) -> None:
+        """No agent process runs the conversation now: no subagent card may
+        read as running or offer Stop."""
+        tl = self._timeline
+        for child in self._subagents.children():
+            if not (child.running or child.can_cancel):
+                continue
+            if child.running:
+                child.state = "unknown"
+                child.stop_reason = None
+            child.can_cancel = False
+            if tl.get(child.item_id) is not None:
+                tl.upsert(self._subagents.item(child))
+        self._subagents.clear()
+
+    def _cmd_cancel_subagent(self, cmd: dict[str, Any]) -> dict[str, Any]:
+        """Stop one subagent (``session/cancel`` with its session id); the
+        parent's turn goes on. The child's idle update confirms it."""
+        child = self._subagents.get(cmd.get("subagent_id"))
+        if child is None:
+            raise ChatCommandError("Unknown subagent")
+        if not (child.can_cancel and child.running):
+            raise ChatCommandError("This subagent cannot be stopped")
+        conn = self._conn
+        if conn is None or not conn.alive:
+            raise ChatCommandError("The agent is not running")
+        conn.notify("session/cancel", {"sessionId": child.child_id})
+        return {"cancelled": True}
+
+    def _request_subagent(self, params: dict[str, Any]) -> sa.Subagent | None:
+        """The announced subagent whose session sends a request, or None for
+        the conversation's own session."""
+        sid = params.get("sessionId")
+        if not self._plan.subagents or self._acp_session_id is None or sid in (None, self._acp_session_id):
+            return None
+        child = self._subagents.get(sid)
+        if child is None:
+            raise AcpRpcError(-32602, "Unknown session")
+        return child
+
     def _on_copilot_event(self, params: Any) -> None:
         """A Copilot session event (``github.com/copilot/sessionEvent``)."""
         if not self._wakes:
@@ -2403,7 +2558,11 @@ class ChatSession:
             item["attachments"] = [*item["attachments"], {"kind": "file", "name": part.get("name")}]
             tl.touch(item["id"])
 
-    def _apply_tool_update(self, update: dict[str, Any], *, create: bool) -> None:
+    def _apply_tool_update(
+        self, update: dict[str, Any], *, create: bool, subagent: sa.Subagent | None = None
+    ) -> None:
+        """``subagent``: the update is that child's, its id already
+        namespaced (``subagents.child_tool_update``)."""
         tool_id = update.get("toolCallId")
         if not isinstance(tool_id, str) or not tool_id:
             return
@@ -2422,9 +2581,18 @@ class ChatSession:
                 self._scripts.pop(tool_id, None)
             else:
                 self._scripts[tool_id] = script
-        self._last_tool_id = tool_id
+        launched: sa.Subagent | None = None
+        if subagent is not None:
+            sa.label_tool(item, subagent)
+        else:
+            launched = self._subagents.launch_owner(tool_id)
+            if launched is not None:
+                item["subagent_id"] = launched.child_id
+            self._last_tool_id = tool_id
         deferred = self._apply_console(tool_id, item, update)
-        self._current_agent_item = self._current_thought_item = self._current_user_item = None
+        if subagent is None:
+            # A child's tool call does not split the parent's open message.
+            self._current_agent_item = self._current_thought_item = self._current_user_item = None
         # A finished tool is sent at once, except in a session/load replay,
         # where one frame per tool would flood the event queue.
         terminal = item["status"] in nz.TERMINAL_TOOL_STATUSES
@@ -2457,6 +2625,8 @@ class ChatSession:
                 if pending.tool_call_id == tool_id and not pending.future.done():
                     pending.future.set_result(self._cancel_outcome(pending))
                     self._drop_request(pending.key)
+            if launched is not None and self._subagents.adopt_launch_result(launched, item):
+                self._show_subagent(launched)
 
     def _show_stored_plan(self, update: dict[str, Any]) -> None:
         """In a replayed session, show a Cursor plan as it stood in the live
@@ -2622,20 +2792,28 @@ class ChatSession:
         self._last_agent_message_id = None
         self._last_thought_message_id = None
 
-    def _mark_running_tools(self, status: str) -> None:
+    def _mark_running_tools(self, status: str, *, subagents: bool = True) -> None:
+        """``subagents=False`` spares the subagents' tool calls: a subagent
+        reports its own end (``_end_subagent_work``)."""
         tl = self._timeline
         for item in tl.items():
-            if item.get("type") == "tool" and item.get("status") in ("pending", "in_progress"):
-                item["status"] = status
-                tl.touch(item["id"])
+            if item.get("type") != "tool" or item.get("status") not in ("pending", "in_progress"):
+                continue
+            owner = item.get("subagent_id")
+            if not subagents and isinstance(owner, str) and item["id"].startswith(f"{owner}:"):
+                continue
+            item["status"] = status
+            tl.touch(item["id"])
 
     async def _on_request(self, method: str, params: Any) -> Any:
         if not isinstance(params, dict):
             raise AcpRpcError(-32602, "Invalid params")
         if method == "session/request_permission":
-            return await self._permission_request(params, decision=self._is_decision(params))
+            return await self._permission_request(
+                params, decision=self._is_decision(params), subagent=self._request_subagent(params)
+            )
         if method == "elicitation/create":
-            return await self._elicitation_request(params)
+            return await self._elicitation_request(params, subagent=self._request_subagent(params))
         if method.startswith(cx.PREFIX):
             return await self._cursor_request(method, params)
         raise AcpRpcError(ERR_METHOD_NOT_FOUND, f"Method not found: {method}")
@@ -2698,16 +2876,28 @@ class ChatSession:
         call = params.get("toolCall")
         return self._is_decision_tool(call.get("toolCallId") if isinstance(call, dict) else None)
 
-    async def _permission_request(self, params: dict[str, Any], *, decision: bool = False) -> Any:
+    async def _permission_request(
+        self,
+        params: dict[str, Any],
+        *,
+        decision: bool = False,
+        subagent: sa.Subagent | None = None,
+    ) -> Any:
         """``decision`` marks a choice that is the user's own (a plan to
-        accept), which "accept every request" must not make for them."""
+        accept), which "accept every request" must not make for them.
+        ``subagent``: the child session that asks; its card goes with the
+        child's tool call."""
         options = nz.permission_options(params.get("options"))
         raw_call = params.get("toolCall")
         tool_call: dict[str, Any] = raw_call if isinstance(raw_call, dict) else {}
         raw_tool_id = tool_call.get("toolCallId")
         tool_id = raw_tool_id if isinstance(raw_tool_id, str) else None
-        if tool_id and not self._is_decision_tool(tool_id):
-            self._apply_tool_update(dict(tool_call), create=False)
+        decision_tool = self._is_decision_tool(tool_id)
+        if tool_id and subagent is not None:
+            tool_id = sa.child_tool_id(subagent, tool_id)
+            tool_call = {**tool_call, "toolCallId": tool_id}
+        if tool_id and not decision_tool:
+            self._apply_tool_update(dict(tool_call), create=False, subagent=subagent)
         if not options:
             return {"outcome": {"outcome": "cancelled"}}
         if self._plan.auto_approve and not decision:
@@ -2721,6 +2911,8 @@ class ChatSession:
             script = nz.code_mode_script(tool_call)
             if script is not None:
                 nz.show_script(item, script)
+            if subagent is not None:
+                sa.label_tool(item, subagent)
         public = {
             "kind": "permission",
             "tool_call_id": tool_id,
@@ -2732,9 +2924,13 @@ class ChatSession:
             "content": [] if decision else item["content"][:3],
             "options": options,
         }
-        return await self._await_request("permission", public, tool_id)
+        return await self._await_request(
+            "permission", public, tool_id, subagent=subagent
+        )
 
-    async def _elicitation_request(self, params: dict[str, Any]) -> Any:
+    async def _elicitation_request(
+        self, params: dict[str, Any], *, subagent: sa.Subagent | None = None
+    ) -> Any:
         if params.get("mode") not in (None, "form"):
             raise AcpRpcError(-32602, "Only form elicitation is supported")
         fields = nz.form_fields(params.get("requestedSchema"))
@@ -2742,13 +2938,15 @@ class ChatSession:
             return {"action": "decline"}
         message = params.get("message") if isinstance(params.get("message"), str) else ""
         tool_id = params.get("toolCallId") if isinstance(params.get("toolCallId"), str) else None
+        if tool_id and subagent is not None:
+            tool_id = sa.child_tool_id(subagent, tool_id)
         public = {
             "kind": "form",
             "tool_call_id": tool_id,
             "title": message[:2000] or "The agent has a question",
             "fields": fields,
         }
-        return await self._await_request("form", public, tool_id, fields=fields)
+        return await self._await_request("form", public, tool_id, fields=fields, subagent=subagent)
 
     async def _await_request(
         self,
@@ -2757,11 +2955,20 @@ class ChatSession:
         tool_id: str | None,
         *,
         fields: list[dict[str, Any]] | None = None,
+        subagent: sa.Subagent | None = None,
     ) -> Any:
         key = self._next_id("r")
         public = {"id": key, **public}
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        pending = _PendingRequest(key, kind, future, public, tool_id, fields or [])
+        pending = _PendingRequest(
+            key,
+            kind,
+            future,
+            public,
+            tool_id,
+            fields or [],
+            subagent.child_id if subagent is not None else None,
+        )
         self._requests[key] = pending
         self._publish_requests()
         self._set_attention("awaiting_permission")
@@ -2806,14 +3013,27 @@ class ChatSession:
             return {"outcome": {"outcome": "cancelled"}}
         return {"action": "cancel"}
 
-    def _resolve_all_requests_cancelled(self) -> None:
-        for pending in list(self._requests.values()):
+    def _resolve_all_requests_cancelled(
+        self, *, keep_running_subagents: bool = False, subagent_id: str | None = None
+    ) -> None:
+        """``keep_running_subagents``: the requests of a subagent that has not
+        reported idle stay open (Claude's background subagents outlive the
+        prompt and the parent's cancel); its idle ends them. ``subagent_id``:
+        only the requests of that subagent."""
+        dropped = False
+        for key, pending in list(self._requests.items()):
+            if subagent_id is not None and pending.subagent_id != subagent_id:
+                continue
+            child = self._subagents.get(pending.subagent_id)
+            if keep_running_subagents and child is not None and child.state != "idle":
+                continue
             if not pending.future.done():
                 pending.future.set_result(self._cancel_outcome(pending))
-        if self._requests:
-            self._requests.clear()
+            del self._requests[key]
+            dropped = True
+        if dropped:
             self._publish_requests()
-            if self._attention == "awaiting_permission":
+            if not self._requests and self._attention == "awaiting_permission":
                 self._clear_attention()
 
     def _on_exit(self, returncode: int | None) -> None:
@@ -2871,6 +3091,7 @@ class ChatSession:
             if self._gate is not None:
                 self._gate.reset_turn()
             self._reset_wake()
+            self._end_subagents()
         self._publish_activity()
 
     def _publish_activity(self) -> None:
@@ -2884,8 +3105,12 @@ class ChatSession:
                 # Work the turn left in flight. Not the quiet window after a
                 # turn that left nothing: the chat header shows "Ready" then.
                 background = activity
-        elif activity == "idle" and self._children:
-            # OpenCode subagents still run, and the parent wakes when they end.
+        elif activity == "idle" and (
+            self._children or (self._gate is None and self._subagents.running())
+        ):
+            # Subagents still run after the turn: OpenCode's, whose end wakes
+            # the parent, or ACP subagent sessions of an agent with no hooks
+            # (Codex). Claude's hooks report its own.
             activity = background = "working"
         elif activity == "working" and self._foreground_idle:
             # Copilot: the turn waits only on attached background work.

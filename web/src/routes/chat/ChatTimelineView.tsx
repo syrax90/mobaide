@@ -9,9 +9,9 @@ import {
 } from 'react';
 import { useStore } from 'zustand';
 import type { ChatSessionModel } from '../../chat/chatModel';
-import { timelineRows } from '../../chat/focusView';
+import { subagentTree, timelineRows } from '../../chat/focusView';
 import { useChatPrefsStore } from '../../stores/chatPrefsStore';
-import { ChatItemView, StepsRow } from './ChatItems';
+import { ChatItemView, StepsRow, type SubagentContext } from './ChatItems';
 import { MiddleEllipsis } from './MiddleEllipsis';
 
 /** Within this many pixels of the end counts as "at the bottom". */
@@ -60,9 +60,15 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
   }, [requests]);
 
   const running = status === 'running';
+  const tree = useMemo(() => subagentTree(items), [items]);
   const rows = useMemo(
-    () => timelineRows(items, { focus, running, waitingTools, open: openSteps }),
-    [items, focus, running, waitingTools, openSteps],
+    () => timelineRows(tree.visible, { focus, running, waitingTools, open: openSteps }),
+    [tree, focus, running, waitingTools, openSteps],
+  );
+  const live = useStore(model.store, (view) => view.connection === 'live');
+  const subagents = useMemo<SubagentContext>(
+    () => ({ tree, waitingTools, live, onStop: (subagentId) => model.cancelSubagent(subagentId) }),
+    [tree, waitingTools, live, model],
   );
   const toggleSteps = useCallback((id: string) => {
     setOpenSteps((current) => {
@@ -202,6 +208,7 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
                 canRestart={item.id === lastErrorId}
                 restarting={item.id === lastErrorId && restarting}
                 onRestart={onRestart}
+                subagents={item.type === 'subagent' ? subagents : undefined}
               />
             </div>
           );

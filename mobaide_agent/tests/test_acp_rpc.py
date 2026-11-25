@@ -255,6 +255,46 @@ class TestCancelRequest:
         assert replies == [{"jsonrpc": "2.0", "id": 5, "error": CANCELLED}]
 
 
+# Answers the first request, then sends a notification in the same write:
+# both lines reach the client together.
+NOTIFIES_RIGHT_AFTER_THE_REPLY = r"""
+import json, sys
+msg = json.loads(sys.stdin.readline())
+sys.stdout.write(
+    json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}) + "\n"
+    + json.dumps({"jsonrpc": "2.0", "method": "after", "params": {}}) + "\n"
+)
+sys.stdout.flush()
+for _ in sys.stdin:
+    pass
+"""
+
+
+class TestReplyHook:
+    async def test_runs_before_a_notification_sent_right_after_the_reply(self):
+        exits: list[int | None] = []
+        events: list[str] = []
+        notified: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        def on_notification(method: str, params: Any) -> None:
+            events.append(method)
+            if not notified.done():
+                notified.set_result(None)
+
+        conn = _connection(NOTIFIES_RIGHT_AFTER_THE_REPLY, exits, on_notification)
+        await conn.start()
+        try:
+            result = await conn.request(
+                "session/load", {}, timeout=10.0, on_reply=lambda: events.append("reply")
+            )
+            await asyncio.wait_for(notified, timeout=10.0)
+        finally:
+            await conn.close(grace=10.0)
+
+        assert result == {}
+        assert events == ["reply", "after"]
+
+
 def _gone(pid: int) -> bool:
     try:
         psutil.Process(pid).wait(timeout=5)

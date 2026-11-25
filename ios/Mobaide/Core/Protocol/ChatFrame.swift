@@ -30,6 +30,7 @@ struct ChatCommand: Encodable, Equatable, Sendable {
     var values: [String: JSONValue]?
     var queue_id: String?
     var method: String?
+    var subagent_id: String?
 
     var encoded: Data {
         let body = (try? WireJSON.encoder().encode(self)) ?? Data("{}".utf8)
@@ -67,6 +68,11 @@ struct ChatCommand: Encodable, Equatable, Sendable {
     /// Sends a queued message into the running turn now.
     static func steer(id: String, queueId: String) -> ChatCommand {
         ChatCommand(id: id, op: "steer", queue_id: queueId)
+    }
+
+    /// Stops one subagent; the parent's turn goes on.
+    static func cancelSubagent(id: String, subagentId: String) -> ChatCommand {
+        ChatCommand(id: id, op: "cancel_subagent", subagent_id: subagentId)
     }
 
     static func restart(id: String) -> ChatCommand {

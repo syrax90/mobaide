@@ -136,6 +136,8 @@ class AcpConnection:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ids = itertools.count(1)
         self._pending: dict[int, asyncio.Future[Any]] = {}
+        # Run when the reply arrives, in order with the notifications around it.
+        self._reply_hooks: dict[int, Callable[[], None]] = {}
         # Keyed by the raw JSON-RPC id, so ``$/cancel_request`` finds them.
         self._inbound: dict[Any, asyncio.Task[None]] = {}
         self._out_queue: queue.Queue[bytes | None] = queue.Queue()
@@ -198,9 +200,17 @@ class AcpConnection:
             ).start()
 
     async def request(
-        self, method: str, params: Any, timeout: float | None = None
+        self,
+        method: str,
+        params: Any,
+        timeout: float | None = None,
+        *,
+        on_reply: Callable[[], None] | None = None,
     ) -> Any:
         """Send a request and await its result.
+
+        ``on_reply`` runs as the reply is read, before any notification that
+        follows it; the awaiting coroutine resumes only after those.
 
         Raises :class:`AcpRpcError` for an error reply, and
         :class:`AcpProcessError` when the process is gone.
@@ -210,6 +220,8 @@ class AcpConnection:
         req_id = next(self._ids)
         fut: asyncio.Future[Any] = self._loop.create_future()
         self._pending[req_id] = fut
+        if on_reply is not None:
+            self._reply_hooks[req_id] = on_reply
         self._send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
         try:
             if timeout is None:
@@ -217,6 +229,7 @@ class AcpConnection:
             return await asyncio.wait_for(fut, timeout)
         finally:
             self._pending.pop(req_id, None)
+            self._reply_hooks.pop(req_id, None)
 
     def notify(self, method: str, params: Any) -> None:
         if self._exited or self._closed:
@@ -348,6 +361,12 @@ class AcpConnection:
             fut = self._pending.get(msg_id)
             if fut is None or fut.done():
                 return
+            hook = self._reply_hooks.pop(msg_id, None)
+            if hook is not None:
+                try:
+                    hook()
+                except Exception:
+                    logger.exception("acp.reply_hook_failed name=%s", self._name)
             error = message.get("error")
             if isinstance(error, dict):
                 fut.set_exception(

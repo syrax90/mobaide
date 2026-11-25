@@ -29,6 +29,34 @@ final class ChatFocusViewTests: XCTestCase {
         )))
     }
 
+    private func ownedTool(_ id: String, _ subagentId: String) -> ChatItem {
+        ChatItem(id: id, body: .tool(ChatToolCall(
+            title: "Run tests",
+            kind: "execute",
+            status: "in_progress",
+            subtitle: nil,
+            locations: [],
+            content: [],
+            input: nil,
+            subagentId: subagentId
+        )))
+    }
+
+    private func card(_ subagentId: String, parent: String? = nil) -> ChatItem {
+        ChatItem(id: "sa:\(subagentId)", body: .subagent(ChatSubagent(
+            subagentId: subagentId,
+            parentSubagentId: parent,
+            title: "Explore",
+            description: nil,
+            task: nil,
+            state: "running",
+            stopReason: nil,
+            result: nil,
+            canCancel: false,
+            plan: []
+        )))
+    }
+
     private func notice(_ id: String) -> ChatItem {
         ChatItem(id: id, body: .notice(severity: "info", title: "Loaded", text: ""))
     }
@@ -157,5 +185,38 @@ final class ChatFocusViewTests: XCTestCase {
             ["u:1", "steps:t:2 ×3", "  t:2", "  m:3", "  tool-4", "m:5", "u:6", "steps:tool-7 ×1", "m:8"]
         )
         XCTAssertEqual(steps(result).map(\.open), [true, false])
+    }
+
+    func testACardTakesItsToolCallsAndTheCardsNestedInItOutOfTheMainFlow() throws {
+        let items = [
+            user("u:1"), card("c1"), ownedTool("c1:read", "c1"), card("c2", parent: "c1"),
+            ownedTool("c2:grep", "c2"), ownedTool("c9:run", "c9"), agent("m:2"),
+        ]
+
+        let layout = ChatSubagentLayout(items)
+
+        XCTAssertEqual(layout.visible.map(\.id), ["u:1", "sa:c1", "c9:run", "m:2"])
+        let outer = try XCTUnwrap(layout.nodes["sa:c1"])
+        XCTAssertEqual(outer.tools.map(\.id), ["c1:read"])
+        XCTAssertEqual(outer.children.map(\.item.id), ["sa:c2"])
+        XCTAssertEqual(outer.children.first?.tools.map(\.id), ["c2:grep"])
+        XCTAssertEqual(layout.nodes["sa:c2"]?.tools.map(\.id), ["c2:grep"])
+    }
+
+    func testACardStaysInTheMainFlowWhenItsParentCardIsAbsentOrTheParentsLoop() {
+        let orphan = ChatSubagentLayout([card("c2", parent: "gone"), ownedTool("c2:grep", "c2")])
+        XCTAssertEqual(orphan.visible.map(\.id), ["sa:c2"])
+        XCTAssertEqual(orphan.nodes["sa:c2"]?.tools.map(\.id), ["c2:grep"])
+
+        let loop = ChatSubagentLayout([card("c1", parent: "c2"), card("c2", parent: "c1"), card("c3", parent: "c1")])
+        XCTAssertEqual(loop.visible.map(\.id), ["sa:c1", "sa:c2", "sa:c3"])
+        XCTAssertTrue(loop.nodes.values.allSatisfy { $0.children.isEmpty })
+    }
+
+    func testACardNeverFoldsAndTheAgentMessageBeforeItFoldsAsWork() {
+        let items = [user("u:1"), agent("m:2"), card("c1"), ownedTool("c1:read", "c1"), agent("m:3")]
+
+        XCTAssertEqual(outline(rows(items)), ["u:1", "steps:m:2 ×1", "sa:c1", "m:3"])
+        XCTAssertEqual(outline(rows(items, focus: false)), ["u:1", "m:2", "sa:c1", "m:3"])
     }
 }

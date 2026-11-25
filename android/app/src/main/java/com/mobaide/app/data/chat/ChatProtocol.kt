@@ -86,6 +86,13 @@ object ChatProtocol {
 
     fun newConversation(id: String): JsonObject = op(id, "new_conversation")
 
+    /** Stop one subagent; the parent's turn goes on. */
+    fun cancelSubagent(id: String, subagentId: String): JsonObject = buildJsonObject {
+        put("id", id)
+        put("op", "cancel_subagent")
+        put("subagent_id", subagentId)
+    }
+
     fun setConfig(id: String, configId: String, value: JsonPrimitive): JsonObject = buildJsonObject {
         put("id", id)
         put("op", "set_config")

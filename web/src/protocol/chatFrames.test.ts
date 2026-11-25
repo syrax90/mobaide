@@ -15,6 +15,7 @@ import {
   type SnapshotFrame,
 } from '../chat/chatWire';
 import { INITIAL_CHAT_TIMELINE, applyEvents, applySnapshot, chatOpened } from '../chat/chatTimeline';
+import { subagentTree } from '../chat/focusView';
 
 interface CommandCase {
   name: string;
@@ -56,6 +57,7 @@ const BUILDERS: Readonly<Record<string, () => ChatCommand>> = {
   sign_in_submit: () => ({ op: 'sign_in', action: 'submit', value: 'ab12-cd34' }),
   sign_in_cancel: () => ({ op: 'sign_in', action: 'cancel' }),
   new_conversation: () => ({ op: 'new_conversation' }),
+  cancel_subagent: () => ({ op: 'cancel_subagent', subagent_id: 'sess-7f2a-agent-1' }),
 };
 
 function agentBytes(frame: unknown): Uint8Array {
@@ -294,6 +296,66 @@ describe('chat frame golden fixtures', () => {
     expect(cleared.seq).toBe(54);
     expect(cleared.state.queue).toEqual([]);
     expect(cleared.state.limit_wait).toBeNull();
+  });
+
+  it('applies a subagent card, its tool call and a nested card, then the end of the card', () => {
+    let timeline = applySnapshot(INITIAL_CHAT_TIMELINE, decodeServer('snapshot_full') as SnapshotFrame).timeline;
+    for (const name of [
+      'events_batch',
+      'events_remove',
+      'events_sign_in',
+      'events_background_cleared',
+      'events_limit_wait',
+      'events_limit_wait_cleared',
+    ]) {
+      timeline = applyEvents(timeline, decodeServer(name) as EventsFrame).timeline;
+    }
+
+    const running = applyEvents(timeline, decodeServer('events_subagent_running') as EventsFrame);
+
+    expect(running.sync).toBeUndefined();
+    expect(running.timeline.seq).toBe(57);
+    const byId = (id: string) => running.timeline.items[running.timeline.positions.get(id) ?? -1];
+    expect(byId('sa:sess-7f2a-agent-1')).toEqual({
+      id: 'sa:sess-7f2a-agent-1',
+      type: 'subagent',
+      subagent_id: 'sess-7f2a-agent-1',
+      parent_subagent_id: null,
+      title: 'Find the login code',
+      description: 'Explore',
+      task: 'Find where the login handler checks the user.',
+      state: 'running',
+      stop_reason: null,
+      result: null,
+      can_cancel: true,
+      plan: [
+        { content: 'Find the handler', status: 'completed', priority: 'medium' },
+        { content: 'Check the user test', status: 'in_progress', priority: 'medium' },
+      ],
+    });
+    expect(byId('sess-7f2a-agent-1:toolu_07')).toMatchObject({ type: 'tool', subagent_id: 'sess-7f2a-agent-1' });
+    expect(byId('sa:sess-7f2a-agent-2')).toMatchObject({
+      parent_subagent_id: 'sess-7f2a-agent-1',
+      state: 'requires_action',
+      can_cancel: false,
+    });
+    const tree = subagentTree(running.timeline.items);
+    expect(tree.visible.map((item) => item.id)).not.toContain('sess-7f2a-agent-1:toolu_07');
+    expect(tree.visible.map((item) => item.id)).not.toContain('sa:sess-7f2a-agent-2');
+    expect(tree.tools.get('sess-7f2a-agent-1')?.map((item) => item.id)).toEqual(['sess-7f2a-agent-1:toolu_07']);
+    expect(tree.children.get('sess-7f2a-agent-1')?.map((item) => item.id)).toEqual(['sa:sess-7f2a-agent-2']);
+
+    const done = applyEvents(running.timeline, decodeServer('events_subagent_done') as EventsFrame).timeline;
+
+    expect(done.seq).toBe(58);
+    expect(done.items).toHaveLength(running.timeline.items.length);
+    expect(done.items[done.positions.get('sa:sess-7f2a-agent-1') ?? -1]).toMatchObject({
+      state: 'idle',
+      stop_reason: 'end_turn',
+      result: 'The login handler checks the user in login.py, line 12.',
+      can_cancel: false,
+      plan: [],
+    });
   });
 
   it('decodes results', () => {

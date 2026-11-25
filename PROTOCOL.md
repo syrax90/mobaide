@@ -125,6 +125,27 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-25: subagent cards in chat
+
+Additive delta within proto-v7 (2026-11-25): **one chat item type, one optional tool item field, one chat command. No version bump; `central_server` is untouched.**
+
+Claude (`claude-agent-acp`), Codex (`codex-acp`) and Cursor (`cursor-agent acp`) chats now declare `clientCapabilities.subagents: {}` in `initialize` (ACP Subagents RFD, stable in ACP v1 since 2026-11-20). The agent then reports each subagent as a child session: Claude and Codex with `subagent_update` and `session_message`, Cursor with the earlier draft `subagent_spawned` and `subagent_state_update`. The other agents' `initialize` is unchanged.
+
+| Where | Change |
+|-------|--------|
+| Item type `subagent` | Id `sa:<child session id>`. Fields: `subagent_id`, `parent_subagent_id` (the subagent that started it, or `null`), `title` (never empty: the agent's title, else its role, else "Subagent"), `description` (the role, or `null` when it is the title), `task` (the prompt the parent sent, or `null`; ≤ 32 KB), `state` (`running`, `requires_action`, `idle`, `unknown`), `stop_reason` (only with `idle`: `end_turn`, `cancelled`, `error`, `max_tokens`, … or `null`), `result` (the subagent's answer, or `null`; ≤ 64 KB), `can_cancel`, `plan` (its checklist, plan entries as in the state key `plan`). Upserted on each change. |
+| Tool item field `subagent_id` | Optional. The subagent that owns the tool call. Its id is `<child session id>:<tool call id>` and its `title` starts with `"<subagent title>: "`. On Cursor, the parent's tool call that launched the subagent also carries the field (its id is not namespaced). |
+| `'c'` command `cancel_subagent` | `subagent_id`. Sends `session/cancel` with the child session id: only that subagent stops, the parent's turn goes on. `data: {cancelled: true}`. Refused with "Unknown subagent", "This subagent cannot be stopped" (`can_cancel` is false) or "The agent is not running". The subagent's `idle` / `cancelled` update confirms it. |
+
+* Clients show a `subagent` item as a card: title, state, task, the tool items with its `subagent_id` (inside the card, not in the main flow; the title prefix is cut), the checklist progress, the result, and **Stop** while `can_cancel`. State labels: `running` Running, `requires_action` Needs you, `idle` Done (`cancelled`: Stopped; `error`: Failed), `unknown` none. A card nested under another subagent (`parent_subagent_id`) is shown inside that card.
+* Of a subagent's own updates, the agent keeps its tool calls, its checklist (never the chat's `plan` state: a subagent's TodoWrite no longer replaces the plan chip), its own subagents and its messages. Its message text is not shown; when no answer comes as a `session_message`, `result` is its last message (Codex) or, on Cursor, the output of the parent's tool call that launched it, once it ends. The agent keeps at most 500 subagents per chat and drops the oldest idle one first.
+* Requests (`session/request_permission`, `elicitation/create`) from a subagent's session get `tool_call_id` `<child id>:<tool call id>`, so the card attaches to that subagent's tool item; auto-approve applies as for the parent. A request that names an unannounced session gets `-32602`. A subagent's open requests stay open until it reports `idle`: also when the parent's turn ends or is cancelled while the subagent goes on (Claude's background subagents), as the ACP v1 subagents page requires.
+* `can_cancel` is true only while the subagent runs and the agent grants `capabilities.cancel`: live Claude subagents, Codex subagents while their turn can be interrupted, never Cursor's. A replayed subagent (`session/load`, Continue) never offers Stop, and one the replay leaves running reads `unknown` at the `session/load` reply, until the agent reports its current state after it.
+* `cancel` (the turn's Stop) leaves the subagents' tool calls alone; a subagent that ends as `cancelled` or `error` ends its running tool calls as `cancelled` or `failed`. Restart, New conversation, `/clear` and an agent exit end every card: `running` turns `unknown`, and Stop goes away.
+* `background`: Claude keeps its hook-driven value. For Codex (no hooks), a subagent still running after the prompt's answer sets `background: "working"` until it ends. A Cursor prompt waits for its background subagents and includes their results in the same turn, so `status` stays `running` and `turn_finished` fires once, after them; Stop ends the prompt and its subagents.
+* Older clients skip the `subagent` item and ignore `subagent_id`: they still show the subagent's tool calls as flat tool cards, with its title before the tool title. They no longer see Claude's Agent/Task tool call, which the adapter replaces with the subagent session.
+* Claude's subagent replay after `session/load` needs `claude-agent-acp` 0.109.1 or later.
+
 ### Delta 2026-11-23: keep the computer awake
 
 Additive delta within proto-v7 (2026-11-23, keep awake — agent, web, Android and iOS): **two REST routes, one capability key and one agent event. No version bump; `central_server` is untouched (it already forwards `PUT`).**
@@ -796,6 +817,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `dequeue` | `queue_id` | Removes a queued message. |
 | `restart` | — | After a failure: respawns the agent and reloads the conversation (new epoch). |
 | `new_conversation` | — | Starts an empty conversation with the same settings in a new agent process (new epoch) (Delta 2026-11-18). |
+| `cancel_subagent` | `subagent_id` | Stops one subagent; the turn goes on (Delta 2026-11-25). |
 | `sign_in` | `action` (`start` + `method`, `submit` + `value`, `cancel`) | Drives the `sign_in` request (Delta 2026-11-11 "sign-in from the chat"). |
 
 | Frame `t` | Fields | Client action |
@@ -805,7 +827,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `result` | `id`, `ok`, `data?`, `error?` | Resolve the command with that `id`; ignore others. |
 
 * State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`, `steering` (Delta 2026-11-08), `background` (Delta 2026-11-16), `new_conversation` (Delta 2026-11-18), `limit_wait` (Delta 2026-11-21).
-* Item types: `user`, `agent`, `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`. Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
+* Item types: `user`, `agent`, `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`, `subagent` (Delta 2026-11-25). Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
 * Bounds: text parts 32 KB, message texts 256 KB, diffs 48 KB / 1 200 lines, a snapshot ~2 MB (`truncated` marks dropped older items).
 * Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`). A Claude chat raises `turn_finished` from Claude Code hooks (Delta 2026-11-15). An RPC error on the user's own prompt raises `turn_failed` (not after Stop, not on process death, not when a queued prompt starts next, not when a usage-limit wait is armed (Delta 2026-11-21)).
 
@@ -813,7 +835,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 
 | ACP surface | Used for |
 |-------------|----------|
-| `initialize` | Client capabilities `session.notices`, `session.compaction`, `session.configOptions.boolean`, `elicitation.form`. No `fs` or `terminal`: the agent already works on the host. |
+| `initialize` | Client capabilities `session.notices`, `session.compaction`, `session.configOptions.boolean`, `elicitation.form`; `subagents` for Claude, Codex and Cursor (Delta 2026-11-25). No `fs` or `terminal`: the agent already works on the host. |
 | `session/new`, `session/load`, `session/list`, `session/close` | Create, continue (with history replay), list, close. |
 | `session/prompt`, `session/cancel`, `session/update` | Turns and the timeline. |
 | `session/set_config_option`, `session/set_mode` | Mode, model, effort and other options. |

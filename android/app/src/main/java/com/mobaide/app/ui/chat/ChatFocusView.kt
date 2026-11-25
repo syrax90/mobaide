@@ -31,12 +31,78 @@ fun stepsRowKey(firstItemId: String): String = "steps:$firstItemId"
 fun stepsLabel(count: Int): String = if (count == 1) "1 step" else "$count steps"
 
 /**
+ * Which items a subagent card shows instead of the main flow: the tool calls
+ * that name a present card, and the cards whose parent card is present.
+ * [tools] and [children] are keyed by subagent id, in timeline order.
+ */
+@Immutable
+class ChatSubagentTree(
+    val hidden: Set<String>,
+    val tools: Map<String, List<ChatItem.Tool>>,
+    val children: Map<String, List<ChatItem.Subagent>>,
+) {
+    companion object {
+        val EMPTY = ChatSubagentTree(emptySet(), emptyMap(), emptyMap())
+    }
+}
+
+fun chatSubagentTree(items: List<ChatItem>): ChatSubagentTree {
+    val cards = HashMap<String, ChatItem.Subagent>()
+    items.forEach { if (it is ChatItem.Subagent) cards.putIfAbsent(it.subagentId, it) }
+    if (cards.isEmpty()) return ChatSubagentTree.EMPTY
+    val hidden = HashSet<String>()
+    val tools = HashMap<String, MutableList<ChatItem.Tool>>()
+    val children = HashMap<String, MutableList<ChatItem.Subagent>>()
+    for (item in items) {
+        when (item) {
+            is ChatItem.Tool -> {
+                val owner = item.subagentId?.takeIf { it in cards } ?: continue
+                hidden += item.id
+                tools.getOrPut(owner) { ArrayList() } += item
+            }
+            is ChatItem.Subagent -> {
+                if (!nestsInCard(item, cards)) continue
+                hidden += item.id
+                children.getOrPut(item.parentSubagentId!!) { ArrayList() } += item
+            }
+            else -> Unit
+        }
+    }
+    return ChatSubagentTree(hidden, tools, children)
+}
+
+/** A parent chain that loops back would hide every card in it, so such a card stays in the main flow. */
+private fun nestsInCard(card: ChatItem.Subagent, cards: Map<String, ChatItem.Subagent>): Boolean {
+    val seen = hashSetOf(card.subagentId)
+    var current = card
+    while (true) {
+        val parent = current.parentSubagentId?.let { cards[it] } ?: return current !== card
+        if (!seen.add(parent.subagentId)) return false
+        current = parent
+    }
+}
+
+/**
  * Focus view: folds thinking, tool calls, and agent messages that more work
  * follows in the same turn; everything else shows in place. A turn ends at the
  * next user message or notice: a turn sent from another app on the PC starts
- * with a notice, and must not fold the answer before it.
+ * with a notice, and must not fold the answer before it. Items a subagent card
+ * shows are left out first; a card itself never folds, but counts as work
+ * after an agent message, like a tool call.
  */
 fun chatTimelineRows(
+    items: List<ChatItem>,
+    focus: Boolean,
+    running: Boolean,
+    waitingToolIds: Set<String>,
+    openSteps: Set<String>,
+    subagents: ChatSubagentTree = chatSubagentTree(items),
+): List<ChatTimelineRow> {
+    val shown = if (subagents.hidden.isEmpty()) items else items.filter { it.id !in subagents.hidden }
+    return foldTimeline(shown, focus, running, waitingToolIds, openSteps)
+}
+
+private fun foldTimeline(
     items: List<ChatItem>,
     focus: Boolean,
     running: Boolean,
@@ -58,6 +124,7 @@ fun chatTimelineRows(
                 folded[index] = item.id !in waitingToolIds
                 workAfter = true
             }
+            is ChatItem.Subagent -> workAfter = true
             else -> Unit
         }
     }

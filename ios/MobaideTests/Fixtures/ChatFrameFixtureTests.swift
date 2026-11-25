@@ -61,6 +61,7 @@ final class ChatFrameFixtureTests: XCTestCase {
             "sign_in_submit": { .signInSubmit(id: $0, value: "ab12-cd34") },
             "sign_in_cancel": { .signInCancel(id: $0) },
             "new_conversation": { .newConversation(id: $0) },
+            "cancel_subagent": { .cancelSubagent(id: $0, subagentId: "sess-7f2a-agent-1") },
         ]
     }
 
@@ -100,6 +101,7 @@ final class ChatFrameFixtureTests: XCTestCase {
         case .compaction: return "compaction"
         case .turnEnd: return "turn_end"
         case .error: return "error"
+        case .subagent: return "subagent"
         }
     }
 
@@ -336,6 +338,55 @@ final class ChatFrameFixtureTests: XCTestCase {
         XCTAssertEqual(timeline.seq, 54)
         XCTAssertTrue(timeline.state.queue.isEmpty)
         XCTAssertNil(timeline.state.limitWait)
+    }
+
+    func testSubagentEventsAddACardItsToolCallAndANestedCardThenEndTheCard() throws {
+        var timeline = try loaded()
+        for name in [
+            "events_batch", "events_remove", "events_sign_in", "events_background_cleared",
+            "events_limit_wait", "events_limit_wait_cleared",
+        ] {
+            _ = timeline.apply(try server(name))
+        }
+
+        let running = timeline.apply(try server("events_subagent_running"))
+
+        XCTAssertNil(running.sync)
+        XCTAssertEqual(timeline.seq, 57)
+        let cardItem = try XCTUnwrap(timeline.items.first { $0.id == "sa:sess-7f2a-agent-1" })
+        guard case .subagent(let card) = cardItem.body else { return XCTFail("not a subagent item") }
+        XCTAssertEqual(card.subagentId, "sess-7f2a-agent-1")
+        XCTAssertNil(card.parentSubagentId)
+        XCTAssertEqual(card.title, "Find the login code")
+        XCTAssertEqual(card.description, "Explore")
+        XCTAssertEqual(card.task, "Find where the login handler checks the user.")
+        XCTAssertEqual(card.state, "running")
+        XCTAssertNil(card.stopReason)
+        XCTAssertNil(card.result)
+        XCTAssertTrue(card.canCancel)
+        XCTAssertEqual(card.plan.map(\.content), ["Find the handler", "Check the user test"])
+        XCTAssertEqual(card.plan.map(\.status), ["completed", "in_progress"])
+        let toolItem = try XCTUnwrap(timeline.items.first { $0.id == "sess-7f2a-agent-1:toolu_07" })
+        guard case .tool(let tool) = toolItem.body else { return XCTFail("not a tool item") }
+        XCTAssertEqual(tool.subagentId, "sess-7f2a-agent-1")
+        let nestedItem = try XCTUnwrap(timeline.items.first { $0.id == "sa:sess-7f2a-agent-2" })
+        guard case .subagent(let nested) = nestedItem.body else { return XCTFail("not a subagent item") }
+        XCTAssertEqual(nested.parentSubagentId, "sess-7f2a-agent-1")
+        XCTAssertEqual(nested.state, "requires_action")
+        XCTAssertFalse(nested.canCancel)
+        let itemCount = timeline.items.count
+
+        _ = timeline.apply(try server("events_subagent_done"))
+
+        XCTAssertEqual(timeline.seq, 58)
+        XCTAssertEqual(timeline.items.count, itemCount)
+        let doneItem = try XCTUnwrap(timeline.items.first { $0.id == "sa:sess-7f2a-agent-1" })
+        guard case .subagent(let done) = doneItem.body else { return XCTFail("not a subagent item") }
+        XCTAssertEqual(done.state, "idle")
+        XCTAssertEqual(done.stopReason, "end_turn")
+        XCTAssertEqual(done.result, "The login handler checks the user in login.py, line 12.")
+        XCTAssertFalse(done.canCancel)
+        XCTAssertTrue(done.plan.isEmpty)
     }
 
     func testResultsDecode() throws {

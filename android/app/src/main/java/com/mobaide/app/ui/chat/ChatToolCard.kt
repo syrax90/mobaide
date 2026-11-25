@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.filled.Check
@@ -41,8 +42,10 @@ import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -51,6 +54,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -61,14 +65,17 @@ import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
@@ -76,20 +83,28 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import com.mobaide.app.data.chat.ChatContentPart
 import com.mobaide.app.data.chat.ChatImageDecoder
 import com.mobaide.app.data.chat.ChatItem
 import com.mobaide.app.data.chat.ChatLocation
+import com.mobaide.app.data.chat.ChatPlanEntry
 import com.mobaide.app.data.chat.DecodedChatImage
+import com.mobaide.app.data.chat.SubagentState
 import com.mobaide.app.data.chat.ToolStatus
 import com.mobaide.app.ui.chat.markdown.CodeBlock
 import com.mobaide.app.ui.chat.markdown.CodeFontFamily
 import com.mobaide.app.ui.chat.markdown.Markdown
 import com.mobaide.app.ui.chat.markdown.MarkdownText
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
+import com.mobaide.app.ui.common.pixel.PixelChip
 import com.mobaide.app.ui.common.pixel.PixelTextButton
 import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.theme.MobaideTheme
@@ -601,6 +616,376 @@ private fun DiffLines(lines: List<String>) {
                         }
                     }
                     .padding(horizontal = with(density) { padX.toDp() }, vertical = with(density) { padY.toDp() }),
+            )
+        }
+    }
+}
+
+const val CHAT_SUBAGENT_CARD_TAG = "chat_subagent_card"
+const val CHAT_SUBAGENT_STOP_TAG = "chat_subagent_stop"
+
+private const val SUBAGENT_TASK_LINES = 3
+private const val SUBAGENT_RESULT_LINES = 6
+
+/**
+ * A subagent: its state, task, checklist, the tool calls it made, the cards of
+ * the subagents it started, its result and Stop. [stopping] holds the subagent
+ * ids whose Stop waits for the agent.
+ */
+@Composable
+fun ChatSubagentCard(
+    item: ChatItem.Subagent,
+    tree: ChatSubagentTree,
+    waitingToolIds: Set<String>,
+    stopping: Set<String>,
+    canAct: Boolean,
+    onStop: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    nested: Boolean = false,
+) {
+    val pixel = MaterialTheme.pixel
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val tools = tree.tools[item.subagentId].orEmpty()
+    val children = tree.children[item.subagentId].orEmpty()
+    val needsYou = item.state == SubagentState.REQUIRES_ACTION
+    val padding = if (nested) 10.dp else 12.dp
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag(CHAT_SUBAGENT_CARD_TAG)
+            .background(if (nested) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLow)
+            .pixelFrame(if (needsYou) pixel.brand2 else pixel.surface2)
+            .padding(horizontal = padding, vertical = 6.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 40.dp)
+                .semantics(mergeDescendants = true) {},
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = toolKindIcon("think"),
+                contentDescription = null,
+                tint = muted,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                item.description?.let { description ->
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            SubagentStateChip(item, modifier = Modifier.padding(start = 8.dp))
+        }
+        item.task?.let { task -> SubagentTask(item.id, task) }
+        if (item.plan.isNotEmpty()) SubagentChecklist(item)
+        if (tools.isNotEmpty()) {
+            SubagentTools(
+                item = item,
+                tools = tools,
+                waitingToolIds = waitingToolIds,
+            )
+        }
+        if (children.isNotEmpty()) {
+            Column(
+                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp, start = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                children.forEach { child ->
+                    ChatSubagentCard(
+                        item = child,
+                        tree = tree,
+                        waitingToolIds = waitingToolIds,
+                        stopping = stopping,
+                        canAct = canAct,
+                        onStop = onStop,
+                        nested = true,
+                    )
+                }
+            }
+        }
+        item.result?.let { result -> SubagentResult(item.id, result) }
+        if (item.canCancel) {
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.End) {
+                Box(modifier = Modifier.minimumInteractiveComponentSize(), contentAlignment = Alignment.Center) {
+                    PixelButton(
+                        text = "Stop",
+                        onClick = { onStop(item.subagentId) },
+                        style = PixelButtonStyle.DangerOutline,
+                        enabled = canAct && item.subagentId !in stopping,
+                        compact = true,
+                        modifier = Modifier
+                            .testTag(CHAT_SUBAGENT_STOP_TAG)
+                            .semantics { contentDescription = "Stop ${item.title}" },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The state chip label; null for a state without one. */
+fun subagentStateLabel(state: String, stopReason: String?): String? = when (state) {
+    SubagentState.RUNNING -> "Running"
+    SubagentState.REQUIRES_ACTION -> "Needs you"
+    SubagentState.IDLE -> when (stopReason) {
+        "cancelled" -> "Stopped"
+        "error" -> "Failed"
+        else -> "Done"
+    }
+    else -> null
+}
+
+/** The tool call title inside its card, without the "<card title>: " the agent puts before it. */
+fun subagentToolTitle(card: ChatItem.Subagent, tool: ChatItem.Tool): String = tool.title.removePrefix("${card.title}: ")
+
+fun subagentToolsLabel(count: Int): String = if (count == 1) "1 tool call" else "$count tool calls"
+
+@Composable
+private fun SubagentStateChip(item: ChatItem.Subagent, modifier: Modifier = Modifier) {
+    val label = subagentStateLabel(item.state, item.stopReason) ?: return
+    val pixel = MaterialTheme.pixel
+    val tone = when {
+        item.state == SubagentState.REQUIRES_ACTION -> pixel.warning
+        item.state == SubagentState.RUNNING -> pixel.accent
+        item.stopReason == "error" -> pixel.danger
+        item.stopReason == "cancelled" -> pixel.gray
+        else -> pixel.ok
+    }
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        if (item.state == SubagentState.RUNNING) {
+            PixelBlinkCursor(height = 12.dp, modifier = Modifier.padding(end = 6.dp))
+        }
+        PixelChip(label, tone = tone)
+    }
+}
+
+@Composable
+private fun SubagentTask(id: String, task: String) {
+    var expanded by rememberSaveable(id, "task") { mutableStateOf(false) }
+    var overflows by remember(task) { mutableStateOf(false) }
+    Text(
+        text = task,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = if (expanded) Int.MAX_VALUE else SUBAGENT_TASK_LINES,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow },
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (overflows || expanded) {
+                    Modifier.clickable(role = Role.Button, onClickLabel = if (expanded) "Show less" else "Show more") {
+                        expanded = !expanded
+                    }
+                } else {
+                    Modifier
+                },
+            )
+            .padding(vertical = 4.dp),
+    )
+}
+
+@Composable
+private fun SubagentChecklist(item: ChatItem.Subagent) {
+    var expanded by rememberSaveable(item.id, "plan") { mutableStateOf(false) }
+    val done = item.plan.count { it.status == "completed" }
+    SubagentToggleRow(
+        text = AnnotatedString("Checklist $done/${item.plan.size}"),
+        expanded = expanded,
+        onClickLabel = if (expanded) "Hide checklist" else "Show checklist",
+        onToggle = { expanded = !expanded },
+    )
+    if (expanded) {
+        Column(
+            modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            item.plan.forEach { entry -> PlanEntryRow(entry) }
+        }
+    }
+}
+
+@Composable
+private fun SubagentTools(item: ChatItem.Subagent, tools: List<ChatItem.Tool>, waitingToolIds: Set<String>) {
+    var expanded by rememberSaveable(item.id, "tools") { mutableStateOf(false) }
+    val waiting = tools.any { it.id in waitingToolIds }
+    LaunchedEffect(waiting) { if (waiting) expanded = true }
+    val strong = MaterialTheme.colorScheme.onSurface
+    val text = buildAnnotatedString {
+        append(subagentToolsLabel(tools.size))
+        if (item.state == SubagentState.RUNNING) {
+            append(" · ")
+            withStyle(SpanStyle(color = strong)) {
+                append(subagentToolTitle(item, tools.last()).ifBlank { "Tool call" })
+            }
+        }
+    }
+    SubagentToggleRow(
+        text = text,
+        expanded = expanded,
+        onClickLabel = if (expanded) "Hide tool calls" else "Show tool calls",
+        onToggle = { expanded = !expanded },
+    )
+    if (expanded) {
+        Column(
+            modifier = Modifier.padding(bottom = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            tools.forEach { tool ->
+                ChatToolCard(
+                    item = tool.copy(title = subagentToolTitle(item, tool)),
+                    waitingForApproval = tool.id in waitingToolIds,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubagentToggleRow(
+    text: AnnotatedString,
+    expanded: Boolean,
+    onClickLabel: String,
+    onToggle: () -> Unit,
+) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Button, onClickLabel = onClickLabel, onClick = onToggle)
+            .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+            .heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = muted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Icon(
+            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = null,
+            tint = muted,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun SubagentResult(id: String, result: String) {
+    var expanded by rememberSaveable(id, "result") { mutableStateOf(false) }
+    var overflows by remember(result) { mutableStateOf(false) }
+    val style = MaterialTheme.typography.bodyMedium
+    val lineHeight = style.lineHeight.takeIf { it.isSpecified } ?: (style.fontSize * 1.4f)
+    val maxHeight = with(LocalDensity.current) { (lineHeight * SUBAGENT_RESULT_LINES).toDp() }
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        ClampedHeight(
+            maxHeight = maxHeight,
+            clamped = !expanded,
+            onOverflow = { overflows = it },
+        ) {
+            SelectionContainer {
+                MarkdownText(text = result, style = style)
+            }
+        }
+        if (overflows || expanded) {
+            PixelTextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Show less" else "Show more", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+/** Shows at most [maxHeight] of [content] while [clamped]; reports whether the content is taller. */
+@Composable
+private fun ClampedHeight(
+    maxHeight: Dp,
+    clamped: Boolean,
+    onOverflow: (Boolean) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Layout(content = content, modifier = Modifier.fillMaxWidth().clipToBounds()) { measurables, constraints ->
+        val placeable = measurables.first().measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+        val limit = maxHeight.roundToPx()
+        onOverflow(placeable.height > limit)
+        val height = if (clamped) minOf(placeable.height, limit) else placeable.height
+        layout(placeable.width, height) { placeable.place(0, 0) }
+    }
+}
+
+@Preview(name = "Subagent card light", showBackground = true)
+@Preview(name = "Subagent card dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun ChatSubagentCardPreview() {
+    val items = listOf(
+        ChatItem.Subagent(
+            id = "sa:a1",
+            subagentId = "a1",
+            parentSubagentId = null,
+            title = "Find the login code",
+            description = "Explore",
+            task = "Find where the login handler checks the user.",
+            state = SubagentState.RUNNING,
+            stopReason = null,
+            result = null,
+            canCancel = true,
+            plan = listOf(
+                ChatPlanEntry("Find the handler", "completed", "medium"),
+                ChatPlanEntry("Check the user test", "in_progress", "medium"),
+            ),
+        ),
+        ChatItem.Tool(
+            id = "a1:t1",
+            title = "Find the login code: Read login.py",
+            kind = "read",
+            status = ToolStatus.IN_PROGRESS,
+            subtitle = "/project/login.py",
+            locations = emptyList(),
+            content = emptyList(),
+            input = null,
+            subagentId = "a1",
+        ),
+        ChatItem.Subagent(
+            id = "sa:a2",
+            subagentId = "a2",
+            parentSubagentId = "a1",
+            title = "Read the tests",
+            description = null,
+            task = null,
+            state = SubagentState.IDLE,
+            stopReason = "end_turn",
+            result = "The test covers **only** the happy path.",
+            canCancel = false,
+            plan = emptyList(),
+        ),
+    )
+    MobaideTheme {
+        Column(modifier = Modifier.padding(16.dp)) {
+            ChatSubagentCard(
+                item = items.first() as ChatItem.Subagent,
+                tree = chatSubagentTree(items),
+                waitingToolIds = emptySet(),
+                stopping = emptySet(),
+                canAct = true,
+                onStop = {},
             )
         }
     }

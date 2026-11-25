@@ -100,14 +100,18 @@ fun ChatTimeline(
     onRestart: () -> Unit,
     modifier: Modifier = Modifier,
     focusView: Boolean = false,
+    onStopSubagent: (String) -> Unit = {},
 ) {
     val items = ui.items
     val streamingId = ui.streamingItemId
     val waitingTools = ui.waitingToolIds
     val running = ui.running
     var openSteps by rememberSaveable(stateSaver = OpenStepsSaver) { mutableStateOf(emptySet<String>()) }
-    val rows = remember(items, focusView, running, waitingTools, openSteps) {
-        chatTimelineRows(items, focusView, running, waitingTools, openSteps)
+    val subagents = remember(items) { chatSubagentTree(items) }
+    val stoppingSubagents = ui.stoppingSubagents.keys
+    val canAct = ui.canAct
+    val rows = remember(items, subagents, focusView, running, waitingTools, openSteps) {
+        chatTimelineRows(items, focusView, running, waitingTools, openSteps, subagents)
     }
     val reversed = remember(rows) { rows.asReversed() }
     val canRestart = ui.state.status == ChatStatus.ERROR && ui.live && !ui.sessionClosed
@@ -139,6 +143,14 @@ fun ChatTimeline(
                         is ChatItem.Agent -> AgentMessage(item, streaming = item.id == streamingId)
                         is ChatItem.Thought -> ThoughtRow(item, streaming = item.id == streamingId)
                         is ChatItem.Tool -> ChatToolCard(item, waitingForApproval = item.id in waitingTools)
+                        is ChatItem.Subagent -> ChatSubagentCard(
+                            item = item,
+                            tree = subagents,
+                            waitingToolIds = waitingTools,
+                            stopping = stoppingSubagents,
+                            canAct = canAct,
+                            onStop = onStopSubagent,
+                        )
                         is ChatItem.Notice -> NoticeBanner(item)
                         is ChatItem.Compaction -> CompactionDivider(item)
                         is ChatItem.TurnEnd -> TurnEndLabel(item)

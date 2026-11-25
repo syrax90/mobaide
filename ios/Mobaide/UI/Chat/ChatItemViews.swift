@@ -42,6 +42,9 @@ struct ChatItemRow: View, Equatable {
             ChatTurnEndRow(text: text)
         case .error(let text):
             ChatErrorRow(text: text, canRestart: canRestart, onRestart: onRestart)
+        case .subagent:
+            // ChatTimelineView shows a subagent as a ChatSubagentCard, which needs its children.
+            EmptyView()
         }
     }
 }
@@ -379,6 +382,274 @@ struct ChatToolRow: View {
                 Text("No details")
                     .font(.caption)
                     .foregroundStyle(colors.textMuted)
+            }
+        }
+    }
+}
+
+/// A subagent's card: state, task, checklist, its tool calls, its nested
+/// cards, result and Stop. Section toggles are kept in the model's expanded
+/// set as `<item id>#<section>`, so a card scrolled out comes back the same.
+struct ChatSubagentCard: View, Equatable {
+    let node: ChatSubagentNode
+    let nested: Bool
+    let expandedItems: Set<String>
+    let waitingToolIds: Set<String>
+    let stopping: Set<String>
+    let canStop: Bool
+    let onToggle: (String) -> Void
+    let onStop: (String) -> Void
+
+    nonisolated static func == (lhs: ChatSubagentCard, rhs: ChatSubagentCard) -> Bool {
+        lhs.node == rhs.node && lhs.nested == rhs.nested && lhs.expandedItems == rhs.expandedItems
+            && lhs.waitingToolIds == rhs.waitingToolIds && lhs.stopping == rhs.stopping && lhs.canStop == rhs.canStop
+    }
+
+    @Environment(\.mobaideColors) private var colors
+
+    private var subagent: ChatSubagent { node.subagent }
+
+    private func key(_ section: String) -> String { "\(node.item.id)#\(section)" }
+
+    private func isOpen(_ section: String) -> Bool { expandedItems.contains(key(section)) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            header
+            if let task = subagent.task, !task.isEmpty {
+                ChatSubagentTask(text: task, open: isOpen("task")) { onToggle(key("task")) }
+            }
+            if !subagent.plan.isEmpty {
+                checklist
+            }
+            if !node.tools.isEmpty {
+                toolCalls
+            }
+            ForEach(node.children, id: \.item.id) { child in
+                ChatSubagentCard(
+                    node: child,
+                    nested: true,
+                    expandedItems: expandedItems,
+                    waitingToolIds: waitingToolIds,
+                    stopping: stopping,
+                    canStop: canStop,
+                    onToggle: onToggle,
+                    onStop: onStop
+                )
+            }
+            if let result = subagent.result, !result.isEmpty {
+                ChatClampedMarkdown(
+                    text: result,
+                    cacheKey: key("result"),
+                    expanded: isOpen("result"),
+                    onToggle: { onToggle(key("result")) }
+                )
+            }
+            if subagent.canCancel {
+                Button("Stop") { onStop(subagent.subagentId) }
+                    .buttonStyle(PixelButtonStyle(variant: .dangerGhost, size: .small))
+                    .disabled(!canStop || stopping.contains(subagent.subagentId))
+                    .accessibilityLabel("Stop \(subagent.title)")
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        }
+        .padding(nested
+            ? EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+            : EdgeInsets(top: 10, leading: 12, bottom: 12, trailing: 12))
+        .background(nested ? colors.surface : colors.bg2)
+        .pixelRing(subagent.state == "requires_action" ? MobaideColorScheme.brand2 : colors.surface2)
+        .padding(.leading, nested ? 8 : 0)
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: ChatToolStyle.icon("think"))
+                .font(.subheadline)
+                .foregroundStyle(colors.textMuted)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(subagent.title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(colors.text)
+                    .lineLimit(1)
+                if let description = subagent.description, !description.isEmpty {
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(colors.textMuted)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 4)
+            if let chip = Self.stateChip(subagent) {
+                HStack(spacing: 6) {
+                    if subagent.isRunning {
+                        PixelLoadingBlock(width: 7, height: 12)
+                    }
+                    PixelChip(chip.label, .status(chip.tone))
+                }
+            }
+        }
+        .frame(minHeight: 36)
+        .accessibilityElement(children: .combine)
+    }
+
+
+    private var checklist: some View {
+        let open = isOpen("plan")
+        let done = subagent.plan.filter { $0.status == "completed" }.count
+        return VStack(alignment: .leading, spacing: 6) {
+            sectionToggle(
+                label: Text("Checklist \(done)/\(subagent.plan.count)").foregroundStyle(colors.textMuted),
+                open: open
+            ) { onToggle(key("plan")) }
+            if open {
+                ChatPlanEntries(plan: subagent.plan)
+                    .padding(.leading, 4)
+            }
+        }
+    }
+
+    private var toolCalls: some View {
+        let open = isOpen("tools") || node.tools.contains { waitingToolIds.contains($0.id) }
+        let count = node.tools.count
+        let counted = Text(count == 1 ? "1 tool call" : "\(count) tool calls").foregroundStyle(colors.textMuted)
+        var label = counted
+        if subagent.isRunning, let newest = node.tools.last, case .tool(let call) = newest.body {
+            let title = strippedTitle(call.title)
+            label = Text("\(counted)\(Text(" · ").foregroundStyle(colors.textMuted))\(Text(title.isEmpty ? "Tool call" : title).foregroundStyle(colors.text))")
+        }
+        return VStack(alignment: .leading, spacing: 6) {
+            sectionToggle(label: label, open: open) { onToggle(key("tools")) }
+            if open {
+                ForEach(node.tools) { item in
+                    if case .tool(let call) = item.body {
+                        ChatToolRow(
+                            id: item.id,
+                            tool: ownTool(call),
+                            expanded: expandedItems.contains(item.id),
+                            waitingForApproval: waitingToolIds.contains(item.id),
+                            onToggle: { onToggle(item.id) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func ownTool(_ call: ChatToolCall) -> ChatToolCall {
+        var own = call
+        own.title = strippedTitle(call.title)
+        return own
+    }
+
+    private func strippedTitle(_ title: String) -> String {
+        let prefix = "\(subagent.title): "
+        return title.hasPrefix(prefix) ? String(title.dropFirst(prefix.count)) : title
+    }
+
+    private func sectionToggle(label: Text, open: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                label
+                    .font(.footnote)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(colors.gray)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(open ? "Collapse" : "Expand")
+    }
+
+    static func stateChip(_ subagent: ChatSubagent) -> (label: String, tone: PixelTone)? {
+        switch subagent.state {
+        case "running": return ("Running", .accent)
+        case "requires_action": return ("Needs you", .warning)
+        case "idle":
+            switch subagent.stopReason {
+            case "cancelled": return ("Stopped", .muted)
+            case "error": return ("Failed", .danger)
+            default: return ("Done", .ok)
+            }
+        default: return nil
+        }
+    }
+}
+
+/// A subagent's task, clamped to 3 lines; a toggle only when the clamp hides text.
+private struct ChatSubagentTask: View {
+    let text: String
+    let open: Bool
+    let onToggle: () -> Void
+
+    @Environment(\.mobaideColors) private var colors
+    @State private var shownHeight: CGFloat = 0
+    @State private var fullHeight: CGFloat = 0
+
+    private var overflows: Bool { fullHeight > shownHeight + 1 }
+
+    @ViewBuilder
+    var body: some View {
+        let label = Text(text)
+            .font(.footnote)
+            .foregroundStyle(colors.textMuted)
+            .lineLimit(open ? nil : 3)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownHeight = $0 }
+            .background(alignment: .topLeading) {
+                Text(text)
+                    .font(.footnote)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullHeight = $0 }
+            }
+        if open || overflows {
+            Button(action: onToggle) {
+                label.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(open ? "Collapse" : "Expand")
+        } else {
+            label
+        }
+    }
+}
+
+/// Markdown clamped to about six lines, with Show more / Show less when it is longer.
+private struct ChatClampedMarkdown: View {
+    let text: String
+    let cacheKey: String
+    let expanded: Bool
+    let onToggle: () -> Void
+
+    @Environment(\.mobaideColors) private var colors
+    @ScaledMetric(relativeTo: .body) private var lineHeight: CGFloat = 22
+    @State private var fullHeight: CGFloat = 0
+
+    private var clampHeight: CGFloat { lineHeight * 6 }
+    private var overflows: Bool { fullHeight > clampHeight + 1 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ChatMarkdownView(text: text, cacheKey: cacheKey)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullHeight = $0 }
+                .frame(maxWidth: .infinity, maxHeight: expanded || !overflows ? nil : clampHeight, alignment: .topLeading)
+                .clipped()
+            if overflows {
+                Button(expanded ? "Show less" : "Show more", action: onToggle)
+                    .font(.footnote)
+                    .foregroundStyle(colors.accent)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
             }
         }
     }

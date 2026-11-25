@@ -31,6 +31,22 @@ class ChatFocusViewTest {
         input = null,
     )
 
+    private fun ownedTool(id: String, subagentId: String) = tool(id).copy(subagentId = subagentId)
+
+    private fun card(subagentId: String, parent: String? = null) = ChatItem.Subagent(
+        id = "sa:$subagentId",
+        subagentId = subagentId,
+        parentSubagentId = parent,
+        title = "Explore",
+        description = null,
+        task = null,
+        state = "running",
+        stopReason = null,
+        result = null,
+        canCancel = false,
+        plan = emptyList(),
+    )
+
     private fun notice(id: String) = ChatItem.Notice(id, "info", "Loaded", "")
 
     private fun compaction(id: String) = ChatItem.Compaction(id, "completed", "")
@@ -148,5 +164,41 @@ class ChatFocusViewTest {
             outline(result),
         )
         assertEquals(listOf(true, false), steps(result).map { it.open })
+    }
+
+    private fun ids(items: List<ChatItem>?): List<String>? = items?.map { it.id }
+
+    @Test
+    fun aCard_takesItsToolCallsAndTheCardsNestedInIt_outOfTheMainFlow() {
+        val items = listOf(
+            user("u:1"), card("c1"), ownedTool("c1:read", "c1"), card("c2", "c1"),
+            ownedTool("c2:grep", "c2"), ownedTool("c9:run", "c9"), agent("m:2"),
+        )
+
+        val tree = chatSubagentTree(items)
+
+        assertEquals(listOf("u:1", "sa:c1", "c9:run", "m:2"), outline(rows(items, focus = false)))
+        assertEquals(listOf("c1:read"), ids(tree.tools["c1"]))
+        assertEquals(listOf("c2:grep"), ids(tree.tools["c2"]))
+        assertEquals(listOf("sa:c2"), ids(tree.children["c1"]))
+        assertNull(tree.tools["c9"])
+    }
+
+    @Test
+    fun aCard_staysInTheMainFlow_whenItsParentCardIsAbsentOrTheParentsLoop() {
+        val orphan = listOf(card("c2", "gone"), ownedTool("c2:grep", "c2"))
+        assertEquals(listOf("sa:c2"), outline(rows(orphan, focus = false)))
+        assertEquals(listOf("c2:grep"), ids(chatSubagentTree(orphan).tools["c2"]))
+
+        val loop = listOf(card("c1", "c2"), card("c2", "c1"), card("c3", "c1"))
+        assertEquals(listOf("sa:c1", "sa:c2", "sa:c3"), outline(rows(loop, focus = false)))
+        assertEquals(emptyMap<String, List<ChatItem.Subagent>>(), chatSubagentTree(loop).children)
+    }
+
+    @Test
+    fun aCard_neverFolds_andTheAgentMessageBeforeItFoldsAsWork() {
+        val items = listOf(user("u:1"), agent("m:2"), card("c1"), ownedTool("c1:read", "c1"), agent("m:3"))
+
+        assertEquals(listOf("u:1", "steps:m:2 ×1", "sa:c1", "m:3"), outline(rows(items)))
     }
 }

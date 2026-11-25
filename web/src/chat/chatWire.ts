@@ -42,6 +42,9 @@ export type ToolKind = (typeof TOOL_KINDS)[number];
 const TOOL_STATUSES = ['pending', 'in_progress', 'completed', 'failed', 'cancelled'] as const;
 export type ToolStatus = (typeof TOOL_STATUSES)[number];
 
+const SUBAGENT_STATES = ['running', 'requires_action', 'idle', 'unknown'] as const;
+export type SubagentState = (typeof SUBAGENT_STATES)[number];
+
 /** Work a finished turn left running: a workflow or a sub-agent, or only a shell, a monitor or a wakeup. */
 const BACKGROUND_WORK = ['working', 'waiting'] as const;
 export type BackgroundWork = (typeof BACKGROUND_WORK)[number];
@@ -120,6 +123,13 @@ export type DiffPart = z.infer<typeof diffPartSchema>;
 
 const contentPartsSchema = lenientArray(contentPartSchema);
 
+const planEntrySchema = z.object({
+  content: text,
+  status: oneOf(['pending', 'in_progress', 'completed'] as const, 'pending'),
+  priority: text,
+});
+export type ChatPlanEntry = z.infer<typeof planEntrySchema>;
+
 // ---------- items ----------
 
 const attachmentSchema = z.object({
@@ -149,6 +159,8 @@ const toolItemSchema = z.object({
   ),
   content: contentPartsSchema,
   input: nullableText,
+  /** The subagent that owns this tool call; an older agent leaves it out. */
+  subagent_id: z.string().nullable().optional().catch(null),
 });
 const noticeItemSchema = z.object({
   id: z.string(),
@@ -170,6 +182,21 @@ const turnEndItemSchema = z.object({
   text,
 });
 const errorItemSchema = z.object({ id: z.string(), type: z.literal('error'), text });
+/** A child session the agent started (`sa:<child session id>`). */
+const subagentItemSchema = z.object({
+  id: z.string(),
+  type: z.literal('subagent'),
+  subagent_id: text,
+  parent_subagent_id: nullableText,
+  title: text,
+  description: nullableText,
+  task: nullableText,
+  state: oneOf(SUBAGENT_STATES, 'unknown'),
+  stop_reason: nullableText,
+  result: nullableText,
+  can_cancel: flag,
+  plan: lenientArray(planEntrySchema),
+});
 
 const itemSchema = z.discriminatedUnion('type', [
   userItemSchema,
@@ -180,6 +207,7 @@ const itemSchema = z.discriminatedUnion('type', [
   compactionItemSchema,
   turnEndItemSchema,
   errorItemSchema,
+  subagentItemSchema,
 ]);
 
 export type ChatItem = z.infer<typeof itemSchema>;
@@ -187,6 +215,7 @@ export type UserItem = z.infer<typeof userItemSchema>;
 export type ToolItem = z.infer<typeof toolItemSchema>;
 export type NoticeItem = z.infer<typeof noticeItemSchema>;
 export type CompactionItem = z.infer<typeof compactionItemSchema>;
+export type SubagentItem = z.infer<typeof subagentItemSchema>;
 
 /** `null` for an unknown item type, which the timeline skips. */
 export function parseChatItem(raw: unknown): ChatItem | null {
@@ -233,13 +262,6 @@ const usageSchema = z
   .nullable()
   .catch(null);
 export type ChatUsage = NonNullable<z.infer<typeof usageSchema>>;
-
-const planEntrySchema = z.object({
-  content: text,
-  status: oneOf(['pending', 'in_progress', 'completed'] as const, 'pending'),
-  priority: text,
-});
-export type ChatPlanEntry = z.infer<typeof planEntrySchema>;
 
 const permissionOptionSchema = z.object({ id: z.string(), name: text, kind: text });
 export type PermissionOption = z.infer<typeof permissionOptionSchema>;
@@ -508,6 +530,7 @@ export type ChatCommand =
   | { op: 'sync'; epoch?: string; after_seq?: number }
   | { op: 'prompt'; text: string; images?: ChatImage[] }
   | { op: 'cancel' }
+  | { op: 'cancel_subagent'; subagent_id: string }
   | { op: 'set_config'; config_id: string; value: string | boolean }
   | { op: 'respond'; request_id: string; option_id: string }
   | {

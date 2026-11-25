@@ -9,9 +9,14 @@
  * or notice: a turn sent from another app on the PC starts with a notice, not
  * with a user message, and must not fold the answer before it.
  *
+ * Subagents: the tool calls a subagent card owns and the cards nested in
+ * another card leave the list first (`subagentTree`), then the rest folds. A
+ * card is shown in place, never folded, and counts as work after an agent
+ * message, like a tool call.
+ *
  * Mirrored by Android `ChatFocusView.kt` and iOS `ChatFocusView.swift`.
  */
-import type { ChatItem } from './chatWire';
+import type { ChatItem, SubagentItem, ToolItem } from './chatWire';
 
 export type TimelineRow =
   | { kind: 'item'; item: ChatItem; nested: boolean }
@@ -67,6 +72,8 @@ function foldedItems(items: readonly ChatItem[], waitingTools: ReadonlySet<strin
       workAfter = false;
     } else if (item.type === 'agent') {
       folded[index] = workAfter;
+    } else if (item.type === 'subagent') {
+      workAfter = true;
     } else if (isWork(item)) {
       folded[index] = !(item.type === 'tool' && waitingTools.has(item.id));
       workAfter = true;
@@ -107,6 +114,66 @@ export function timelineRows(items: readonly ChatItem[], options: TimelineRowOpt
     }
   }
   return rows;
+}
+
+export interface SubagentTree {
+  /** The items of the main flow: `items` itself when no subagent card hides any. */
+  visible: readonly ChatItem[];
+  /** Subagent id → the tool calls its card shows, in timeline order. */
+  tools: ReadonlyMap<string, readonly ToolItem[]>;
+  /** Subagent id → the cards nested in its card, in timeline order. */
+  children: ReadonlyMap<string, readonly SubagentItem[]>;
+}
+
+/**
+ * Which items move into a subagent card. A card nests in its parent's card
+ * only when the parent card is present and the parent chain does not loop
+ * back; otherwise it stays in the main flow. Tool calls of a subagent with no
+ * card stay in the main flow.
+ */
+export function subagentTree(items: readonly ChatItem[]): SubagentTree {
+  const cards = new Map<string, SubagentItem>();
+  for (const item of items) {
+    if (item.type === 'subagent' && item.subagent_id !== '') cards.set(item.subagent_id, item);
+  }
+  const tools = new Map<string, ToolItem[]>();
+  const children = new Map<string, SubagentItem[]>();
+  if (cards.size === 0) return { visible: items, tools, children };
+
+  const nestedIn = (card: SubagentItem): string | null => {
+    const parent = card.parent_subagent_id;
+    if (parent === null || !cards.has(parent)) return null;
+    const seen = new Set<string>([card.subagent_id]);
+    let current: string | null = parent;
+    while (current !== null) {
+      if (seen.has(current)) return null;
+      seen.add(current);
+      const above: string | null = cards.get(current)?.parent_subagent_id ?? null;
+      current = above !== null && cards.has(above) ? above : null;
+    }
+    return parent;
+  };
+
+  const visible: ChatItem[] = [];
+  for (const item of items) {
+    if (item.type === 'tool' && typeof item.subagent_id === 'string' && cards.has(item.subagent_id)) {
+      const owned = tools.get(item.subagent_id);
+      if (owned === undefined) tools.set(item.subagent_id, [item]);
+      else owned.push(item);
+      continue;
+    }
+    if (item.type === 'subagent' && cards.get(item.subagent_id) === item) {
+      const parent = nestedIn(item);
+      if (parent !== null) {
+        const siblings = children.get(parent);
+        if (siblings === undefined) children.set(parent, [item]);
+        else siblings.push(item);
+        continue;
+      }
+    }
+    visible.push(item);
+  }
+  return { visible: visible.length === items.length ? items : visible, tools, children };
 }
 
 export function stepsLabel(count: number): string {

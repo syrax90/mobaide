@@ -5275,6 +5275,168 @@ body:has(dialog[open]) {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--danger) 45%, var(--surface-2));
 }
 
+/* A subagent card: the tool card's frame, with its sections stacked inside. */
+.chat-subagent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-bottom: 0.6rem;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+.chat-subagent-requires_action {
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+.chat-subagent-nested {
+  margin: 0 0.75rem 0 calc(0.75rem + 8px);
+  background: var(--surface);
+}
+
+.chat-subagent-head {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 46px;
+  padding: 0.4rem 0.75rem 0;
+}
+
+.chat-subagent-role {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-subagent-chip {
+  flex: none;
+  gap: 0.35rem;
+}
+
+.chat-subagent-chip .chat-spinner {
+  width: 10px;
+  height: 10px;
+}
+
+.chat-subagent-chip-running {
+  color: var(--accent);
+}
+
+.chat-subagent-chip-attention {
+  color: var(--warning);
+  box-shadow: inset 0 0 0 2px var(--warning);
+}
+
+.chat-subagent-chip-failed {
+  color: var(--danger);
+  box-shadow: inset 0 0 0 2px var(--danger);
+}
+
+.chat-subagent-chip-done {
+  color: var(--ok);
+}
+
+.chat-subagent-task {
+  margin: 0 0.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.chat-subagent-task-static {
+  cursor: auto;
+}
+
+.chat-subagent-task-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.chat-subagent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0.75rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-subagent-toggle:hover {
+  color: var(--text);
+}
+
+.chat-subagent-toggle:focus-visible {
+  outline-offset: -3px;
+}
+
+.chat-subagent-toggle-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-plan-list.chat-subagent-plan {
+  max-height: none;
+  padding: 0 0.75rem;
+}
+
+.chat-subagent-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+}
+
+.chat-subagent-result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  padding: 0.25rem 0.75rem 0;
+}
+
+.chat-subagent-result-body {
+  align-self: stretch;
+}
+
+/* About six lines of body text. */
+.chat-subagent-clamped {
+  max-height: 9.6em;
+  overflow: hidden;
+}
+
+.chat-subagent-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 0.75rem;
+}
+
+.button.chat-subagent-stop {
+  padding: 4px 14px;
+  font-size: 0.85rem;
+}
+
 .chat-diff-stat {
   flex: none;
   font-family: var(--font-code);

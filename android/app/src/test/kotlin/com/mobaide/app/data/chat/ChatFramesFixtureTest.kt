@@ -71,6 +71,7 @@ class ChatFramesFixtureTest {
         "sign_in_submit" to { id -> ChatProtocol.signInSubmit(id, "ab12-cd34") },
         "sign_in_cancel" to { id -> ChatProtocol.signInCancel(id) },
         "new_conversation" to { id -> ChatProtocol.newConversation(id) },
+        "cancel_subagent" to { id -> ChatProtocol.cancelSubagent(id, "sess-7f2a-agent-1") },
     )
 
     private fun sync(id: String, request: ChatSyncRequest): JsonObject = when (request) {
@@ -332,6 +333,65 @@ class ChatFramesFixtureTest {
         assertEquals(54L, cleared.seq)
         assertEquals(emptyList<ChatQueuedMessage>(), cleared.state.queue)
         assertNull(cleared.state.limitWait)
+    }
+
+    @Test
+    fun subagentEvents_addACardItsToolCallAndANestedCard_thenEndTheCard() {
+        val reducer = loaded().apply {
+            apply(batch())
+            for (name in listOf(
+                "events_remove",
+                "events_sign_in",
+                "events_background_cleared",
+                "events_limit_wait",
+                "events_limit_wait_cleared",
+            )) {
+                apply(server(name) as ChatFrame.Events)
+            }
+        }
+
+        val reduction = reducer.apply(server("events_subagent_running") as ChatFrame.Events)
+
+        assertNull(reduction.sync)
+        val running = reducer.timeline!!
+        assertEquals(57L, running.seq)
+        assertEquals(
+            ChatItem.Subagent(
+                id = "sa:sess-7f2a-agent-1",
+                subagentId = "sess-7f2a-agent-1",
+                parentSubagentId = null,
+                title = "Find the login code",
+                description = "Explore",
+                task = "Find where the login handler checks the user.",
+                state = SubagentState.RUNNING,
+                stopReason = null,
+                result = null,
+                canCancel = true,
+                plan = listOf(
+                    ChatPlanEntry("Find the handler", "completed", "medium"),
+                    ChatPlanEntry("Check the user test", "in_progress", "medium"),
+                ),
+            ),
+            running.items.single { it.id == "sa:sess-7f2a-agent-1" },
+        )
+        val tool = running.items.single { it.id == "sess-7f2a-agent-1:toolu_07" } as ChatItem.Tool
+        assertEquals("sess-7f2a-agent-1", tool.subagentId)
+        val nested = running.items.single { it.id == "sa:sess-7f2a-agent-2" } as ChatItem.Subagent
+        assertEquals("sess-7f2a-agent-1", nested.parentSubagentId)
+        assertEquals(SubagentState.REQUIRES_ACTION, nested.state)
+        assertFalse(nested.canCancel)
+
+        reducer.apply(server("events_subagent_done") as ChatFrame.Events)
+
+        val done = reducer.timeline!!
+        assertEquals(58L, done.seq)
+        assertEquals(running.items.size, done.items.size)
+        val card = done.items.single { it.id == "sa:sess-7f2a-agent-1" } as ChatItem.Subagent
+        assertEquals(SubagentState.IDLE, card.state)
+        assertEquals("end_turn", card.stopReason)
+        assertEquals("The login handler checks the user in login.py, line 12.", card.result)
+        assertFalse(card.canCancel)
+        assertEquals(emptyList<ChatPlanEntry>(), card.plan)
     }
 
     @Test
