@@ -6,15 +6,23 @@
   `device_identity.preferences_pb` so the per-install device UUID does
   NOT survive onto a different physical device. See
   `DeviceIdentityStore` and CLA-62 for the rationale.
+
+  Every EncryptedSharedPreferences file (`EncryptedPrefsFiles.ALL`) is
+  excluded from both: its keyset is wrapped by a Keystore key that is never
+  restored, so a restored file cannot be decrypted.
 -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="mobaide_auth.xml" />
+        <exclude domain="sharedpref" path="mobaide_connections.xml" />
+        <exclude domain="sharedpref" path="mobaide_user_identity.xml" />
         <exclude domain="file" path="datastore/device_identity.preferences_pb" />
         <exclude domain="file" path="datastore/ads_conversion.preferences_pb" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="mobaide_auth.xml" />
+        <exclude domain="sharedpref" path="mobaide_connections.xml" />
+        <exclude domain="sharedpref" path="mobaide_user_identity.xml" />
         <exclude domain="file" path="datastore/device_identity.preferences_pb" />
         <exclude domain="file" path="datastore/ads_conversion.preferences_pb" />
     </device-transfer>

@@ -2,8 +2,6 @@ package com.mobaide.app.data.auth
 
 import android.content.Context
 import android.content.SharedPreferences
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
 
 /**
  * Store the encrypted **user identity** — the central-server JWT, email,
@@ -15,13 +13,7 @@ import androidx.security.crypto.MasterKeys
  */
 class UserIdentityStore(context: Context) {
 
-    private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
-        "mobaide_user_identity",
-        MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
-        context,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
+    private val prefs: SharedPreferences = openEncryptedPrefs(context, EncryptedPrefsFiles.USER_IDENTITY)
 
     fun saveUserSession(
         accessToken: String,

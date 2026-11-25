@@ -3,8 +3,6 @@ package com.mobaide.app.data.auth
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Base64
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -14,13 +12,7 @@ class TokenStore(context: Context) {
 
     enum class ConnectionMode { DIRECT, RELAY }
 
-    private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
-        "mobaide_auth",
-        MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
-        context,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
+    private val prefs: SharedPreferences = openEncryptedPrefs(context, EncryptedPrefsFiles.AUTH)
 
     fun saveTokens(accessToken: String, refreshToken: String) {
         prefs.edit()
