@@ -33,14 +33,14 @@ class ChatFocusViewTest {
 
     private fun ownedTool(id: String, subagentId: String) = tool(id).copy(subagentId = subagentId)
 
-    private fun card(subagentId: String, parent: String? = null) = ChatItem.Subagent(
+    private fun card(subagentId: String, parent: String? = null, state: String = "running") = ChatItem.Subagent(
         id = "sa:$subagentId",
         subagentId = subagentId,
         parentSubagentId = parent,
         title = "Explore",
         description = null,
         task = null,
-        state = "running",
+        state = state,
         stopReason = null,
         result = null,
         canCancel = false,
@@ -63,10 +63,11 @@ class ChatFocusViewTest {
         open: Set<String> = emptySet(),
     ) = chatTimelineRows(items, focus, running, waiting, open)
 
-    /** Item rows by id (nested ones indented), steps rows as `<key> ×<count>`. */
+    /** Item rows by id (nested ones indented), steps rows as `<key> ×<count>`, groups as `<key> [<card ids>]`. */
     private fun outline(rows: List<ChatTimelineRow>): List<String> = rows.map { row ->
         when (row) {
             is ChatTimelineRow.Steps -> "${row.key} ×${row.count}"
+            is ChatTimelineRow.Subagents -> "${row.key} [${row.cards.joinToString(" ") { it.id }}]"
             is ChatTimelineRow.Item -> if (row.nested) "  ${row.item.id}" else row.item.id
         }
     }
@@ -191,7 +192,7 @@ class ChatFocusViewTest {
         assertEquals(listOf("c2:grep"), ids(chatSubagentTree(orphan).tools["c2"]))
 
         val loop = listOf(card("c1", "c2"), card("c2", "c1"), card("c3", "c1"))
-        assertEquals(listOf("sa:c1", "sa:c2", "sa:c3"), outline(rows(loop, focus = false)))
+        assertEquals(listOf("subagents:sa:c1 [sa:c1 sa:c2 sa:c3]"), outline(rows(loop, focus = false)))
         assertEquals(emptyMap<String, List<ChatItem.Subagent>>(), chatSubagentTree(loop).children)
     }
 
@@ -200,5 +201,51 @@ class ChatFocusViewTest {
         val items = listOf(user("u:1"), agent("m:2"), card("c1"), ownedTool("c1:read", "c1"), agent("m:3"))
 
         assertEquals(listOf("u:1", "steps:m:2 ×1", "sa:c1", "m:3"), outline(rows(items)))
+    }
+
+    @Test
+    fun cardsWithOnlyWorkBetweenThem_formOneGroupAtTheFirstCard() {
+        val items = listOf(
+            user("u:1"), card("c1"), tool("tool-2"), card("c2"), thought("t:3"), card("c3"), agent("m:4"), card("c4"),
+        )
+
+        assertEquals(
+            listOf("u:1", "subagents:sa:c1 [sa:c1 sa:c2 sa:c3]", "tool-2", "t:3", "m:4", "sa:c4"),
+            outline(rows(items, focus = false)),
+        )
+        // The agent message folds: the card after it counts as work.
+        assertEquals(
+            listOf("u:1", "subagents:sa:c1 [sa:c1 sa:c2 sa:c3]", "steps:tool-2 ×3", "sa:c4"),
+            outline(rows(items)),
+        )
+    }
+
+    @Test
+    fun aCardThatNeedsTheUser_staysOutOfItsGroup_andAGroupOpensOnlyOnRequest() {
+        val items = listOf(
+            card("c1"), card("c2", state = "requires_action"), card("c3"), card("c4"), ownedTool("c4:run", "c4"),
+        )
+        val group = subagentGroupKey("sa:c1")
+
+        val opened = rows(items, waiting = setOf("c4:run"), open = setOf(group))
+
+        assertEquals(listOf("$group [sa:c1 sa:c3]", "sa:c2", "sa:c4"), outline(opened))
+        assertEquals(true, (opened.first() as ChatTimelineRow.Subagents).open)
+        assertEquals(false, (rows(items, waiting = setOf("c4:run")).first() as ChatTimelineRow.Subagents).open)
+    }
+
+    @Test
+    fun cardsShowOnTheirOwn_whenFewerThanTwoAreCalm_countingANestedRequest() {
+        val items = listOf(card("c1"), card("c2"), card("c3", "c2"), ownedTool("c3:run", "c3"))
+
+        assertEquals(listOf("sa:c1", "sa:c2"), outline(rows(items, waiting = setOf("c3:run"))))
+    }
+
+    @Test
+    fun resultPreview_isTheFirstTextLineWithoutMarkdownMarks() {
+        assertEquals("Found the login handler", subagentResultPreview("\n## **Found** the `login` handler\nmore"))
+        assertEquals("one item", subagentResultPreview("---\n- one item"))
+        assertNull(subagentResultPreview("  \n"))
+        assertNull(subagentResultPreview(null))
     }
 }

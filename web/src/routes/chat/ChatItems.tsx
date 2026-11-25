@@ -10,7 +10,16 @@ import type {
   ToolStatus,
   UserItem,
 } from '../../chat/chatWire';
-import { stepsLabel, type SubagentTree } from '../../chat/focusView';
+import {
+  resultPreview,
+  stepsLabel,
+  subagentCardKey,
+  subagentEntries,
+  subagentGroupSummary,
+  subagentNeedsYou,
+  subagentsLabel,
+  type SubagentTree,
+} from '../../chat/focusView';
 import { safeHref } from '../../chat/markdown';
 import { writeClipboardText } from '../../lib/clipboard';
 import { useToastStore } from '../../stores/toastStore';
@@ -342,6 +351,9 @@ export interface SubagentContext {
   onStop: (subagentId: string) => Promise<ChatResult>;
   /** The socket is open: a Stop can reach the agent. */
   live: boolean;
+  /** Open subagent cards (`subagentCardKey`) and groups, with steps rows. */
+  open: ReadonlySet<string>;
+  onToggle: (key: string) => void;
 }
 
 const NO_TOOLS: readonly ToolItem[] = [];
@@ -461,8 +473,102 @@ interface SubagentCardProps {
   nested: boolean;
 }
 
-/** A subagent: its task, checklist, tool calls, nested subagents and result. */
+/**
+ * A subagent: collapsed to its head and one line of progress or result;
+ * open, its task, checklist, tool calls, nested subagents, result and Stop.
+ * A card that needs the user is always open.
+ */
 const SubagentCard = memo(function SubagentCard({ item, context, nested }: SubagentCardProps) {
+  const title = item.title === '' ? 'Subagent' : item.title;
+  const tools = context.tree.tools.get(item.subagent_id) ?? NO_TOOLS;
+  const titlePrefix = `${title}: `;
+  const needsYou = subagentNeedsYou(item, context.tree, context.waitingTools);
+  const cardKey = subagentCardKey(item.id);
+  const open = needsYou || context.open.has(cardKey);
+  const chip = subagentChip(item);
+  const newest = tools[tools.length - 1];
+  const className = `chat-subagent chat-subagent-${item.state}${nested ? ' chat-subagent-nested' : ''}`;
+  const head = (summary: ReactNode) => (
+    <>
+      <span className="chat-tool-kind">
+        <BulbIcon />
+      </span>
+      <span className="chat-tool-text">
+        <span className="chat-tool-title">{title}</span>
+        {item.description !== null && item.description !== '' && (
+          <span className="chat-subagent-role">{item.description}</span>
+        )}
+        {summary}
+      </span>
+      {chip !== null && (
+        <span className={`chat-badge chat-subagent-chip chat-subagent-chip-${chip.tone}`}>
+          {chip.tone === 'running' && <span className="chat-spinner" aria-hidden="true" />}
+          {chip.label}
+        </span>
+      )}
+    </>
+  );
+  if (!open) {
+    const preview = resultPreview(item.result);
+    let summary: ReactNode = null;
+    if (item.state === 'running' && newest !== undefined) {
+      summary = (
+        <span className="chat-subagent-summary">
+          {toolCallsLabel(tools.length)}
+          {' · '}
+          <span className="chat-steps-current">{toolTitle(newest, titlePrefix)}</span>
+        </span>
+      );
+    } else if (preview !== null) {
+      summary = <span className="chat-subagent-summary">{preview}</span>;
+    } else if (tools.length > 0) {
+      summary = <span className="chat-subagent-summary">{toolCallsLabel(tools.length)}</span>;
+    }
+    return (
+      <div className={`${className} chat-subagent-collapsed`}>
+        <button
+          type="button"
+          className="chat-subagent-head chat-subagent-head-button"
+          aria-expanded={false}
+          onClick={() => {
+            context.onToggle(cardKey);
+          }}
+        >
+          {head(summary)}
+          <span className="chat-chevron">
+            <ChevronIcon />
+          </span>
+        </button>
+      </div>
+    );
+  }
+  return (
+    <SubagentCardBody
+      item={item}
+      context={context}
+      className={className}
+      head={head(null)}
+      onCollapse={
+        needsYou
+          ? null
+          : () => {
+              context.onToggle(cardKey);
+            }
+      }
+    />
+  );
+});
+
+interface SubagentCardBodyProps {
+  item: SubagentItem;
+  context: SubagentContext;
+  className: string;
+  head: ReactNode;
+  /** Null while the card needs the user: it stays open. */
+  onCollapse: (() => void) | null;
+}
+
+function SubagentCardBody({ item, context, className, head, onCollapse }: SubagentCardBodyProps) {
   const title = item.title === '' ? 'Subagent' : item.title;
   const tools = context.tree.tools.get(item.subagent_id) ?? NO_TOOLS;
   const nestedCards = context.tree.children.get(item.subagent_id) ?? NO_SUBAGENTS;
@@ -482,28 +588,27 @@ const SubagentCard = memo(function SubagentCard({ item, context, nested }: Subag
   const planId = useId();
   const toolsId = useId();
 
-  const chip = subagentChip(item);
   const done = item.plan.filter((entry) => entry.status === 'completed').length;
   const newest = tools[tools.length - 1];
   return (
-    <div className={`chat-subagent chat-subagent-${item.state}${nested ? ' chat-subagent-nested' : ''}`}>
-      <div className="chat-subagent-head">
-        <span className="chat-tool-kind">
-          <BulbIcon />
-        </span>
-        <span className="chat-tool-text">
-          <span className="chat-tool-title">{title}</span>
-          {item.description !== null && item.description !== '' && (
-            <span className="chat-subagent-role">{item.description}</span>
-          )}
-        </span>
-        {chip !== null && (
-          <span className={`chat-badge chat-subagent-chip chat-subagent-chip-${chip.tone}`}>
-            {chip.tone === 'running' && <span className="chat-spinner" aria-hidden="true" />}
-            {chip.label}
+    <div className={className}>
+      {onCollapse === null ? (
+        <div className="chat-subagent-head">
+          {head}
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="chat-subagent-head chat-subagent-head-button"
+          aria-expanded
+          onClick={onCollapse}
+        >
+          {head}
+          <span className="chat-chevron chat-chevron-open">
+            <ChevronIcon />
           </span>
-        )}
-      </div>
+        </button>
+      )}
       {item.task !== null && item.task !== '' && <SubagentTask text={item.task} />}
       {item.plan.length > 0 && (
         <>
@@ -564,9 +669,7 @@ const SubagentCard = memo(function SubagentCard({ item, context, nested }: Subag
           )}
         </>
       )}
-      {nestedCards.map((child) => (
-        <SubagentCard key={child.id} item={child} context={context} nested />
-      ))}
+      {nestedCards.length > 0 && <SubagentSiblings cards={nestedCards} context={context} nested />}
       {item.result !== null && item.result !== '' && <SubagentResult text={item.result} />}
       {item.can_cancel && (
         <div className="chat-subagent-actions">
@@ -586,6 +689,80 @@ const SubagentCard = memo(function SubagentCard({ item, context, nested }: Subag
           >
             Stop
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface SubagentSiblingsProps {
+  cards: readonly SubagentItem[];
+  context: SubagentContext;
+  nested: boolean;
+}
+
+/** Sibling cards: a group for two or more calm ones, the rest on their own. */
+function SubagentSiblings({ cards, context, nested }: SubagentSiblingsProps) {
+  return (
+    <>
+      {subagentEntries(cards, context.tree, context.waitingTools).map((entry) =>
+        entry.kind === 'card' ? (
+          <SubagentCard key={entry.card.id} item={entry.card} context={context} nested={nested} />
+        ) : (
+          <SubagentGroup
+            key={entry.id}
+            id={entry.id}
+            cards={entry.cards}
+            open={context.open.has(entry.id)}
+            context={context}
+            nested={nested}
+          />
+        ),
+      )}
+    </>
+  );
+}
+
+interface SubagentGroupProps {
+  id: string;
+  cards: readonly SubagentItem[];
+  open: boolean;
+  context: SubagentContext;
+  nested?: boolean;
+}
+
+/** Two or more subagents behind one head: how many, and how many run, are done or failed. */
+export const SubagentGroup = memo(function SubagentGroup({ id, cards, open, context, nested = false }: SubagentGroupProps) {
+  const bodyId = useId();
+  const running = cards.some((card) => card.state === 'running');
+  const summary = subagentGroupSummary(cards);
+  return (
+    <div className={`chat-subagent chat-subagent-group${nested ? ' chat-subagent-nested' : ''}`}>
+      <button
+        type="button"
+        className="chat-subagent-head chat-subagent-head-button"
+        aria-expanded={open}
+        aria-controls={open ? bodyId : undefined}
+        onClick={() => {
+          context.onToggle(id);
+        }}
+      >
+        <span className="chat-tool-kind">
+          {running ? <span className="chat-spinner" aria-hidden="true" /> : <BulbIcon />}
+        </span>
+        <span className="chat-tool-text">
+          <span className="chat-tool-title">{subagentsLabel(cards.length)}</span>
+          {summary !== '' && <span className="chat-subagent-role">{summary}</span>}
+        </span>
+        <span className={`chat-chevron${open ? ' chat-chevron-open' : ''}`}>
+          <ChevronIcon />
+        </span>
+      </button>
+      {open && (
+        <div className="chat-subagent-group-body" id={bodyId}>
+          {cards.map((card) => (
+            <SubagentCard key={card.id} item={card} context={context} nested={nested} />
+          ))}
         </div>
       )}
     </div>

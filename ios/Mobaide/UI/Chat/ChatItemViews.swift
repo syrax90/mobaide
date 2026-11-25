@@ -387,9 +387,11 @@ struct ChatToolRow: View {
     }
 }
 
-/// A subagent's card: state, task, checklist, its tool calls, its nested
-/// cards, result and Stop. Section toggles are kept in the model's expanded
-/// set as `<item id>#<section>`, so a card scrolled out comes back the same.
+/// A subagent's card. Collapsed: its head and one line of progress or result.
+/// Open: also its task, checklist, tool calls, nested cards, result and Stop.
+/// A card that needs the user is always open. The card's own toggle and its
+/// section toggles are kept in the model's expanded set as
+/// `<item id>#<section>`, so a card scrolled out comes back the same.
 struct ChatSubagentCard: View, Equatable {
     let node: ChatSubagentNode
     let nested: Bool
@@ -413,44 +415,23 @@ struct ChatSubagentCard: View, Equatable {
 
     private func isOpen(_ section: String) -> Bool { expandedItems.contains(key(section)) }
 
+    private var needsYou: Bool { ChatFocusView.needsYou(node, waitingToolIds: waitingToolIds) }
+
     var body: some View {
+        let open = needsYou || isOpen("card")
         VStack(alignment: .leading, spacing: 8) {
-            header
-            if let task = subagent.task, !task.isEmpty {
-                ChatSubagentTask(text: task, open: isOpen("task")) { onToggle(key("task")) }
+            if needsYou {
+                header(chevron: nil)
+            } else {
+                Button { onToggle(key("card")) } label: {
+                    header(chevron: open)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(open ? "Collapse" : "Expand")
             }
-            if !subagent.plan.isEmpty {
-                checklist
-            }
-            if !node.tools.isEmpty {
-                toolCalls
-            }
-            ForEach(node.children, id: \.item.id) { child in
-                ChatSubagentCard(
-                    node: child,
-                    nested: true,
-                    expandedItems: expandedItems,
-                    waitingToolIds: waitingToolIds,
-                    stopping: stopping,
-                    canStop: canStop,
-                    onToggle: onToggle,
-                    onStop: onStop
-                )
-            }
-            if let result = subagent.result, !result.isEmpty {
-                ChatClampedMarkdown(
-                    text: result,
-                    cacheKey: key("result"),
-                    expanded: isOpen("result"),
-                    onToggle: { onToggle(key("result")) }
-                )
-            }
-            if subagent.canCancel {
-                Button("Stop") { onStop(subagent.subagentId) }
-                    .buttonStyle(PixelButtonStyle(variant: .dangerGhost, size: .small))
-                    .disabled(!canStop || stopping.contains(subagent.subagentId))
-                    .accessibilityLabel("Stop \(subagent.title)")
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+            if open {
+                details
             }
         }
         .padding(nested
@@ -461,7 +442,79 @@ struct ChatSubagentCard: View, Equatable {
         .padding(.leading, nested ? 8 : 0)
     }
 
-    private var header: some View {
+    /// A collapsed card's one line: the newest tool call while it runs, else the start of its result.
+    private var summary: Text? {
+        let count = node.tools.count
+        let counted = Text(count == 1 ? "1 tool call" : "\(count) tool calls").foregroundStyle(colors.textMuted)
+        if subagent.isRunning, let newest = node.tools.last, case .tool(let call) = newest.body {
+            let title = strippedTitle(call.title)
+            return Text("\(counted)\(Text(" · ").foregroundStyle(colors.textMuted))\(Text(title.isEmpty ? "Tool call" : title).foregroundStyle(colors.text))")
+        }
+        if let preview = ChatFocusView.resultPreview(subagent.result) {
+            return Text(preview).foregroundStyle(colors.textMuted)
+        }
+        return count > 0 ? counted : nil
+    }
+
+    @ViewBuilder
+    private var details: some View {
+        if let task = subagent.task, !task.isEmpty {
+            ChatSubagentTask(text: task, open: isOpen("task")) { onToggle(key("task")) }
+        }
+        if !subagent.plan.isEmpty {
+            checklist
+        }
+        if !node.tools.isEmpty {
+            toolCalls
+        }
+        if !node.children.isEmpty {
+            ForEach(ChatFocusView.subagentEntries(node.children, waitingToolIds: waitingToolIds)) { entry in
+                switch entry {
+                case .card(let child):
+                    ChatSubagentCard(
+                        node: child,
+                        nested: true,
+                        expandedItems: expandedItems,
+                        waitingToolIds: waitingToolIds,
+                        stopping: stopping,
+                        canStop: canStop,
+                        onToggle: onToggle,
+                        onStop: onStop
+                    )
+                case .group(let id, let cards):
+                    ChatSubagentGroup(
+                        id: id,
+                        cards: cards,
+                        nested: true,
+                        expandedItems: expandedItems,
+                        waitingToolIds: waitingToolIds,
+                        stopping: stopping,
+                        canStop: canStop,
+                        onToggle: onToggle,
+                        onStop: onStop
+                    )
+                }
+            }
+        }
+        if let result = subagent.result, !result.isEmpty {
+            ChatClampedMarkdown(
+                text: result,
+                cacheKey: key("result"),
+                expanded: isOpen("result"),
+                onToggle: { onToggle(key("result")) }
+            )
+        }
+        if subagent.canCancel {
+            Button("Stop") { onStop(subagent.subagentId) }
+                .buttonStyle(PixelButtonStyle(variant: .dangerGhost, size: .small))
+                .disabled(!canStop || stopping.contains(subagent.subagentId))
+                .accessibilityLabel("Stop \(subagent.title)")
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    /// `chevron`: nil when the card cannot collapse, else whether it is open.
+    private func header(chevron: Bool?) -> some View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: ChatToolStyle.icon("think"))
                 .font(.subheadline)
@@ -478,6 +531,11 @@ struct ChatSubagentCard: View, Equatable {
                         .foregroundStyle(colors.textMuted)
                         .lineLimit(1)
                 }
+                if chevron == false, let summary {
+                    summary
+                        .font(.caption)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 4)
             if let chip = Self.stateChip(subagent) {
@@ -488,8 +546,14 @@ struct ChatSubagentCard: View, Equatable {
                     PixelChip(chip.label, .status(chip.tone))
                 }
             }
+            if let chevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(colors.gray)
+                    .rotationEffect(.degrees(chevron ? 90 : 0))
+            }
         }
-        .frame(minHeight: 36)
+        .frame(minHeight: 44)
         .accessibilityElement(children: .combine)
     }
 
@@ -578,6 +642,90 @@ struct ChatSubagentCard: View, Equatable {
             }
         default: return nil
         }
+    }
+}
+
+/// Two or more subagents behind one head: how many, and how many run, are
+/// done or failed. Open or closed by `id` in the model's expanded set.
+struct ChatSubagentGroup: View, Equatable {
+    let id: String
+    let cards: [ChatSubagentNode]
+    let nested: Bool
+    let expandedItems: Set<String>
+    let waitingToolIds: Set<String>
+    let stopping: Set<String>
+    let canStop: Bool
+    let onToggle: (String) -> Void
+    let onStop: (String) -> Void
+
+    nonisolated static func == (lhs: ChatSubagentGroup, rhs: ChatSubagentGroup) -> Bool {
+        lhs.id == rhs.id && lhs.cards == rhs.cards && lhs.nested == rhs.nested && lhs.expandedItems == rhs.expandedItems
+            && lhs.waitingToolIds == rhs.waitingToolIds && lhs.stopping == rhs.stopping && lhs.canStop == rhs.canStop
+    }
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        let open = expandedItems.contains(id)
+        let summary = ChatFocusView.subagentGroupSummary(cards)
+        VStack(alignment: .leading, spacing: 8) {
+            Button { onToggle(id) } label: {
+                HStack(alignment: .center, spacing: 10) {
+                    Group {
+                        if cards.contains(where: { $0.subagent.isRunning }) {
+                            PixelLoadingBlock(width: 7, height: 12)
+                        } else {
+                            Image(systemName: ChatToolStyle.icon("think"))
+                                .font(.subheadline)
+                                .foregroundStyle(colors.textMuted)
+                        }
+                    }
+                    .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(ChatFocusView.subagentsLabel(cards.count))
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(colors.text)
+                            .lineLimit(1)
+                        if !summary.isEmpty {
+                            Text(summary)
+                                .font(.caption)
+                                .foregroundStyle(colors.textMuted)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(colors.gray)
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityElement(children: .combine)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(open ? "Collapse" : "Expand")
+            if open {
+                ForEach(cards, id: \.item.id) { card in
+                    ChatSubagentCard(
+                        node: card,
+                        nested: true,
+                        expandedItems: expandedItems,
+                        waitingToolIds: waitingToolIds,
+                        stopping: stopping,
+                        canStop: canStop,
+                        onToggle: onToggle,
+                        onStop: onStop
+                    )
+                }
+            }
+        }
+        .padding(nested
+            ? EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+            : EdgeInsets(top: 10, leading: 12, bottom: 12, trailing: 12))
+        .background(nested ? colors.surface : colors.bg2)
+        .pixelRing(colors.surface2)
+        .padding(.leading, nested ? 8 : 0)
     }
 }
 

@@ -5325,6 +5325,55 @@ body:has(dialog[open]) {
   padding: 0.4rem 0.75rem 0;
 }
 
+.chat-subagent-head-button {
+  width: 100%;
+  padding-bottom: 0.4rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-subagent-head-button:hover {
+  background: var(--surface);
+}
+
+.chat-subagent-head-button:focus-visible {
+  outline-offset: -3px;
+}
+
+/* A collapsed card: its head alone, with one line of progress or result. */
+.chat-subagent-collapsed {
+  padding-bottom: 0;
+}
+
+.chat-subagent-summary {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-subagent-group {
+  padding-bottom: 0;
+}
+
+.chat-subagent-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.25rem 0 0.75rem;
+}
+
+.chat-subagent-group-body > .chat-subagent:not(.chat-subagent-nested) {
+  margin: 0 0.75rem;
+  background: var(--surface);
+}
+
 .chat-subagent-role {
   overflow: hidden;
   color: var(--text-muted);

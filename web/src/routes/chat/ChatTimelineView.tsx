@@ -11,7 +11,7 @@ import { useStore } from 'zustand';
 import type { ChatSessionModel } from '../../chat/chatModel';
 import { subagentTree, timelineRows } from '../../chat/focusView';
 import { useChatPrefsStore } from '../../stores/chatPrefsStore';
-import { ChatItemView, StepsRow, type SubagentContext } from './ChatItems';
+import { ChatItemView, StepsRow, SubagentGroup, type SubagentContext } from './ChatItems';
 import { MiddleEllipsis } from './MiddleEllipsis';
 
 /** Within this many pixels of the end counts as "at the bottom". */
@@ -62,14 +62,10 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
   const running = status === 'running';
   const tree = useMemo(() => subagentTree(items), [items]);
   const rows = useMemo(
-    () => timelineRows(tree.visible, { focus, running, waitingTools, open: openSteps }),
+    () => timelineRows(tree.visible, { focus, running, waitingTools, open: openSteps, tree }),
     [tree, focus, running, waitingTools, openSteps],
   );
   const live = useStore(model.store, (view) => view.connection === 'live');
-  const subagents = useMemo<SubagentContext>(
-    () => ({ tree, waitingTools, live, onStop: (subagentId) => model.cancelSubagent(subagentId) }),
-    [tree, waitingTools, live, model],
-  );
   const toggleSteps = useCallback((id: string) => {
     setOpenSteps((current) => {
       const next = new Set(current);
@@ -77,6 +73,17 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
       return next;
     });
   }, []);
+  const subagents = useMemo<SubagentContext>(
+    () => ({
+      tree,
+      waitingTools,
+      live,
+      onStop: (subagentId) => model.cancelSubagent(subagentId),
+      open: openSteps,
+      onToggle: toggleSteps,
+    }),
+    [tree, waitingTools, live, model, openSteps, toggleSteps],
+  );
 
   const scrollToEnd = useCallback(() => {
     const scroller = scrollRef.current;
@@ -192,6 +199,13 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
                   open={row.open}
                   onToggle={toggleSteps}
                 />
+              </div>
+            );
+          }
+          if (row.kind === 'subagents') {
+            return (
+              <div key={row.id} className="chat-row chat-row-subagent">
+                <SubagentGroup id={row.id} cards={row.cards} open={row.open} context={subagents} />
               </div>
             );
           }

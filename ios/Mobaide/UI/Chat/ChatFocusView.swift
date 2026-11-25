@@ -7,11 +7,27 @@ enum ChatTimelineRow: Identifiable, Equatable {
     /// `live`: the run is the newest thing in a running turn. `current`: what
     /// the newest step does ("Thinking", a tool title), nil unless live.
     case steps(id: String, count: Int, live: Bool, current: String?, open: Bool)
+    /// Two or more subagent cards behind one collapsible head.
+    case subagents(id: String, cards: [ChatSubagentNode], open: Bool)
 
     var id: String {
         switch self {
         case .item(let item, _): return item.id
         case .steps(let id, _, _, _, _): return id
+        case .subagents(let id, _, _): return id
+        }
+    }
+}
+
+/// Sibling subagent cards as shown: a group of the calm ones, or one card.
+enum ChatSubagentEntry: Equatable, Identifiable {
+    case card(ChatSubagentNode)
+    case group(id: String, cards: [ChatSubagentNode])
+
+    var id: String {
+        switch self {
+        case .card(let node): return node.item.id
+        case .group(let id, _): return id
         }
     }
 }
@@ -119,8 +135,94 @@ enum ChatFocusView {
 
     static func stepsLabel(_ count: Int) -> String { count == 1 ? "1 step" : "\(count) steps" }
 
+    static func subagentGroupId(firstCardId: String) -> String { "subagents:\(firstCardId)" }
+
+    static func subagentsLabel(_ count: Int) -> String { count == 1 ? "1 subagent" : "\(count) subagents" }
+
+    /// The card, a tool call it waits on, or a card nested in it waits for the user.
+    static func needsYou(_ node: ChatSubagentNode, waitingToolIds: Set<String>) -> Bool {
+        node.subagent.state == "requires_action"
+            || node.tools.contains { waitingToolIds.contains($0.id) }
+            || node.children.contains { needsYou($0, waitingToolIds: waitingToolIds) }
+    }
+
+    /// Two or more calm cards form one group, keyed by the first card of all;
+    /// the cards that need the user follow it on their own, so a request is
+    /// never hidden. With fewer than two calm cards every card shows on its
+    /// own, in order.
+    static func subagentEntries(_ cards: [ChatSubagentNode], waitingToolIds: Set<String>) -> [ChatSubagentEntry] {
+        let urgent = cards.filter { needsYou($0, waitingToolIds: waitingToolIds) }
+        let calm = cards.filter { !needsYou($0, waitingToolIds: waitingToolIds) }
+        guard let first = cards.first, calm.count >= 2 else { return cards.map { .card($0) } }
+        return [.group(id: subagentGroupId(firstCardId: first.item.id), cards: calm)] + urgent.map { .card($0) }
+    }
+
+    /// "2 running · 5 done · 1 failed": the states of a group's cards, busiest first.
+    static func subagentGroupSummary(_ cards: [ChatSubagentNode]) -> String {
+        var needs = 0, running = 0, done = 0, failed = 0, stopped = 0
+        for card in cards {
+            switch card.subagent.state {
+            case "requires_action": needs += 1
+            case "running": running += 1
+            case "idle":
+                switch card.subagent.stopReason {
+                case "cancelled": stopped += 1
+                case "error": failed += 1
+                default: done += 1
+                }
+            default: break
+            }
+        }
+        return [
+            needs > 0 ? "\(needs) need you" : nil,
+            running > 0 ? "\(running) running" : nil,
+            done > 0 ? "\(done) done" : nil,
+            failed > 0 ? "\(failed) failed" : nil,
+            stopped > 0 ? "\(stopped) stopped" : nil,
+        ].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// The first line of a result as plain text, for a collapsed card; nil when it is blank.
+    static func resultPreview(_ result: String?) -> String? {
+        guard let result else { return nil }
+        for raw in result.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(raw)
+                .replacingOccurrences(of: #"^\s*(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"\*\*|__|`"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+            if !line.isEmpty, line.range(of: #"^(-{3,}|\*{3,}|_{3,})$"#, options: .regularExpression) == nil {
+                return line
+            }
+        }
+        return nil
+    }
+
+    /// Runs of two or more cards with only thinking and tool calls between them, by the first card's id.
+    private static func subagentRuns(_ items: [ChatItem], layout: ChatSubagentLayout) -> [String: [ChatSubagentNode]] {
+        var runs: [String: [ChatSubagentNode]] = [:]
+        var run: [ChatSubagentNode] = []
+        func close() {
+            if run.count >= 2, let first = run.first { runs[first.item.id] = run }
+            run = []
+        }
+        for item in items {
+            switch item.body {
+            case .subagent:
+                if let node = layout.nodes[item.id] { run.append(node) }
+            case .thought, .tool:
+                break
+            default:
+                close()
+            }
+        }
+        close()
+        return runs
+    }
+
     /// Items inside subagent cards are taken out first; a card itself never
-    /// folds, and counts as work after an agent message before it.
+    /// folds, and counts as work after an agent message before it. Cards with
+    /// only thinking and tool calls between them form a run; a run of two or
+    /// more shows at its first card's place through `subagentEntries`.
     static func rows(
         _ timelineItems: [ChatItem],
         focus: Bool,
@@ -129,8 +231,20 @@ enum ChatFocusView {
         open: Set<String>,
         layout: ChatSubagentLayout? = nil
     ) -> [ChatTimelineRow] {
-        let items = (layout ?? ChatSubagentLayout(timelineItems)).visible
-        guard focus else { return items.map { .item($0, nested: false) } }
+        let layout = layout ?? ChatSubagentLayout(timelineItems)
+        let runs = subagentRuns(layout.visible, layout: layout)
+        let merged = Set(runs.values.flatMap { $0.dropFirst().map(\.item.id) })
+        let items = merged.isEmpty ? layout.visible : layout.visible.filter { !merged.contains($0.id) }
+        func row(_ item: ChatItem) -> [ChatTimelineRow] {
+            guard let run = runs[item.id] else { return [.item(item, nested: false)] }
+            return subagentEntries(run, waitingToolIds: waitingToolIds).map { entry in
+                switch entry {
+                case .card(let node): return .item(node.item, nested: false)
+                case .group(let id, let cards): return .subagents(id: id, cards: cards, open: open.contains(id))
+                }
+            }
+        }
+        guard focus else { return items.flatMap(row) }
         var folded = [Bool](repeating: false, count: items.count)
         var workAfter = false
         for index in items.indices.reversed() {
@@ -157,7 +271,7 @@ enum ChatFocusView {
         var index = 0
         while index < items.count {
             guard folded[index] else {
-                rows.append(.item(items[index], nested: false))
+                rows.append(contentsOf: row(items[index]))
                 index += 1
                 continue
             }

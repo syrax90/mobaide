@@ -52,6 +52,20 @@ struct ChatTimelineView: View {
                             model.toggleExpanded(id)
                         }
                         .chatTimelineRow()
+                    case .subagents(let id, let cards, _):
+                        ChatSubagentGroup(
+                            id: id,
+                            cards: cards,
+                            nested: false,
+                            expandedItems: model.expandedItems,
+                            waitingToolIds: waiting,
+                            stopping: model.stoppingSubagents,
+                            canStop: model.isLive,
+                            onToggle: { model.toggleExpanded($0) },
+                            onStop: { model.cancelSubagent($0) }
+                        )
+                        .equatable()
+                        .chatTimelineRow()
                     case .item(let item, _) where layout.nodes[item.id] != nil:
                         if let node = layout.nodes[item.id] {
                             ChatSubagentCard(

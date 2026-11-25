@@ -45,6 +45,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -628,40 +629,70 @@ private const val SUBAGENT_TASK_LINES = 3
 private const val SUBAGENT_RESULT_LINES = 6
 
 /**
- * A subagent: its state, task, checklist, the tool calls it made, the cards of
- * the subagents it started, its result and Stop. [stopping] holds the subagent
- * ids whose Stop waits for the agent.
+ * What the subagent cards and groups of one timeline share. [open] holds the
+ * keys of the open cards and groups; [stopping] the subagent ids whose Stop
+ * waits for the agent.
+ */
+@Immutable
+class SubagentCardContext(
+    val tree: ChatSubagentTree,
+    val waitingToolIds: Set<String>,
+    val stopping: Set<String>,
+    val canAct: Boolean,
+    val open: Set<String>,
+    val onToggle: (String) -> Unit,
+    val onStop: (String) -> Unit,
+)
+
+/**
+ * A subagent. Collapsed: its head and one line of progress or result. Open:
+ * also its task, checklist, tool calls, the subagents it started, result and
+ * Stop. A card that needs the user is always open.
  */
 @Composable
 fun ChatSubagentCard(
     item: ChatItem.Subagent,
-    tree: ChatSubagentTree,
-    waitingToolIds: Set<String>,
-    stopping: Set<String>,
-    canAct: Boolean,
-    onStop: (String) -> Unit,
+    context: SubagentCardContext,
     modifier: Modifier = Modifier,
     nested: Boolean = false,
 ) {
     val pixel = MaterialTheme.pixel
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val tree = context.tree
+    val waitingToolIds = context.waitingToolIds
     val tools = tree.tools[item.subagentId].orEmpty()
     val children = tree.children[item.subagentId].orEmpty()
-    val needsYou = item.state == SubagentState.REQUIRES_ACTION
+    val needsYou = subagentNeedsYou(item, tree, waitingToolIds)
+    val cardKey = subagentCardKey(item.id)
+    val open = needsYou || cardKey in context.open
     val padding = if (nested) 10.dp else 12.dp
     Column(
         modifier = modifier
             .fillMaxWidth()
             .testTag(CHAT_SUBAGENT_CARD_TAG)
             .background(if (nested) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLow)
-            .pixelFrame(if (needsYou) pixel.brand2 else pixel.surface2)
+            .pixelFrame(if (item.state == SubagentState.REQUIRES_ACTION) pixel.brand2 else pixel.surface2)
             .padding(horizontal = padding, vertical = 6.dp),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 40.dp)
-                .semantics(mergeDescendants = true) {},
+                .heightIn(min = 48.dp)
+                .then(
+                    if (needsYou) {
+                        Modifier.semantics(mergeDescendants = true) {}
+                    } else {
+                        Modifier
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = if (open) "Collapse" else "Expand",
+                                onClick = { context.onToggle(cardKey) },
+                            )
+                            .semantics(mergeDescendants = true) {
+                                stateDescription = if (open) "Expanded" else "Collapsed"
+                            }
+                    },
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -688,9 +719,19 @@ fun ChatSubagentCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                if (!open) SubagentSummary(item, tools)
             }
             SubagentStateChip(item, modifier = Modifier.padding(start = 8.dp))
+            if (!needsYou) {
+                Icon(
+                    imageVector = if (open) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = muted,
+                    modifier = Modifier.padding(start = 4.dp).size(18.dp),
+                )
+            }
         }
+        if (!open) return@Column
         item.task?.let { task -> SubagentTask(item.id, task) }
         if (item.plan.isNotEmpty()) SubagentChecklist(item)
         if (tools.isNotEmpty()) {
@@ -705,16 +746,17 @@ fun ChatSubagentCard(
                 modifier = Modifier.padding(top = 4.dp, bottom = 4.dp, start = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                children.forEach { child ->
-                    ChatSubagentCard(
-                        item = child,
-                        tree = tree,
-                        waitingToolIds = waitingToolIds,
-                        stopping = stopping,
-                        canAct = canAct,
-                        onStop = onStop,
-                        nested = true,
-                    )
+                subagentEntries(children, tree, waitingToolIds).forEach { entry ->
+                    when (entry) {
+                        is SubagentEntry.Card -> ChatSubagentCard(entry.card, context, nested = true)
+                        is SubagentEntry.Group -> ChatSubagentGroup(
+                            key = entry.key,
+                            cards = entry.cards,
+                            open = entry.key in context.open,
+                            context = context,
+                            nested = true,
+                        )
+                    }
                 }
             }
         }
@@ -724,15 +766,118 @@ fun ChatSubagentCard(
                 Box(modifier = Modifier.minimumInteractiveComponentSize(), contentAlignment = Alignment.Center) {
                     PixelButton(
                         text = "Stop",
-                        onClick = { onStop(item.subagentId) },
+                        onClick = { context.onStop(item.subagentId) },
                         style = PixelButtonStyle.DangerOutline,
-                        enabled = canAct && item.subagentId !in stopping,
+                        enabled = context.canAct && item.subagentId !in context.stopping,
                         compact = true,
                         modifier = Modifier
                             .testTag(CHAT_SUBAGENT_STOP_TAG)
                             .semantics { contentDescription = "Stop ${item.title}" },
                     )
                 }
+            }
+        }
+    }
+}
+
+/** A collapsed card's one line: the newest tool call while it runs, else the start of its result. */
+@Composable
+private fun SubagentSummary(item: ChatItem.Subagent, tools: List<ChatItem.Tool>) {
+    val newest = tools.lastOrNull()
+    val strong = MaterialTheme.colorScheme.onSurface
+    val text = when {
+        item.state == SubagentState.RUNNING && newest != null -> buildAnnotatedString {
+            append(subagentToolsLabel(tools.size))
+            append(" · ")
+            withStyle(SpanStyle(color = strong)) { append(subagentToolTitle(item, newest).ifBlank { "Tool call" }) }
+        }
+        else -> subagentResultPreview(item.result)?.let(::AnnotatedString)
+            ?: tools.takeIf { it.isNotEmpty() }?.let { AnnotatedString(subagentToolsLabel(it.size)) }
+    } ?: return
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+const val CHAT_SUBAGENT_GROUP_TAG = "chat_subagent_group"
+
+/** Two or more subagents behind one head: how many, and how many run, are done or failed. */
+@Composable
+fun ChatSubagentGroup(
+    key: String,
+    cards: List<ChatItem.Subagent>,
+    open: Boolean,
+    context: SubagentCardContext,
+    modifier: Modifier = Modifier,
+    nested: Boolean = false,
+) {
+    val pixel = MaterialTheme.pixel
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val running = cards.any { it.state == SubagentState.RUNNING }
+    val summary = subagentGroupSummary(cards)
+    val padding = if (nested) 10.dp else 12.dp
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag(CHAT_SUBAGENT_GROUP_TAG)
+            .background(if (nested) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLow)
+            .pixelFrame(pixel.surface2)
+            .padding(horizontal = padding, vertical = 6.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clickable(
+                    role = Role.Button,
+                    onClickLabel = if (open) "Hide subagents" else "Show subagents",
+                    onClick = { context.onToggle(key) },
+                )
+                .semantics(mergeDescendants = true) { stateDescription = if (open) "Expanded" else "Collapsed" },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(modifier = Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+                if (running) {
+                    PixelBlinkCursor(height = 12.dp)
+                } else {
+                    Icon(imageVector = toolKindIcon("think"), contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
+                }
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = subagentsLabel(cards.size),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+                if (summary.isNotEmpty()) {
+                    Text(
+                        text = summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Icon(
+                imageVector = if (open) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = muted,
+                modifier = Modifier.padding(start = 4.dp).size(18.dp),
+            )
+        }
+        if (open) {
+            Column(
+                modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                cards.forEach { card -> ChatSubagentCard(card, context, nested = true) }
             }
         }
     }
@@ -981,11 +1126,15 @@ private fun ChatSubagentCardPreview() {
         Column(modifier = Modifier.padding(16.dp)) {
             ChatSubagentCard(
                 item = items.first() as ChatItem.Subagent,
-                tree = chatSubagentTree(items),
-                waitingToolIds = emptySet(),
-                stopping = emptySet(),
-                canAct = true,
-                onStop = {},
+                context = SubagentCardContext(
+                    tree = chatSubagentTree(items),
+                    waitingToolIds = emptySet(),
+                    stopping = emptySet(),
+                    canAct = true,
+                    open = setOf(subagentCardKey("sa:a1")),
+                    onToggle = {},
+                    onStop = {},
+                ),
             )
         }
     }
