@@ -1,5 +1,19 @@
 # mobaide_agent Changelog
 
+## [0.3.36](https://github.com/syrax90/mobaide/compare/agent-v0.3.35...agent-v0.3.36) (2026-11-25)
+
+
+### Features
+
+* **agent,android,ios,web:** keep the computer awake ([#957](https://github.com/syrax90/mobaide/issues/957)) ([83a6d10](https://github.com/syrax90/mobaide/commit/83a6d10d73d3dc318273c6eff3e0a61bf2a62ca1))
+* **agent:** show the working state for Codex and Antigravity sessions ([#958](https://github.com/syrax90/mobaide/issues/958)) ([c22c37b](https://github.com/syrax90/mobaide/commit/c22c37b13073f16853732307652b3d96d56d8f4a))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** make the No memory toggle turn off Claude Code auto memory ([#978](https://github.com/syrax90/mobaide/issues/978)) ([0d7f422](https://github.com/syrax90/mobaide/commit/0d7f4226cd42fc4412550a31a65621e73c943303))
+* **agent,android,ios,web:** show the next scan time on the Auto Scan detail screen ([#956](https://github.com/syrax90/mobaide/issues/956)) ([11fa545](https://github.com/syrax90/mobaide/commit/11fa54591869b3946d649f2d5aa2f5b7d160f7cc))
+
 ## [0.3.35](https://github.com/syrax90/mobaide/compare/agent-v0.3.34...agent-v0.3.35) (2026-11-22)
 
 
