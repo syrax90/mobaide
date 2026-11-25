@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.13](https://github.com/syrax90/mobaide/compare/ios-v1.1.12...ios-v1.1.13) (2026-11-25)
+
+
+### Features
+
+* **agent,android,ios,web:** offer Codex Auto review as a launch choice ([#983](https://github.com/syrax90/mobaide/issues/983)) ([035ace9](https://github.com/syrax90/mobaide/commit/035ace9c934b03028284d102510cf9ed430cdb2d))
+* **agent,android,ios,web:** show Claude, Codex and Cursor subagents as cards in chat ([#985](https://github.com/syrax90/mobaide/issues/985)) ([0e31007](https://github.com/syrax90/mobaide/commit/0e310072b5a55562fd158459cf98f662ff3aac53))
+* **ios:** select and copy partial text in chat messages ([#986](https://github.com/syrax90/mobaide/issues/986)) ([d222cd5](https://github.com/syrax90/mobaide/commit/d222cd52e2e009471f15ac2e490fba35739f3542))
+
 ## [1.1.12](https://github.com/syrax90/mobaide/compare/ios-v1.1.11...ios-v1.1.12) (2026-11-25)
 
 
