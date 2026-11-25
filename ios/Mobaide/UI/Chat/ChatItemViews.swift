@@ -118,10 +118,7 @@ struct ChatUserBubble: View {
             Spacer(minLength: 48)
             VStack(alignment: .trailing, spacing: 6) {
                 if !text.isEmpty {
-                    Text(text)
-                        .foregroundStyle(colors.text)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                    SelectableText(text, color: colors.text)
                 }
                 if !attachments.isEmpty {
                     HStack(spacing: 6) {
@@ -157,7 +154,6 @@ struct ChatAgentText: View {
         VStack(alignment: .leading, spacing: 6) {
             if !text.isEmpty {
                 ChatMarkdownView(text: text, cacheKey: id)
-                    .textSelection(.enabled)
             }
             if streaming {
                 PixelLoadingBlock(width: 8, height: 14)
@@ -200,9 +196,7 @@ struct ChatThoughtRow: View {
             .accessibilityLabel(streaming ? "Thinking" : "Thought")
             .accessibilityHint(expanded ? "Collapse" : "Expand")
             if expanded, !text.isEmpty {
-                ChatMarkdownView(text: text, cacheKey: id, muted: true)
-                    .font(.callout)
-                    .textSelection(.enabled)
+                ChatMarkdownView(text: text, cacheKey: id, muted: true, textStyle: .callout)
                     .padding(.leading, 12)
                     .overlay(alignment: .leading) {
                         Rectangle().fill(colors.rule).frame(width: 2)
@@ -364,11 +358,7 @@ struct ChatToolRow: View {
                 .buttonStyle(.plain)
                 if inputShown {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        Text(input)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(colors.text)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .textSelection(.enabled)
+                        SelectableText(input, style: .caption1, monospaced: true, color: colors.text, wraps: false)
                             .padding(8)
                     }
                     .background(colors.surface)
@@ -425,9 +415,7 @@ struct ChatContentPartView: View {
         switch part {
         case .text(let text, let truncated):
             VStack(alignment: .leading, spacing: 4) {
-                ChatMarkdownView(text: text, cacheKey: cacheKey)
-                    .font(.callout)
-                    .textSelection(.enabled)
+                ChatMarkdownView(text: text, cacheKey: cacheKey, textStyle: .callout)
                 if truncated {
                     Text("Output truncated")
                         .font(.caption)
@@ -605,10 +593,7 @@ struct ChatNoticeRow: View {
                         .foregroundStyle(tone == .muted ? colors.text : colors.color(tone))
                 }
                 if !text.isEmpty {
-                    Text(text)
-                        .font(.footnote)
-                        .foregroundStyle(colors.textMuted)
-                        .textSelection(.enabled)
+                    SelectableText(text, style: .footnote, color: colors.textMuted)
                 }
             }
             Spacer(minLength: 0)
@@ -650,9 +635,7 @@ struct ChatCompactionRow: View {
             .disabled(text.isEmpty)
             .accessibilityHint(text.isEmpty ? "" : (expanded ? "Hide the summary" : "Show the summary"))
             if expanded, !text.isEmpty {
-                ChatMarkdownView(text: text, cacheKey: id, muted: true)
-                    .font(.callout)
-                    .textSelection(.enabled)
+                ChatMarkdownView(text: text, cacheKey: id, muted: true, textStyle: .callout)
             }
         }
     }
@@ -670,11 +653,7 @@ struct ChatErrorRow: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(colors.danger)
-                Text(text)
-                    .font(.footnote)
-                    .foregroundStyle(colors.danger)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                SelectableText(text, style: .footnote, color: colors.danger)
                 Spacer(minLength: 0)
             }
             if canRestart {

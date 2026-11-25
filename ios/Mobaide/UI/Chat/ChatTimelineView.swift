@@ -77,8 +77,9 @@ struct ChatTimelineView: View {
             .environment(\.defaultMinListRowHeight, 1)
             .scrollDismissesKeyboard(.interactively)
             // A tap hides the keyboard, as outside the field in other chat
-            // apps; a long press is a text selection and keeps it. Both are
-            // simultaneous, so row buttons and text selection keep their taps.
+            // apps, and clears a text selection; the tap that ends a long
+            // press (the selection) is skipped. Both are simultaneous, so row
+            // buttons and text selection keep their taps.
             .simultaneousGesture(TapGesture().onEnded {
                 if press.heldLong {
                     press.heldLong = false

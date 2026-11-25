@@ -143,11 +143,7 @@ private struct ChatPermissionBody: View {
                         .foregroundStyle(colors.text)
                         .fixedSize(horizontal: false, vertical: true)
                     if let subtitle = request.subtitle, !subtitle.isEmpty, subtitle != request.title {
-                        Text(subtitle)
-                            .font(.footnote.monospaced())
-                            .foregroundStyle(colors.textMuted)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
+                        SelectableText(subtitle, style: .footnote, monospaced: true, color: colors.textMuted)
                     }
                     if !request.content.isEmpty {
                         preview

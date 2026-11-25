@@ -79,19 +79,40 @@ enum MarkdownDocumentCache {
 
 /// Renders chat Markdown. `cacheKey` names the owner of the text for parse
 /// memoization; `muted` draws the whole block in the muted colour (thoughts).
+/// Prose and code select by word (`SelectableText`); table cells copy whole.
 struct ChatMarkdownView: View {
     let text: String
     var cacheKey: String?
     var muted = false
+    var textStyle: UIFont.TextStyle = .body
 
     var body: some View {
-        MarkdownBlocksView(blocks: MarkdownDocumentCache.blocks(for: cacheKey, text: text), muted: muted)
+        MarkdownBlocksView(
+            blocks: MarkdownDocumentCache.blocks(for: cacheKey, text: text),
+            muted: muted,
+            textStyle: textStyle,
+            struck: false
+        )
+        .font(.system(Self.swiftUIStyle(textStyle)))
+    }
+
+    private static func swiftUIStyle(_ style: UIFont.TextStyle) -> Font.TextStyle {
+        switch style {
+        case .callout: return .callout
+        case .footnote: return .footnote
+        case .subheadline: return .subheadline
+        case .caption1: return .caption
+        case .caption2: return .caption2
+        default: return .body
+        }
     }
 }
 
 private struct MarkdownBlocksView: View {
     let blocks: [MarkdownBlock]
     let muted: Bool
+    let textStyle: UIFont.TextStyle
+    let struck: Bool
 
     @Environment(\.mobaideColors) private var colors
 
@@ -109,16 +130,17 @@ private struct MarkdownBlocksView: View {
     private func blockView(_ block: MarkdownBlock) -> some View {
         switch block {
         case .paragraph(let source):
-            Text(MarkdownInline.render(source))
-                .foregroundStyle(textColor)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            SelectableText(
+                markdown: MarkdownInline.render(source), style: textStyle, color: textColor, strikethrough: struck
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .heading(let level, let source):
-            Text(MarkdownInline.render(source))
-                .font(Self.headingFont(level))
-                .foregroundStyle(textColor)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            let heading = Self.headingStyle(level)
+            SelectableText(
+                markdown: MarkdownInline.render(source), style: heading.style, weight: heading.weight,
+                color: textColor, strikethrough: struck
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, level <= 2 ? 4 : 2)
                 .accessibilityAddTraits(.isHeader)
         case .code(let language, let code):
@@ -130,7 +152,7 @@ private struct MarkdownBlocksView: View {
                 Rectangle()
                     .fill(colors.rule)
                     .frame(width: 3)
-                MarkdownBlocksView(blocks: inner, muted: true)
+                MarkdownBlocksView(blocks: inner, muted: true, textStyle: textStyle, struck: struck)
             }
             .fixedSize(horizontal: false, vertical: true)
         case .rule:
@@ -146,8 +168,12 @@ private struct MarkdownBlocksView: View {
             ForEach(Array(list.items.enumerated()), id: \.offset) { offset, item in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     listMarker(list: list, offset: offset, item: item)
-                    MarkdownBlocksView(blocks: item.blocks, muted: muted || item.task == true)
-                        .strikethrough(item.task == true, color: colors.textMuted)
+                    MarkdownBlocksView(
+                        blocks: item.blocks,
+                        muted: muted || item.task == true,
+                        textStyle: textStyle,
+                        struck: struck || item.task == true
+                    )
                 }
             }
         }
@@ -170,11 +196,11 @@ private struct MarkdownBlocksView: View {
         }
     }
 
-    private static func headingFont(_ level: Int) -> Font {
+    private static func headingStyle(_ level: Int) -> (style: UIFont.TextStyle, weight: UIFont.Weight) {
         switch level {
-        case 1: return .title3.weight(.bold)
-        case 2: return .headline
-        default: return .subheadline.weight(.semibold)
+        case 1: return (.title3, .bold)
+        case 2: return (.headline, .semibold)
+        default: return (.subheadline, .semibold)
         }
     }
 }
@@ -212,11 +238,11 @@ struct MarkdownCodeBlock: View {
             .padding(.horizontal, 10)
             .background(colors.surface2)
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(MobaideTypography.code)
-                    .foregroundStyle(colors.text)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(10)
+                SelectableText(
+                    code, monospaced: true, pointSize: MobaideTypography.codeUIFont.pointSize,
+                    color: colors.text, wraps: false
+                )
+                .padding(10)
             }
         }
         .background(colors.surface)
@@ -266,6 +292,7 @@ private struct MarkdownTableView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: Self.frameAlignment(alignment))
             .background(header ? colors.surface : Color.clear)
             .overlay(Rectangle().stroke(colors.surface2, lineWidth: 1))
+            .textSelection(.enabled)
     }
 
     private static func textAlignment(_ alignment: MarkdownTable.Alignment) -> TextAlignment {
