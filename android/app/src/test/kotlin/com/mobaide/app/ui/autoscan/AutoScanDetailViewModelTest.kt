@@ -13,9 +13,11 @@ import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.slot
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -47,11 +49,15 @@ class AutoScanDetailViewModelTest {
 
     // ---- Helpers ------------------------------------------------------------
 
-    private fun instance(name: String = WORKSPACE, cycle: Int = 3): AutoScanInstanceDto =
+    private fun instance(
+        name: String = WORKSPACE,
+        cycle: Int = 3,
+        startedAt: Double = 1.0,
+    ): AutoScanInstanceDto =
         AutoScanInstanceDto(
             workspace_name = name,
             status = "running",
-            started_at = 1.0,
+            started_at = startedAt,
             last_activity_at = 1.0,
             next_scan_at = "2026-04-11T01:00:00Z",
             cycle_number = cycle,
@@ -99,6 +105,8 @@ class AutoScanDetailViewModelTest {
         val repository: AutoScanRepository,
         val frames: MutableSharedFlow<AutoScanWsClient.Frame>,
         val events: MutableSharedFlow<AutoScanUiEvent>,
+        val scans: MutableStateFlow<List<AutoScanInstanceDto>>,
+        val resumes: MutableList<Map<String, Long>>,
     )
 
     private fun newFixture(): Fixture {
@@ -111,9 +119,16 @@ class AutoScanDetailViewModelTest {
             extraBufferCapacity = 4096,
         )
         val events = MutableSharedFlow<AutoScanUiEvent>(replay = 0, extraBufferCapacity = 4)
+        val scans = MutableStateFlow<List<AutoScanInstanceDto>>(emptyList())
+        val resumes = mutableListOf<Map<String, Long>>()
+        val resume = slot<Map<String, Long>>()
         every { repository.events } returns events
-        every { repository.observeDetailFrames(WORKSPACE, any()) } returns frames
-        return Fixture(repository, frames, events)
+        every { repository.observeScans() } returns scans
+        every { repository.observeDetailFrames(WORKSPACE, capture(resume)) } answers {
+            resumes += resume.captured
+            frames
+        }
+        return Fixture(repository, frames, events, scans, resumes)
     }
 
     private fun Fixture.buildVm(): AutoScanDetailViewModel {
@@ -503,6 +518,79 @@ class AutoScanDetailViewModelTest {
             assertTrue(vm.uiState.value.stopped)
             assertNull(vm.uiState.value.nextScanAt)
         }
+    }
+
+    private fun logEvent(seq: Long, line: String) = AutoScanWsClient.Frame.Event(
+        event = parsedEvent(seq = seq, payload = ScanProgressPayload.Log(line, "info", false), type = "log"),
+    )
+
+    @Test
+    fun stoppedElsewhere_thenListedWithANewRun_restartsTheStreamFromAFreshState() = runTest {
+        val fx = newFixture()
+        fx.scans.value = listOf(instance(startedAt = 1.0))
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        fx.frames.tryEmit(
+            AutoScanWsClient.Frame.Snapshot(scans = listOf(instance(startedAt = 1.0)), events = emptyMap()),
+        )
+        fx.frames.tryEmit(logEvent(seq = 5, line = "old run"))
+        vm.setPaused(true)
+        fx.frames.tryEmit(
+            AutoScanWsClient.Frame.Event(event = parsedEvent(seq = 6, payload = phase("scan_stopped"))),
+        )
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.stopped)
+
+        // The list still shows the stopped run: nothing to follow.
+        fx.scans.value = listOf(instance(startedAt = 1.0, cycle = 4))
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.stopped)
+        assertEquals(1, fx.resumes.size)
+
+        // Started again elsewhere: a new run's seq starts at 1, so the cursor must not carry over.
+        fx.scans.value = listOf(instance(startedAt = 2.0))
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse(s.stopped)
+        assertEquals(0L, s.lastSeq)
+        assertTrue(s.logLines.isEmpty())
+        assertNull(s.instance)
+        assertTrue(s.phases.values.all { it.status == "pending" })
+        assertTrue(s.isPausedAutoscroll)
+        assertEquals(listOf(emptyMap<String, Long>(), emptyMap()), fx.resumes)
+
+        // The reopened stream feeds the fresh state.
+        fx.frames.tryEmit(logEvent(seq = 1, line = "new run"))
+        advanceUntilIdle()
+        assertEquals(listOf("new run"), vm.uiState.value.logLines.map { it.text.text })
+        assertEquals(1L, vm.uiState.value.lastSeq)
+    }
+
+    @Test
+    fun stopOnTheScreen_doesNotRestartTheStream() = runTest {
+        val fx = newFixture()
+        fx.scans.value = listOf(instance(startedAt = 1.0))
+        coEvery { fx.repository.stopScan(WORKSPACE) } coAnswers { fx.scans.value = emptyList() }
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        fx.frames.tryEmit(
+            AutoScanWsClient.Frame.Snapshot(scans = listOf(instance(startedAt = 1.0)), events = emptyMap()),
+        )
+        fx.frames.tryEmit(logEvent(seq = 5, line = "old run"))
+        advanceUntilIdle()
+
+        vm.stop()
+        advanceUntilIdle()
+        // A late list push that still names the stopped run is not a new run either.
+        fx.scans.value = listOf(instance(startedAt = 1.0))
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue(s.stopped)
+        assertEquals(listOf("old run"), s.logLines.map { it.text.text })
+        assertEquals(5L, s.lastSeq)
+        assertEquals(1, fx.resumes.size)
     }
 
     companion object {
