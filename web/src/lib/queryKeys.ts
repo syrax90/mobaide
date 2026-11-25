@@ -135,6 +135,12 @@ export const queryKeys = {
    */
   voiceStatus: (agentId: string) => ['agent', agentId, 'voice'] as const,
   /**
+   * The agent's own settings (keep awake). Written by `agent_settings.changed`
+   * (a full snapshot, republished on every events-channel connect) and by the
+   * write answers.
+   */
+  agentSettings: (agentId: string) => ['agent', agentId, 'settings'] as const,
+  /**
    * `capabilities.fs.dirs` for the path fields. Its own key rather than an
    * observer of `agentCapabilities`, whose wizard observer deliberately keeps
    * `gcTime: 0` — a second observer would stretch that entry's lifetime.

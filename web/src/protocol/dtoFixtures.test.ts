@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { COVERED_FIXTURES } from './__fixtures__/coverage';
 import { canonicalize, readFixture, type DtoFixtureFile } from './__fixtures__/load';
+import { agentSettingsSchema } from './dto/agentSettings';
 import { agentVersionSchema } from './dto/agentVersion';
 import {
   autoScanInstanceSchema,
@@ -69,6 +70,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   FirstAgentPairedPayload: firstAgentPairedSchema,
   SessionModeOrderDto: sessionModeOrderSchema,
   VoiceStatusResponse: voiceStatusSchema,
+  AgentSettingsResponse: agentSettingsSchema,
   ChatStoredSessionsResponse: chatStoredSessionsResponseSchema,
   CloudVoiceStatus: cloudVoiceSchema,
   CloudVoiceChangedPayload: cloudVoiceChangedSchema,

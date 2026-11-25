@@ -155,6 +155,13 @@ extension VersionInfoResponse {
         return false
     }
 
+    /// `capabilities.agent_settings.keep_awake`: the agent can keep its
+    /// computer awake (`/api/agent/settings`). Explicit JSON `true` only.
+    var keepAwakeCapability: Bool {
+        if case .bool(true)? = capabilities["agent_settings"]?["keep_awake"] { return true }
+        return false
+    }
+
     var gitCapabilities: GitCapabilities {
         GitCapabilities(
             stage: gitCapability("stage"),

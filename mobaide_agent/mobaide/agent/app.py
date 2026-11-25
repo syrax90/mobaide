@@ -79,6 +79,9 @@ from .git.changes_models import GIT_CAPABILITIES
 from .git.router import router as git_router
 from .git.session_router import router as session_git_router
 from .hooks.router import router as hooks_router
+from .settings.models import AGENT_SETTINGS_CAPABILITIES
+from .settings.router import router as agent_settings_router
+from .settings.service import SETTINGS_FILE_NAME, AgentSettingsService
 from .install_paths import (
     default_prefix,
     manifest_url_from_relay_server_url,
@@ -452,6 +455,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("agent.starting")
+        # First, before anything slow: after an update restart the computer
+        # must not fall asleep while this process boots.
+        app.state.agent_settings.start_soon()
         # macOS-only: ``False`` means no Full Disk Access, so protected-folder
         # reads pop a host-desktop TCC modal the remote client can't see (the
         # per-session startup-stall watchdog surfaces that). Logged once.
@@ -615,6 +621,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             await app.state.voice.start()
         yield
         logger.info("agent.shutting_down")
+        if restart_requested():
+            await app.state.agent_settings.bridge()
         models_warmup = getattr(app.state, "cli_models_warmup", None)
         if models_warmup is not None and not models_warmup.done():
             models_warmup.cancel()
@@ -656,6 +664,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             fanout.stop()
         await app.state.session_manager.shutdown()
         await app.state.chat_catalog.close()
+        # Last, so the computer stays awake while the sessions stop; an update
+        # restart hands the lock over to the next process.
+        await app.state.agent_settings.shutdown(restarting=restart_requested())
         shutdown_logging()
 
     # Default-deny on the doc routes: the agent binds every interface, so
@@ -943,6 +954,11 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             work_dir=voice_cleanup_dir,
         ),
     )
+    # Construction does no I/O; start() applies the stored choice.
+    app.state.agent_settings = AgentSettingsService(
+        state_prefix(test_mode=config.is_test_mode) / SETTINGS_FILE_NAME,
+        publish=app.state.event_bus.publish,
+    )
     app.state.fanouts = {}  # session_id -> SessionEventFanout
 
     def _on_session_created(session) -> None:
@@ -1016,6 +1032,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(autoscan_ws_router)
     app.include_router(updater_router)
     app.include_router(voice_router)
+    app.include_router(agent_settings_router)
 
     # Health endpoint (no auth)
     @app.get("/api/health", tags=["health"])
@@ -1070,6 +1087,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 "chat": await asyncio.to_thread(
                     build_chat_capabilities, app.state.chat_agents
                 ),
+                "agent_settings": AGENT_SETTINGS_CAPABILITIES,
             },
             "latest_agent_version": (manifest or {}).get("version"),
         }

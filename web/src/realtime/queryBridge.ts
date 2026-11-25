@@ -27,7 +27,9 @@
  * deduped into that fetch and leaves the stale result pinned (CLA-234).
  * `git.changed` is the pointer case; `git.job.progress` / `git.job.done` carry
  * a whole `GitJobResponse` each and are written (`sessionGitJobCache.ts`), as is
- * `voice.changed`, a whole `VoiceStatusResponse` (`voiceCache.ts`).
+ * `voice.changed`, a whole `VoiceStatusResponse` (`voiceCache.ts`), and
+ * `agent_settings.changed`, a whole `AgentSettingsResponse`
+ * (`agentSettingsCache.ts`).
  *
  * WEB-10 judged the three `autoscan.*` types by the same rule and none of them
  * is an invalidation: `autoscan.list.changed` and `autoscan.status` carry full
@@ -59,6 +61,7 @@ import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
 import { applySessionGitJobEvent } from './sessionGitJobCache';
 import { applySessionModeOrderEvent } from './sessionModeOrderCache';
 import { applyVoiceSnapshot } from './voiceCache';
+import { applyAgentSettingsSnapshot } from './agentSettingsCache';
 import { markSessionsSnapshotApplied } from './sessionsSyncStore';
 import {
   agentStatusChangedSchema,
@@ -340,6 +343,15 @@ export function applyAgentEventEnvelope(
         kind: 'patched',
         type: envelope.type,
         keys: [queryKeys.voiceStatus(agentId)],
+      };
+    }
+    case 'agent_settings.changed': {
+      const outcome = applyAgentSettingsSnapshot(client, agentId, envelope.payload);
+      if (outcome === 'dropped') return { kind: 'dropped' };
+      return {
+        kind: 'patched',
+        type: envelope.type,
+        keys: [queryKeys.agentSettings(agentId)],
       };
     }
     default:

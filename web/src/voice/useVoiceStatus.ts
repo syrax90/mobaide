@@ -46,7 +46,7 @@ export function voiceQueryFailed(query: {
  * failed query that the agent is back, so it is asked again by itself. Like
  * every `refetchInterval`, it rests while the tab is hidden.
  */
-function unreachablePoll(state: {
+export function unreachablePoll(state: {
   status: string;
   error: unknown;
   errorUpdateCount: number;

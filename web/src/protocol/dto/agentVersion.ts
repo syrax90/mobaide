@@ -260,6 +260,20 @@ export function voiceCleanupKinds(info: AgentVersionInfo | undefined): readonly 
   return kinds.filter((kind): kind is string => typeof kind === 'string');
 }
 
+/**
+ * `capabilities.agent_settings.keep_awake` (Delta 2026-11-23): the agent can
+ * keep its computer awake (`/api/agent/settings`). Explicit `true` only.
+ */
+export function keepAwakeCapability(info: AgentVersionInfo | undefined): boolean {
+  if (info === undefined) return false;
+  const settings = info.capabilities.agent_settings;
+  if (typeof settings !== 'object' || settings === null) return false;
+  return (
+    Object.hasOwn(settings, 'keep_awake') &&
+    (settings as Record<string, unknown>).keep_awake === true
+  );
+}
+
 /** `capabilities.autoscan` (Delta 2026-11-18): what the Auto Scan wizard may offer. */
 export interface AutoScanCapability {
   /** Issue sources the agent can scan (`linear`, `github`). */

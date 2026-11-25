@@ -125,6 +125,38 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-23: keep the computer awake
+
+Additive delta within proto-v7 (2026-11-23, keep awake — agent, web, Android and iOS): **two REST routes, one capability key and one agent event. No version bump; `central_server` is untouched (it already forwards `PUT`).**
+
+An opt-in setting per agent (default off) stops the agent's computer from going to sleep while it is idle, so its sessions stay reachable from a phone. The screen can still turn off, except on a Windows laptop with Modern Standby on battery. Closing a laptop lid still puts the laptop to sleep.
+
+* `capabilities.agent_settings` is `{"keep_awake": true}` on `GET /api/version` (both transports). Clients show the setting only when the key is `true`.
+* `GET /api/agent/settings` → `AgentSettingsResponse {"keep_awake": {"enabled", "state", "message"}}`. Every key is always present.
+  * `enabled`: the stored choice.
+  * `message`: `null`, or text for the user. With `active` it is a note on how the computer stays awake, which clients show under the switch as plain text, not as an error. Today only a Windows laptop with Modern Standby sends one: its screen stays on while it runs on battery.
+  * `state` is an open vocabulary. A client reads a value it does not know as "not active" and shows `message`.
+
+  | `state` | Meaning |
+  |---|---|
+  | `off` | The choice is off. |
+  | `active` | The computer stays awake now. `message` is `null` or a note. |
+  | `failed` | The choice is on, but the OS refused. `message` says why. |
+  | `unsupported` | This computer has no way to stay awake, whatever the choice (for example, an agent inside WSL). `message` says why. Clients disable the switch. |
+
+* `PUT /api/agent/settings/keep_awake` `{"enabled": bool}` (strict bool) → the full `AgentSettingsResponse`. The agent stores the choice in `<state dir>/agent_settings.json` and applies it before it answers, with no restart. A failure to apply is a `200` with `state: "failed"`, not an error. `500 storage_error` when the file cannot be written (then nothing changes); `422` validation. Both transports answer identically. The relay runs these routes off the tunnel reader.
+* The agent event `agent_settings.changed` carries the full `AgentSettingsResponse`. The agent publishes it after every `PUT`, when a lock ends or comes back by itself (Linux), and as a snapshot on every events-channel connect (direct `/ws/events` and the relay's events snapshot).
+* At start, the agent applies the stored choice again. It does this first, in the background, so boot does not wait for it.
+* An update restart leaves a gap before the new process holds its own lock. The old process covers it, first thing in its shutdown: for 120 s on macOS and Linux, for one sleep timeout on Windows:
+  * macOS: `caffeinate -i -t 120`, in a session of its own so launchd does not stop it.
+  * Windows: `SetThreadExecutionState(ES_SYSTEM_REQUIRED)` once, which resets the idle timer. While the agent holds a display request, it adds `ES_DISPLAY_REQUIRED`, so the screen also stays on for one screen timeout.
+  * Linux: each held lock again, with `sleep 120` as the holder, through `systemd-run --user`. systemd stops every process of the agent's unit, so this needs the user's own service manager (a desktop login has one).
+* How each OS stays awake. The OS releases each lock when the agent process ends, also after a crash:
+  * macOS: an IOKit `PreventUserIdleSystemSleep` assertion (`pmset -g assertions` lists it).
+  * Windows: a `PowerRequestSystemRequired` power request (`powercfg /requests` lists it). On a Modern Standby laptop (`AoAc` and a system battery in `SYSTEM_POWER_CAPABILITIES`), Windows ends that request on battery 5 minutes after the sleep timeout. So there the agent reads `GetSystemPowerStatus` at once and every 30 s, and while the laptop runs on battery it also holds `PowerRequestDisplayRequired` on the same request. When it takes it, it resets the idle timers once (`ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED`), so a screen that already turned off turns on again. A display request also stops the screen from locking by itself.
+  * Linux: `systemd-inhibit --what=sleep --mode=block`. When polkit refuses `sleep` (it does for a system service outside a login session), the agent takes `--what=idle` instead. `sleep` blocks suspend on every desktop and leaves the screen lock alone. KDE reads an `idle` lock only as "keep the screen on", so its automatic suspend ignores it. polkit grants `sleep` to a process outside a login session while its user has a graphical session (the `DISPLAY=` session in `/run/systemd/users/<uid>`). So while it holds `idle`, the agent checks that file each minute, tries `sleep` once for each new graphical session and, when it gets it, drops the `idle` lock. GNOME's automatic suspend ignores logind's idle lock, so the agent also runs `gnome-session-inhibit --inhibit suspend` on the user's session bus when that bus exists. Each lock is a child process that holds a pipe from the agent, so it ends with the agent. While the setting is on, the agent tries a missing lock again every minute: a desktop login after the agent started also gets its lock. `gnome-session-inhibit` keeps running after a log-out, but its lock ended with the session. So each minute the agent also checks the session bus socket and the session manager process that the lock belongs to (its pid from `busctl`, its start time from `/proc/<pid>/stat`). When either is gone, it ends that holder and takes the lock again in the new session. Each lock process runs in a process session of its own (setsid), so polkit never asks for a password on the terminal an agent was started from. `state` is `active` when at least one lock is held.
+* Golden fixtures: `AgentSettingsResponse.json` (also the event payload) and `KeepAwakeSettingsRequest.json`; the `agent_settings_capability` case in `VersionInfoResponse.json`.
+
 ### Delta 2026-11-23: activity from OSC 7501
 
 Additive delta within proto-v7 (2026-11-23): **the session `activity` (Delta 2026-11-11) now also comes from OSC 7501 reports. No version bump; no wire shape changes; the clients are untouched.**

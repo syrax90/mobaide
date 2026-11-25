@@ -13,7 +13,7 @@ A **workspace** is a named folder that the agent starts sessions in. The wire an
 | Sessions | [Chat Sessions](#chat-sessions) · [Remote Terminal](#remote-terminal) · [Multi-Session](#multi-session) · [Managed CLI agents](#managed-cli-agents) · [Terminal Sessions](#terminal-sessions) · [Custom Path Sessions](#custom-path-sessions) · [Reorderable New-Session Lists](#reorderable-new-session-lists) · [Auto Scan Mode](#auto-scan-mode) · [1-hour Prompt Cache](#1-hour-prompt-cache) |
 | Terminal input and display | [Terminal Display Modes](#terminal-display-modes) · [Explicit Keyboard & Direct TUI Input](#explicit-keyboard--direct-tui-input) · [Prompt Templates](#prompt-templates) · [Reconnection](#reconnection) |
 | Git | [Git Management](#git-management) · [In-session Git Changes](#in-session-git-changes) |
-| Account and platform | [Secure Access](#secure-access) · [Cross-Platform](#cross-platform) · [Account Self-Deletion](#account-self-deletion) · [Device Management](#device-management) · [Session Notifications](#session-notifications) · [Help & Support](#help--support) |
+| Account and platform | [Secure Access](#secure-access) · [Cross-Platform](#cross-platform) · [Keep the Computer Awake](#keep-the-computer-awake) · [Account Self-Deletion](#account-self-deletion) · [Device Management](#device-management) · [Session Notifications](#session-notifications) · [Help & Support](#help--support) |
 
 ## Chat Sessions
 
@@ -327,6 +327,28 @@ No client exposes a direct connection to the agent: the relay is the only path a
 | Android app | Android | Native, Kotlin, Jetpack Compose |
 | iOS app | iOS 17+, iPhone only | Native, SwiftUI. Its wire layer is contract-locked to Android's by CI, see [docs/ios-client.md](ios-client.md) |
 | Web client | Browser, at `app.mobaide.com` | See [docs/web-client.md](web-client.md) |
+
+## Keep the Computer Awake
+
+An opt-in setting per agent stops the agent's computer from going to sleep while it is idle, so its sessions stay reachable from a phone. It is mostly useful on a laptop. The default is off.
+
+- **Where.** Android and iOS: **Settings → Keep awake**, for the connected agent. With no agent selected, the section stays visible and tells you to connect to one. Web: **Agents → Settings** on an online agent.
+- **Storage.** The agent stores the choice in `agent_settings.json` in its state folder, so every client of the agent sees one setting. A change on one device shows on the others at once (`agent_settings.changed`).
+- **No restart.** The agent applies a change before it answers. After an agent restart (for example, an update), it applies the stored choice again as its first step. During an update restart, the old process keeps the computer awake until the new process holds its own lock: for 2 minutes on macOS and Linux, and for one full sleep timeout on Windows. On Linux this needs a signed-in user.
+- **Limits.** The screen can still turn off, except on a Windows laptop with Modern Standby on battery (see below). Closing a laptop lid still puts it to sleep on every OS.
+- **Windows laptops with Modern Standby.** On battery, Windows ends the normal power request 5 minutes after the sleep timeout. Only a request that keeps the screen on stops this. So while such a laptop runs on battery, the agent also keeps the screen on, and the screen does not lock by itself. On mains power the screen turns off as usual. The agent checks the power source every 30 seconds. The clients show a note about this under the checkbox.
+- **Per OS.**
+
+  | OS | How | Check it |
+  |---|---|---|
+  | macOS | IOKit `PreventUserIdleSystemSleep` assertion | `pmset -g assertions` |
+  | Windows | `PowerRequestSystemRequired` power request, plus `PowerRequestDisplayRequired` on battery on a Modern Standby laptop | `powercfg /requests` (as admin) |
+  | Linux | `systemd-inhibit` (`sleep`, else `idle`), plus `gnome-session-inhibit --inhibit suspend` on the user's session bus | `systemd-inhibit --list` |
+
+  The OS releases each lock when the agent process ends, also after a crash.
+- **Linux details.** The agent runs as a system service. Before anyone signs in to the desktop, polkit gives it only logind's `idle` lock. The automatic suspend of GNOME and KDE ignores that lock, and KDE reads it as "keep the screen on". After a desktop sign-in, polkit usually allows logind's `sleep` lock, which blocks suspend on every desktop. So within a minute of a sign-in the agent swaps `idle` for `sleep`, and the screen can lock again. On GNOME it also takes a GNOME session lock. It tries a missing lock again every minute. After a log-out and a new sign-in, it takes the GNOME lock again in the new session within a minute. With nobody signed in since boot, the login screen can still suspend the computer.
+- **Status.** When the agent cannot keep the computer awake, the clients show why under the checkbox. When the agent has a note on how it keeps the computer awake (the Windows screen case above), they show it there as plain text. An agent inside WSL reports `unsupported`: Windows decides when that computer sleeps, so turn the setting on for an agent installed on Windows itself.
+- **Older agents.** An agent without `capabilities.agent_settings.keep_awake` shows "runs a Mobaide agent without this setting".
 
 ## Git Management
 

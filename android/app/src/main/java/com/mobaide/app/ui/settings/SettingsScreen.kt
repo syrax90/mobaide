@@ -65,6 +65,7 @@ import com.mobaide.app.ui.voice.VoiceViewModel
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     voiceViewModel: VoiceViewModel,
+    keepAwakeViewModel: KeepAwakeViewModel,
     onBack: () -> Unit,
     onLogout: () -> Unit,
     onManageConnections: () -> Unit = {},
@@ -74,9 +75,13 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val voiceState by voiceViewModel.uiState.collectAsStateWithLifecycle()
+    val keepAwakeState by keepAwakeViewModel.uiState.collectAsStateWithLifecycle()
     // Voice input is drawn from the cached cloud status: read it again each
     // time this screen comes on screen (opened, returned to, app foregrounded).
-    LifecycleEventEffect(Lifecycle.Event.ON_START) { voiceViewModel.refreshCloudIfStale() }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) {
+        voiceViewModel.refreshCloudIfStale()
+        keepAwakeViewModel.refresh()
+    }
     val context = LocalContext.current
 
     PixelScaffold(
@@ -190,6 +195,13 @@ fun SettingsScreen(
                 onCleanUpChange = voiceViewModel::setCleanUp,
                 onEngineChange = voiceViewModel::setEngine,
                 onRecheckCloud = voiceViewModel::recheckCloud,
+            )
+
+            HorizontalDivider(thickness = 2.dp)
+
+            KeepAwakeSection(
+                state = keepAwakeState,
+                onKeepAwakeChange = keepAwakeViewModel::setKeepAwake,
             )
 
             HorizontalDivider(thickness = 2.dp)

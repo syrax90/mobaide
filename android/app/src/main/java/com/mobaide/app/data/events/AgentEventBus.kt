@@ -5,6 +5,7 @@ import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.AgentSettingsResponse
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.GitJobResponse
@@ -175,6 +176,9 @@ class AgentEventBus @Inject constructor(
                 )
                 "voice.changed" -> AgentEvent.VoiceChanged(
                     json.decodeFromJsonElement(VoiceStatusResponse.serializer(), payload)
+                )
+                "agent_settings.changed" -> AgentEvent.AgentSettingsChanged(
+                    json.decodeFromJsonElement(AgentSettingsResponse.serializer(), payload)
                 )
                 "autoscan.status" -> AgentEvent.AutoScanStatus(
                     json.decodeFromJsonElement(AutoScanInstanceDto.serializer(), payload)

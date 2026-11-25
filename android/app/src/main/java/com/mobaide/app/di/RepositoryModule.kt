@@ -15,6 +15,7 @@ import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.auth.ConnectionStore
 import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.AgentSettingsRepository
 import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AuthRepository
@@ -150,6 +151,16 @@ object RepositoryModule {
         sessionManager: SessionManager,
     ): VoiceRepository {
         return VoiceRepository(restApi, eventBus, sessionManager)
+    }
+
+    @Provides
+    @Singleton
+    fun provideAgentSettingsRepository(
+        restApi: RestApi,
+        eventBus: AgentEventBus,
+        sessionManager: SessionManager,
+    ): AgentSettingsRepository {
+        return AgentSettingsRepository(restApi, eventBus, sessionManager)
     }
 
     @Provides

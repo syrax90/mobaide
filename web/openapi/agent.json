@@ -1,6 +1,19 @@
 {
   "components": {
     "schemas": {
+      "AgentSettingsResponse": {
+        "description": "``GET /api/agent/settings``, every settings write, and the\n``agent_settings.changed`` event payload.",
+        "properties": {
+          "keep_awake": {
+            "$ref": "#/components/schemas/KeepAwakeStatus"
+          }
+        },
+        "required": [
+          "keep_awake"
+        ],
+        "title": "AgentSettingsResponse",
+        "type": "object"
+      },
       "AntigravityOptionsModel": {
         "description": "Wire DTO for Antigravity CLI launch options (see :class:`AntigravityOptions`).",
         "properties": {
@@ -3675,6 +3688,51 @@
         "title": "JunieScanOptionsModel",
         "type": "object"
       },
+      "KeepAwakeSettingsRequest": {
+        "description": "``PUT /api/agent/settings/keep_awake``: keep this computer awake, or\nlet it sleep again, for every client of this agent.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "KeepAwakeSettingsRequest",
+        "type": "object"
+      },
+      "KeepAwakeStatus": {
+        "description": "Whether the agent keeps this computer from idle-sleeping.\n\n``enabled`` is the stored choice. ``state``: ``off`` (the choice is\noff), ``active`` (the computer stays awake now; ``message`` is a note on\nhow, or null), ``failed`` (on, but the OS refused; ``message`` says why)\nor ``unsupported`` (this computer has no way to stay awake, whatever the\nchoice; ``message`` says why).",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "state",
+          "message"
+        ],
+        "title": "KeepAwakeStatus",
+        "type": "object"
+      },
       "LinearLabelModel": {
         "description": "Linear label discovered via the per-workspace API key.",
         "properties": {
@@ -5184,6 +5242,68 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/agent/settings": {
+      "get": {
+        "operationId": "get_agent_settings_api_agent_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Agent Settings",
+        "tags": [
+          "agent-settings"
+        ]
+      }
+    },
+    "/api/agent/settings/keep_awake": {
+      "put": {
+        "operationId": "put_keep_awake_api_agent_settings_keep_awake_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeepAwakeSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Keep Awake",
+        "tags": [
+          "agent-settings"
+        ]
+      }
+    },
     "/api/agent/update/force_now": {
       "post": {
         "description": "Trigger the staged-binary updater immediately, bypassing idle deferral.\n\nReturns the updater outcome string verbatim (``\"staged\"``,\n``\"signature_failed\"``, ``\"no_change\"``, ``\"deferred\"``) so the client\ncan surface a meaningful toast. On ``\"staged\"`` the supervisor restart\nis scheduled as a FastAPI background task that runs *after* the HTTP\nresponse is flushed, so the client receives the 200 reliably before\nthe agent exits with code ``EXIT_RESTART_REQUESTED``.",

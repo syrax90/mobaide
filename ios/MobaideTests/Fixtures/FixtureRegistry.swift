@@ -46,6 +46,9 @@ enum FixtureRegistry {
         "ReRegisterAgentResponse": runner(ReRegisterAgentResponse.self),
         "MobileTokenResponse": runner(MobileTokenResponse.self),
         "MobileTokenRequest": runner(MobileTokenRequest.self),
+        // AgentSettingsDto.swift
+        "AgentSettingsResponse": runner(AgentSettingsResponse.self),
+        "KeepAwakeSettingsRequest": runner(KeepAwakeSettingsRequest.self),
         // AntigravityOptionsModel.swift
         "AntigravityOptionsModel": runner(AntigravityOptionsModel.self),
         // OpenCodeOptionsModel.swift

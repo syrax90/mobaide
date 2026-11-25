@@ -1,6 +1,7 @@
 package com.mobaide.app.data.network
 
 import com.mobaide.app.data.auth.TokenStore
+import com.mobaide.app.data.network.dto.AgentSettingsResponse
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.AutoScanTemplatesResponse
 import com.mobaide.app.data.network.dto.ChatStoredSessionsResponse
@@ -37,6 +38,7 @@ import com.mobaide.app.data.network.dto.GitPushRequest
 import com.mobaide.app.data.network.dto.GitRebaseRequest
 import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.GitStatusResponse
+import com.mobaide.app.data.network.dto.KeepAwakeSettingsRequest
 import com.mobaide.app.data.network.dto.LinearLabelDto
 import com.mobaide.app.data.network.dto.LinearStateDto
 import com.mobaide.app.data.network.dto.SaveAutoScanTemplateRequest
@@ -551,6 +553,25 @@ class RestApi(
         baseUrl().toHttpUrl().newBuilder()
             .addPathSegment("api")
             .addPathSegment("voice")
+            .apply { segments.forEach { addPathSegment(it) } }
+
+    suspend fun getAgentSettings(): AgentSettingsResponse =
+        executeCancellable(Request.Builder().url(agentSettingsUrl().build()).get().build())
+
+    /** The agent applies it before it answers; a failure to apply is `keep_awake.state`, not an error. */
+    suspend fun setKeepAwake(enabled: Boolean): AgentSettingsResponse =
+        execute(
+            Request.Builder()
+                .url(agentSettingsUrl("keep_awake").build())
+                .put(json.encodeToString(KeepAwakeSettingsRequest(enabled)).toRequestBody(jsonMediaType))
+                .build(),
+        )
+
+    private fun agentSettingsUrl(vararg segments: String): HttpUrl.Builder =
+        baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("agent")
+            .addPathSegment("settings")
             .apply { segments.forEach { addPathSegment(it) } }
 
     suspend fun getAutoScanList(): AutoScanListResponse {

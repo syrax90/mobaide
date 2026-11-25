@@ -482,6 +482,7 @@ fun AppNavigation(
             SettingsScreen(
                 viewModel = hiltViewModel(),
                 voiceViewModel = hiltViewModel(),
+                keepAwakeViewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
                 onLogout = {
                     navController.navigate(Routes.LOGIN) {

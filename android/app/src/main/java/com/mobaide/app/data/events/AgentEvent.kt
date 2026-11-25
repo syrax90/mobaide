@@ -1,5 +1,6 @@
 package com.mobaide.app.data.events
 
+import com.mobaide.app.data.network.dto.AgentSettingsResponse
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.GitJobResponse
@@ -99,6 +100,10 @@ sealed class AgentEvent {
     /** The agent's whole voice input status: on every state change, throttled
      *  to two a second while a download runs, and on every connect. */
     data class VoiceChanged(val status: VoiceStatusResponse) : AgentEvent()
+
+    /** The agent's whole settings: after every write, when keep-awake gains
+     *  or loses its lock by itself, and on every connect. */
+    data class AgentSettingsChanged(val settings: AgentSettingsResponse) : AgentEvent()
 
     /** Pushed by the server's user-scoped channel when any of the user's
      *  agents transitions between online and offline. */

@@ -2673,9 +2673,16 @@ body.sortable-dragging * {
 /* endregion */
 
 /* region agents & pairing (WEB-08) */
+/* Name, status and the buttons do not always fit one line, and the name is the
+   column that loses: it collapses to a letter and an ellipsis. Its floor makes
+   the head wrap instead, and the buttons then wrap among themselves. */
+.agent-card-head {
+  flex-wrap: wrap;
+}
+
 .agent-card-head .device-name {
   flex: 1;
-  min-width: 0;
+  min-width: 8rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2703,7 +2710,9 @@ body.sortable-dragging * {
 }
 
 .agent-card-head .button-row {
-  flex: none;
+  flex: 0 1 auto;
+  margin-left: auto;
+  justify-content: flex-end;
   align-items: center;
 }
 
@@ -4471,6 +4480,25 @@ body:has(dialog[open]) {
 }
 
 .voice-dialog-footer {
+  justify-content: flex-end;
+}
+
+/* Agent settings dialog: one column of settings, laid out like the voice panel. */
+.agent-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.agent-settings p {
+  margin: 0;
+}
+
+.agent-settings-error {
+  color: var(--danger);
+}
+
+.agent-settings-footer {
   justify-content: flex-end;
 }
 
@@ -6936,21 +6964,6 @@ body:has(dialog[open]) {
 
   .terminal-toggle-label-short {
     display: inline;
-  }
-
-  /* Name, status and both buttons do not fit one line on a phone, and the name
-     is the column that loses — it collapses to a letter and an ellipsis. The
-     floor is what makes the head wrap instead. */
-  .agent-card-head {
-    flex-wrap: wrap;
-  }
-
-  .agent-card-head .device-name {
-    min-width: 8rem;
-  }
-
-  .agent-card-head .button-row {
-    margin-left: auto;
   }
 
   /* A phone stacks the answers full width, one per row. */

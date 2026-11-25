@@ -72,6 +72,7 @@ async def test_get_version(client) -> None:
             "cleanup_kinds": ["claude", "codex", "antigravity", "opencode", "copilot", "cursor", "junie", "pi"],
         },
         "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
+        "agent_settings": {"keep_awake": True},
         "chat": {
             "claude": {"resume": True, "live": False},
             "codex": {"resume": True, "live": sys.platform != "win32"},

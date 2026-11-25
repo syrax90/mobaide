@@ -59,7 +59,9 @@ const OWNER = {
    * #737's voice dictation and install bodies are REST-only and follow them
    * here too, as do the transcript cleanup request and response;
    * `VoiceStatusResponse` also rides the `voice.changed` event and keeps its
-   * Zod mirror.
+   * Zod mirror. The keep-awake write body `KeepAwakeSettingsRequest` is
+   * REST-only too; `AgentSettingsResponse` also rides
+   * `agent_settings.changed` and keeps its Zod mirror.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -91,6 +93,7 @@ export const COVERED_FIXTURES: readonly string[] = [
   'pairing/qr_payload.json',
   'relay/relay_mapping.json',
   'voice/pcm16_chunks.json',
+  'dto/agent/AgentSettingsResponse.json',
   'dto/agent/AntigravityOptionsModel.json',
   'dto/agent/AutoScanFilterDto.json',
   'dto/agent/AutoScanInstanceDto.json',
@@ -157,6 +160,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/GitRebaseRequest.json': OWNER.generated,
   'dto/agent/GitRebaseResponse.json': OWNER.generated,
   'dto/agent/GitStatusResponse.json': OWNER.generated,
+  'dto/agent/KeepAwakeSettingsRequest.json': OWNER.generated,
   'dto/agent/LinearLabelDto.json': OWNER.generated,
   'dto/agent/LinearStateDto.json': OWNER.generated,
   'dto/agent/ProjectOrderRequest.json': OWNER.generated,

@@ -20,6 +20,9 @@ enum AgentEvent: Equatable, Sendable {
     /// The agent's whole voice input status: on every state change, throttled
     /// to two a second while a download runs, and on every connect.
     case voiceChanged(VoiceStatusResponse)
+    /// The agent's whole settings: after every write, when keep-awake gains
+    /// or loses its lock by itself, and on every connect.
+    case agentSettingsChanged(AgentSettingsResponse)
     case autoScanStatus(AutoScanInstanceDto)
     case autoScanListChanged(AutoScanListResponse)
     case autoScanEvent(workspaceName: String, seq: Int64, ts: String, payload: ScanProgressPayload)
@@ -104,6 +107,8 @@ enum AgentEnvelopeDemux {
             return decode(GitJobResponse.self, from: envelope).map { .gitJobDone($0) }
         case "voice.changed":
             return decode(VoiceStatusResponse.self, from: envelope).map { .voiceChanged($0) }
+        case "agent_settings.changed":
+            return decode(AgentSettingsResponse.self, from: envelope).map { .agentSettingsChanged($0) }
         case "autoscan.status":
             return decode(AutoScanInstanceDto.self, from: envelope).map { .autoScanStatus($0) }
         case "autoscan.list.changed":
