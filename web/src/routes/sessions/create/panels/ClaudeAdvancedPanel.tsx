@@ -9,6 +9,8 @@ export const CLAUDE_CODE_MODE_HINT =
   'Terminal only. Claude Code asks you to confirm until you accept; ' +
   'turn Code Mode off here to stop the question.';
 
+export const NO_MEMORY_HINT = 'Claude Code does not read or write its auto memory. CLAUDE.md files still load.';
+
 const DEBUG_TERMINAL_HINT = 'Claude Code prints verbose diagnostics into the terminal.';
 export const DEBUG_CHAT_HINT = 'Claude Code writes verbose diagnostics to ~/.claude/debug/ on this PC.';
 
@@ -56,6 +58,7 @@ export function ClaudeAdvancedPanel({
         <CheckboxField
           label="No memory"
           checked={bucket.noMemory}
+          hint={NO_MEMORY_HINT}
           onChange={(value) => {
             dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'noMemory', value });
           }}

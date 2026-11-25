@@ -335,6 +335,8 @@ Auto Scan can now scan the open issues of the workspace's **GitHub** repository 
 | Junie | `plan_mode`, `brave` |
 | Pi | `code_mode` |
 
+`claude_options.no_memory` (`bool`, default `false`, here and in `POST /api/sessions`) sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` for terminal and chat sessions: Claude Code does not load or write auto memory, and `CLAUDE.md` files still load. With `false` the agent sets nothing.
+
 A start without the chosen agent's object runs it without asking: Codex `full_auto`, Antigravity `skip_permissions`, OpenCode `auto_approve`, Copilot `allow_all`, Cursor `force`, Junie `brave`. The start saves the object on the workspace (`auto_scan.<kind>_options`) with the other choices. An object a newer agent no longer accepts reads as `null`.
 
 **`AutoScanTemplate`** is `{id, name, updated_at, settings}`. `updated_at` is ISO 8601 UTC. `settings` has `source`, `cli`, `ui`, `interval_minutes`, `initial_prompt` and the eight `<kind>_options`, each possibly `null`, plus `linear_filter` and `github_filter` as drafts: the same fields, but any may still be empty (a GitHub filter without labels, a Linear filter with blank states), so a template can hold a half-made filter. A template never holds a Linear API key. The templates live in `autoscan_templates.json` next to the agent's workspaces file. An entry this agent does not accept (one a newer agent wrote, for example) is left out of the answers but kept in the file; a file that is not a JSON list is moved to `autoscan_templates.json.bak` before the next save.

@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from mobaide.core.claude_launcher import AdHocLaunch, ClaudeLauncher, ClaudeOptions
+from mobaide.core.claude_launcher import (
+    NO_AUTO_MEMORY_ENV,
+    AdHocLaunch,
+    ClaudeLauncher,
+    ClaudeOptions,
+)
 from mobaide.core.workspaces_config import WorkspaceConfig
 
 
@@ -93,7 +98,8 @@ async def test_argv_all_flags(tmp_path: Path):
         "--",
         "hello world",
     ]
-    assert spec.env["CLAUDE_NO_MEMORY"] == "1"
+    assert spec.env[NO_AUTO_MEMORY_ENV] == "1"
+    assert "CLAUDE_NO_MEMORY" not in spec.env
 
 
 @pytest.mark.asyncio

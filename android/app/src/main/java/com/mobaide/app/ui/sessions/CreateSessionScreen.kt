@@ -2280,6 +2280,7 @@ private fun FocusViewToggle(checked: Boolean, onToggle: (Boolean) -> Unit) {
     )
 }
 
+private const val NO_MEMORY_HINT = "Claude Code does not read or write its auto memory. CLAUDE.md files still load."
 private const val DEBUG_TERMINAL_HINT = "Claude Code prints verbose diagnostics into the terminal."
 private const val DEBUG_CHAT_HINT = "Claude Code writes verbose diagnostics to ~/.claude/debug/ on this PC."
 
@@ -2302,6 +2303,11 @@ private fun ClaudeAdvancedOptions(
     AdvancedSection {
         leadingContent()
         ToggleRow("No memory", noMemory, onNoMemoryToggle)
+        Text(
+            text = NO_MEMORY_HINT,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
         ToggleRow("Ultracode", ultracode, onUltracodeToggle)
         ToggleRow("Debug logging", debug, onDebugToggle)

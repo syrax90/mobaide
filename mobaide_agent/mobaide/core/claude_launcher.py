@@ -169,6 +169,9 @@ CLAUDE_SESSION_PRESET_ENV: dict[str, str] = {
 
 # A "0" in the user's ~/.claude/settings.json or managed settings still wins.
 CODE_MODE_ENV = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE"
+# Turns off auto memory only; CLAUDE.md files still load. A "0" in the
+# user's settings.json or managed settings still wins.
+NO_AUTO_MEMORY_ENV = "CLAUDE_CODE_DISABLE_AUTO_MEMORY"
 CODE_MODE_MIN_VERSION = (2, 1, 323)
 
 
@@ -380,7 +383,7 @@ class ClaudeLauncher:
         if is_workspace and target.linear_api_key:
             env["LINEAR_API_KEY"] = target.linear_api_key
         if options.no_memory:
-            env["CLAUDE_NO_MEMORY"] = "1"
+            env[NO_AUTO_MEMORY_ENV] = "1"
         if options.code_mode:
             env[CODE_MODE_ENV] = "1"
         env.setdefault("TERM", "xterm-256color")
