@@ -1334,6 +1334,7 @@ class AutoScanSessionManager:
                 source = self._build_source(workspace, req)
                 await self._check_agent(cli, workspace, ui)
                 await self._check_code_mode(cli, workspace, ui, client_options, req)
+                await self._check_auto_review(cli, workspace, req)
                 instance = AutoScanInstance(
                     workspace_name=workspace_name,
                     workspace_config=workspace,
@@ -1481,6 +1482,24 @@ class AutoScanSessionManager:
             return
         check = getattr(self._launchers.get(cli), "check_code_mode", None)
         if not wanted or check is None:
+            return
+        try:
+            await check(workspace)
+        except CliBinaryNotFoundError:
+            return
+        except ValueError as exc:
+            raise AutoScanSourceError(str(exc)) from exc
+
+    async def _check_auto_review(
+        self, cli: str, workspace: WorkspaceConfig, req: AutoScanStart,
+    ) -> None:
+        """Refuse a Codex start with Auto review on a Codex too old for it,
+        before any issue is claimed."""
+        options = req.agent_options or {}
+        if cli != "codex" or not options.get("auto_review") or options.get("full_auto"):
+            return
+        check = getattr(self._launchers.get(cli), "check_auto_review", None)
+        if check is None:
             return
         try:
             await check(workspace)

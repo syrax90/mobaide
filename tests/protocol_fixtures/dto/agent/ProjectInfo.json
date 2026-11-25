@@ -83,7 +83,7 @@
           "linear_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" },
           "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "active_label": null, "issue_types": ["Bug"] },
           "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "high", "fast_mode": false, "ultracode": false, "append_system_prompt": null, "debug": false, "focus_mode": true, "code_mode": true },
-          "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "high", "full_auto": true },
+          "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "high", "full_auto": true, "auto_review": false },
           "antigravity_options": null,
           "opencode_options": { "auto_approve": true, "code_mode": false },
           "copilot_options": { "allow_all": false },
@@ -109,7 +109,7 @@
           "linear_filter": { "state_names": ["Todo"], "label_names": ["bot"], "active_state": "Doing", "done_state": "Shipped", "removal_label": "bot" },
           "github_filter": { "labels": ["ai-ready", "bot"], "assignee": "@me", "issue_types": ["Bug"] },
           "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "model": "opus", "effort": "high", "fast_mode": false, "ultracode": false, "debug": false, "focus_mode": true, "code_mode": true },
-          "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "high", "full_auto": true },
+          "codex_options": { "model": "gpt-5.5", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "high", "full_auto": true, "auto_review": false },
           "opencode_options": { "auto_approve": true, "code_mode": false },
           "copilot_options": { "allow_all": false },
           "pi_options": { "code_mode": true }

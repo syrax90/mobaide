@@ -219,6 +219,11 @@ final class CreateSessionModel {
     var codexSandbox = "workspace-write"
     var codexApproval = "on-request"
     var codexFullAuto = false
+    /// Codex Auto review (`--approve-for-me`); applies only where the agent
+    /// advertises it (`codexAutoReviewSupported`).
+    var codexAutoReview = false
+    /// `capabilities.cli.codex.auto_review`: an older agent drops the field.
+    private(set) var codexAutoReviewSupported = false
     var codexReasoningEffort = "high"
     /// Off by default: a Codex session opens in the chat view whenever the
     /// agent can run it.
@@ -227,13 +232,22 @@ final class CreateSessionModel {
     /// The autonomy preset the sandbox / approval pair matches; nil for a
     /// hand-picked pair (Android `codexPreset`, web `codexPreset`).
     var codexPreset: CodexAutonomyPreset? {
-        CodexAutonomyPreset.matching(sandbox: codexSandbox, approval: codexApproval, fullAuto: codexFullAuto)
+        CodexAutonomyPreset.matching(
+            sandbox: codexSandbox,
+            approval: codexApproval,
+            fullAuto: codexFullAuto,
+            autoReview: codexAutoReviewOn
+        )
     }
+
+    /// Auto review is chosen and the agent advertises it.
+    var codexAutoReviewOn: Bool { codexAutoReview && codexAutoReviewSupported && !codexFullAuto }
 
     func applyCodexPreset(_ preset: CodexAutonomyPreset) {
         codexSandbox = preset.sandbox
         codexApproval = preset.approval
         codexFullAuto = preset == .fullAccess
+        codexAutoReview = preset == .autoReview
     }
     /// `capabilities.chat.codex`; nil until the probe answers.
     private(set) var codexChatCapability: ChatCapability?
@@ -870,6 +884,7 @@ final class CreateSessionModel {
         junieChatCapability = version.chatCapability("junie")
         piChatCapability = version.chatCapability("pi")
         codexAvailable = version.cliAvailable("codex")
+        codexAutoReviewSupported = version.cliFeature("codex", "auto_review")
         antigravityAvailable = version.cliAvailable("antigravity")
         opencodeAvailable = version.cliAvailable("opencode")
         opencodeNeedsAgentUpdate = !version.cliKnown("opencode")
@@ -1844,6 +1859,7 @@ final class CreateSessionModel {
             approval: codexApproval,
             reasoning_effort: codexReasoningEffort,
             full_auto: codexFullAuto,
+            auto_review: codexAutoReviewOn,
             worktree: worktree,
             branch_name: branchName,
             base_branch: baseBranch
@@ -1945,6 +1961,7 @@ final class CreateSessionModel {
             sandbox: codexSandbox,
             approval: codexApproval,
             fullAuto: codexFullAuto,
+            autoReview: codexAutoReview,
             reasoningEffort: codexReasoningEffort,
             terminalUI: codexTerminalUI
         )
@@ -2221,6 +2238,7 @@ final class CreateSessionModel {
             codexSandbox = codex.sandbox
             codexApproval = codex.approval
             codexFullAuto = codex.fullAuto
+            codexAutoReview = codex.autoReview
             codexReasoningEffort = codex.reasoningEffort
             codexTerminalUI = codex.terminalUI
         }
@@ -2299,13 +2317,16 @@ final class CreateSessionModel {
 }
 
 /// Codex's sandbox × approval shortcuts in the create-session wizard.
+/// `autoReview` is Codex `--approve-for-me`, offered only where the agent
+/// advertises `capabilities.cli.codex.auto_review`.
 enum CodexAutonomyPreset: CaseIterable {
-    case readOnly, auto, fullAccess
+    case readOnly, auto, autoReview, fullAccess
 
     var title: String {
         switch self {
         case .readOnly: return "Read only"
         case .auto: return "Auto"
+        case .autoReview: return "Auto review"
         case .fullAccess: return "Full access"
         }
     }
@@ -2314,24 +2335,39 @@ enum CodexAutonomyPreset: CaseIterable {
         switch self {
         case .readOnly: return "Reads the workspace; asks before any change."
         case .auto: return "Edits within the workspace; asks before risky actions."
+        case .autoReview:
+            return "Edits within the workspace; a Codex reviewer approves safe requests. Uses extra Codex usage."
         case .fullAccess: return "No sandbox or approval prompts (--yolo)."
         }
     }
 
+    /// The sandbox `--approve-for-me` sets itself for `autoReview`, so an
+    /// older agent that drops `auto_review` still asks a person.
     var sandbox: String {
         switch self {
         case .readOnly: return "read-only"
-        case .auto: return "workspace-write"
+        case .auto, .autoReview: return "workspace-write"
         case .fullAccess: return "danger-full-access"
         }
     }
 
     var approval: String { self == .fullAccess ? "never" : "on-request" }
 
+    /// The presets to offer: Auto review only where the agent advertises it.
+    static func offered(autoReviewSupported: Bool) -> [CodexAutonomyPreset] {
+        allCases.filter { $0 != .autoReview || autoReviewSupported }
+    }
+
     /// The preset a sandbox / approval pair matches; nil for a hand-picked pair
-    /// (Android `codexPreset`, web `codexPreset`).
-    static func matching(sandbox: String, approval: String, fullAuto: Bool) -> CodexAutonomyPreset? {
+    /// `autoReview` is the effective choice (chosen and advertised).
+    static func matching(
+        sandbox: String,
+        approval: String,
+        fullAuto: Bool,
+        autoReview: Bool = false
+    ) -> CodexAutonomyPreset? {
         if fullAuto { return .fullAccess }
+        if autoReview { return .autoReview }
         guard approval == "on-request" else { return nil }
         switch sandbox {
         case "read-only": return .readOnly

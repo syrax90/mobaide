@@ -15,6 +15,8 @@ data class CodexLaunchPrefs(
     val sandbox: String = "workspace-write",
     val approval: String = "on-request",
     val fullAuto: Boolean = false,
+    // Codex Auto review. Older blobs decode to off.
+    val autoReview: Boolean = false,
     val reasoningEffort: String = "high",
     // The classic terminal instead of the chat view. Older blobs decode to off.
     val terminalUi: Boolean = false,

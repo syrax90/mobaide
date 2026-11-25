@@ -56,6 +56,8 @@ export interface CodexLaunchPrefs {
   sandbox: CodexSandbox;
   approval: CodexApproval;
   fullAuto: boolean;
+  /** Codex Auto review; a blob from before it existed reads as off. */
+  autoReview: boolean;
   /**
    * Nullable here, a plain `String` on both mobile clients — the one shape
    * deviation. Web's control has a real third state (`null` renders "Agent
@@ -182,6 +184,7 @@ export const CODEX_PREFS_DEFAULTS: CodexLaunchPrefs = {
   sandbox: 'workspace-write',
   approval: 'on-request',
   fullAuto: false,
+  autoReview: false,
   reasoningEffort: 'high',
   terminalUi: false,
 };
@@ -347,6 +350,7 @@ function sanitizeCodexPrefs(raw: unknown): CodexLaunchPrefs | null {
       ? 'on-request'
       : field(raw, 'approval', CODEX_PREFS_DEFAULTS.approval, isCodexApproval);
   const fullAuto = field(raw, 'fullAuto', CODEX_PREFS_DEFAULTS.fullAuto, isBoolean);
+  const autoReview = field(raw, 'autoReview', CODEX_PREFS_DEFAULTS.autoReview, isBoolean);
   const reasoningEffort = field(
     raw,
     'reasoningEffort',
@@ -359,12 +363,13 @@ function sanitizeCodexPrefs(raw: unknown): CodexLaunchPrefs | null {
     sandbox === undefined ||
     approval === undefined ||
     fullAuto === undefined ||
+    autoReview === undefined ||
     reasoningEffort === undefined ||
     terminalUi === undefined
   ) {
     return null;
   }
-  return { model, sandbox, approval, fullAuto, reasoningEffort, terminalUi };
+  return { model, sandbox, approval, fullAuto, autoReview, reasoningEffort, terminalUi };
 }
 
 function sanitizeAntigravityPrefs(raw: unknown): AntigravityLaunchPrefs | null {

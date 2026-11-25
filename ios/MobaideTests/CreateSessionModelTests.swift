@@ -239,6 +239,26 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.codexApproval, "on-request")
     }
 
+    func testAutoReviewPresetIsSentOnlyWhereTheAgentAdvertisesIt() async throws {
+        for supported in [true, false] {
+            let codex = supported ? #"{"available":true,"auto_review":true}"# : #"{"available":true}"#
+            let model = await modelWithCapabilities(#"{"cli":{"codex":"# + codex + "}}")
+            model.selection = .stored("a")
+            model.applyCodexPreset(.fullAccess)
+            model.applyCodexPreset(.autoReview)
+
+            // An older agent drops auto_review and runs what it understands,
+            // so the preset that matches what runs there is Auto.
+            XCTAssertEqual(model.codexPreset, supported ? .autoReview : .auto)
+            let request = try XCTUnwrap(model.buildRequest(mode: .codex))
+            XCTAssertEqual(request.codex_options?.auto_review, supported)
+            XCTAssertEqual(request.codex_options?.full_auto, false)
+            // The preset's own sandbox and approval, so an older agent still asks a person.
+            XCTAssertEqual(request.codex_options?.sandbox, "workspace-write")
+            XCTAssertEqual(request.codex_options?.approval, "on-request")
+        }
+    }
+
     func testCodexCreateWithoutChatOnThePCPointsToTerminalUI() async {
         StubURLProtocol.reset()
         let model = stubbedModel()

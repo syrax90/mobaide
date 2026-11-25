@@ -139,21 +139,32 @@ data class CodexScanBucket(
     val approval: String = "never",
     val reasoningEffort: String? = "high",
     val fullAuto: Boolean = true,
+    // Codex Auto review; applies only where the agent advertises it.
+    val autoReview: Boolean = false,
 ) {
-    val preset: CodexAutonomyPreset? get() = codexPresetOf(sandbox, approval, fullAuto)
+    /** Whether Auto review applies on an agent that does ([supported]) or does not advertise it. */
+    fun autoReviewOn(supported: Boolean): Boolean = autoReview && supported && !fullAuto
 
-    fun toDto() = CodexScanOptionsDto(
+    fun preset(autoReviewSupported: Boolean): CodexAutonomyPreset? =
+        codexPresetOf(sandbox, approval, fullAuto, autoReviewOn(autoReviewSupported))
+
+    fun toDto(autoReviewSupported: Boolean) = CodexScanOptionsDto(
         model = model,
         sandbox = sandbox,
         approval = approval,
         reasoning_effort = reasoningEffort,
         full_auto = fullAuto,
+        auto_review = autoReviewOn(autoReviewSupported),
     )
 
     fun withPreset(preset: CodexAutonomyPreset): CodexScanBucket = when (preset) {
-        CodexAutonomyPreset.ReadOnly -> copy(sandbox = "read-only", approval = "on-request", fullAuto = false)
-        CodexAutonomyPreset.Auto -> copy(sandbox = "workspace-write", approval = "on-request", fullAuto = false)
-        CodexAutonomyPreset.FullAccess -> copy(fullAuto = true)
+        CodexAutonomyPreset.ReadOnly ->
+            copy(sandbox = "read-only", approval = "on-request", fullAuto = false, autoReview = false)
+        CodexAutonomyPreset.Auto ->
+            copy(sandbox = "workspace-write", approval = "on-request", fullAuto = false, autoReview = false)
+        CodexAutonomyPreset.AutoReview ->
+            copy(sandbox = "workspace-write", approval = "on-request", fullAuto = false, autoReview = true)
+        CodexAutonomyPreset.FullAccess -> copy(fullAuto = true, autoReview = false)
     }
 
     fun applied(dto: CodexScanOptionsDto) = CodexScanBucket(
@@ -162,6 +173,7 @@ data class CodexScanBucket(
         approval = currentCodexApproval(dto.approval),
         reasoningEffort = dto.reasoning_effort,
         fullAuto = dto.full_auto,
+        autoReview = dto.auto_review,
     )
 }
 
@@ -229,8 +241,14 @@ fun codexEffortForModel(model: String?, effort: String, details: List<CliModelDe
 }
 
 /** The autonomy preset the raw Codex fields match, or null for a custom combination. */
-fun codexPresetOf(sandbox: String, approval: String, fullAuto: Boolean): CodexAutonomyPreset? = when {
+fun codexPresetOf(
+    sandbox: String,
+    approval: String,
+    fullAuto: Boolean,
+    autoReview: Boolean = false,
+): CodexAutonomyPreset? = when {
     fullAuto -> CodexAutonomyPreset.FullAccess
+    autoReview -> CodexAutonomyPreset.AutoReview
     sandbox == "read-only" && approval == "on-request" -> CodexAutonomyPreset.ReadOnly
     sandbox == "workspace-write" && approval == "on-request" -> CodexAutonomyPreset.Auto
     else -> null

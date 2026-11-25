@@ -40,6 +40,8 @@ export interface AutoScanModels {
   codex: readonly string[] | null;
   codexDetails: readonly CliModelDetail[] | null;
   antigravity: readonly string[] | null;
+  /** `capabilities.cli.codex.auto_review`; absent reads as not supported. */
+  codexAutoReview?: boolean;
 }
 
 interface AutoScanPanelProps {
@@ -351,6 +353,7 @@ function AgentOptions({
           bucket={agents.codex}
           models={models.codex}
           modelDetails={models.codexDetails}
+          autoReviewSupported={models.codexAutoReview === true}
           dispatch={dispatch}
           target="autoScan"
         />

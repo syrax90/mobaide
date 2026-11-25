@@ -5,6 +5,7 @@ import type { ChatSupport } from '../../../protocol/dto/agentVersion';
 import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import { createSessionRequestSchema } from '../../../protocol/dto/sessionCreate';
 import {
+  autoScanTemplateSettings,
   buildConnectRequest,
   buildCreateRequest,
   buildResumeRequest,
@@ -74,6 +75,7 @@ const POPULATED: WizardState = {
     sandbox: 'danger-full-access',
     approval: 'never',
     fullAuto: true,
+    autoReview: false,
     reasoningEffort: null,
     terminalUi: false,
   },
@@ -211,7 +213,7 @@ const CLAUDE_BOOLEANS: Record<
 const CODEX_BOOLEANS: Record<
   RequiredBooleans<components['schemas']['CodexOptionsModel']>,
   true
-> = { full_auto: true, worktree: true };
+> = { auto_review: true, full_auto: true, worktree: true };
 
 const ANTIGRAVITY_BOOLEANS: Record<
   RequiredBooleans<components['schemas']['AntigravityOptionsModel']>,
@@ -518,6 +520,7 @@ describe('buildStartScanRequest — agent with capabilities.autoscan', () => {
         approval: 'never',
         reasoning_effort: 'high',
         full_auto: true,
+        auto_review: false,
       },
       ui: 'terminal',
       interval_minutes: 5,
@@ -1310,5 +1313,88 @@ describe('Code Mode', () => {
     const wire = createSessionRequestSchema.parse(request()) as CreateSessionRequest;
 
     expect(codeMode(wire)).toBe(true);
+  });
+});
+
+describe('Codex — Auto review', () => {
+  const review = {
+    ...INITIAL_WIZARD_STATE.codex,
+    sandbox: 'workspace-write',
+    approval: 'on-request',
+    fullAuto: false,
+    autoReview: true,
+  } as const;
+  const scanState: WizardState = {
+    ...POPULATED,
+    codex: review,
+    autoScanAgents: { ...POPULATED.autoScanAgents, codex: review },
+    autoScanSetup: {
+      ...POPULATED.autoScanSetup,
+      source: 'github',
+      cli: 'codex',
+      githubFilter: { labels: ['ai-ready'], assignee: '', activeLabel: '', issueTypes: [] },
+    },
+  };
+  const autoScan = { sources: ['github'], clis: ['codex'], githubSetup: true };
+
+  it.each<[string, boolean | undefined, boolean]>([
+    ['the agent advertises it', true, true],
+    ['an agent without the capability', false, false],
+    ['the probe still out', undefined, false],
+  ])('sends auto_review for a launch only where %s', (_name, codexAutoReview, sent) => {
+    const request = buildCreateRequest({
+      state: scanState,
+      mode: 'codex',
+      workspace: gitWorkspace,
+      codexAutoReview,
+    });
+
+    // The preset's own sandbox and approval travel either way, so an older
+    // agent that drops auto_review still asks a person.
+    expect(request?.codex_options).toMatchObject({
+      auto_review: sent,
+      full_auto: false,
+      sandbox: 'workspace-write',
+      approval: 'on-request',
+    });
+    expect(() => createSessionRequestSchema.parse(request)).not.toThrow();
+  });
+
+  it('sends the effective choice on a scan start but keeps the raw choice in a template', () => {
+    const start = (codexAutoReview: boolean) =>
+      buildStartScanRequest({
+        state: scanState,
+        mode: 'auto_scan',
+        workspace: gitWorkspace,
+        autoScan,
+        codexAutoReview,
+      });
+
+    expect(start(true)?.codex_options?.auto_review).toBe(true);
+    expect(start(false)?.codex_options?.auto_review).toBe(false);
+    expect(autoScanTemplateSettings(scanState).codex_options?.auto_review).toBe(true);
+  });
+
+  it('never sends auto_review with full_auto, which the agent refuses', () => {
+    const full: WizardState = {
+      ...scanState,
+      codex: { ...review, fullAuto: true },
+      autoScanAgents: { ...scanState.autoScanAgents, codex: { ...review, fullAuto: true } },
+    };
+
+    expect(
+      buildCreateRequest({ state: full, mode: 'codex', workspace: gitWorkspace, codexAutoReview: true })
+        ?.codex_options,
+    ).toMatchObject({ full_auto: true, auto_review: false });
+    expect(
+      buildStartScanRequest({
+        state: full,
+        mode: 'auto_scan',
+        workspace: gitWorkspace,
+        autoScan,
+        codexAutoReview: true,
+      })?.codex_options,
+    ).toMatchObject({ full_auto: true, auto_review: false });
+    expect(autoScanTemplateSettings(full).codex_options?.auto_review).toBe(false);
   });
 });

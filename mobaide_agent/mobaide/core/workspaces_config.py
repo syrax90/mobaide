@@ -94,7 +94,7 @@ AUTO_SCAN_OPTION_FIELDS: dict[str, dict[str, str]] = {
     },
     "codex": {
         "model": "text", "sandbox": "text", "approval": "text",
-        "reasoning_effort": "text", "full_auto": "bool",
+        "reasoning_effort": "text", "full_auto": "bool", "auto_review": "bool",
     },
     "antigravity": {
         "model": "text", "skip_permissions": "bool", "sandbox": "bool", "add_dirs": "texts",

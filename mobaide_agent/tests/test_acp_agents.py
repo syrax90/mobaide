@@ -692,6 +692,11 @@ class TestCodexConfigIntents:
         [
             (CodexOptions(full_auto=True, sandbox="read-only"), "agent-full-access"),
             (CodexOptions(sandbox="danger-full-access", approval="never"), "agent-full-access"),
+            (CodexOptions(auto_review=True, sandbox="read-only"), "agent"),
+            (
+                CodexOptions(auto_review=True, sandbox="danger-full-access", approval="never"),
+                "agent",
+            ),
             (CodexOptions(sandbox="danger-full-access", approval="on-request"), "workspace-write"),
             (CodexOptions(sandbox="read-only", approval="never"), "read-only"),
             (CodexOptions(sandbox="workspace-write", approval="never"), "workspace-write"),
@@ -701,6 +706,8 @@ class TestCodexConfigIntents:
         ids=[
             "full-auto-wins",
             "danger-never-ask",
+            "auto-review",
+            "auto-review-beats-danger-never-ask",
             "danger-still-asks",
             "read-only",
             "never-ask-in-workspace",

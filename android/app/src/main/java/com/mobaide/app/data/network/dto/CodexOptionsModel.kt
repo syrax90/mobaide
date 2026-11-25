@@ -10,6 +10,8 @@ data class CodexOptionsModel(
     val approval: String = "never",
     val reasoning_effort: String? = "high",
     val full_auto: Boolean = false,
+    // Codex --approve-for-me; never with full_auto (the agent answers 422).
+    val auto_review: Boolean = false,
     val initial_prompt: String? = null,
     val worktree: Boolean = false,
     val branch_name: String? = null,

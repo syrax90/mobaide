@@ -2610,6 +2610,29 @@ body.sortable-dragging * {
   gap: 0.5rem;
 }
 
+/* The row's width, not the viewport's, picks the columns. */
+.preset-group {
+  container-type: inline-size;
+}
+
+/* Four presets: flex wrap would leave the last card alone and stretched (3+1). */
+.preset-row-quad {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container (min-width: 24.5rem) {
+  .preset-row-quad {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 49.5rem) {
+  .preset-row-quad {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 .preset-card {
   display: flex;
   flex-direction: column;

@@ -49,6 +49,7 @@ import com.mobaide.app.data.network.dto.WorktreeBasesResponse
 import com.mobaide.app.data.network.dto.autoScanCapability
 import com.mobaide.app.data.network.dto.chatSupport
 import com.mobaide.app.data.network.dto.cliAvailable
+import com.mobaide.app.data.network.dto.cliFeature
 import com.mobaide.app.data.network.dto.cliKnown
 import com.mobaide.app.data.network.dto.cliModelDetails
 import com.mobaide.app.data.network.dto.cliModels
@@ -173,11 +174,13 @@ sealed interface TypeEditorState {
 
 /**
  * Convenience autonomy presets that collapse Codex's two-axis sandbox×approval
- * model into one choice. [Auto] is the wizard default; [FullAccess] maps to
- * Codex's `--yolo` (full_auto). The Advanced controls can set any raw
- * sandbox/approval combination, in which case no preset is highlighted.
+ * model into one choice. [Auto] is the wizard default; [AutoReview] maps to
+ * Codex's `--approve-for-me` (auto_review, shown only when the agent advertises
+ * it); [FullAccess] maps to Codex's `--yolo` (full_auto). The Advanced
+ * controls can set any raw sandbox/approval combination, in which case no
+ * preset is highlighted.
  */
-enum class CodexAutonomyPreset { ReadOnly, Auto, FullAccess }
+enum class CodexAutonomyPreset { ReadOnly, Auto, AutoReview, FullAccess }
 
 /**
  * Active selection on the workspace picker.
@@ -302,6 +305,9 @@ data class CreateSessionUiState(
     val codexSandbox: String = "workspace-write",
     val codexApproval: String = "on-request",
     val codexFullAuto: Boolean = false,
+    val codexAutoReview: Boolean = false,
+    // capabilities.cli.codex.auto_review: an older agent drops auto_review.
+    val codexAutoReviewSupported: Boolean = false,
     val codexReasoningEffort: String = "high",
     // Codex: start the classic terminal instead of the chat view.
     val codexTerminalUi: Boolean = false,
@@ -425,7 +431,11 @@ val CreateSessionUiState.effectiveBaseBranch: String?
  * via the Advanced controls (so the segmented control highlights nothing).
  */
 val CreateSessionUiState.codexPreset: CodexAutonomyPreset?
-    get() = codexPresetOf(codexSandbox, codexApproval, codexFullAuto)
+    get() = codexPresetOf(codexSandbox, codexApproval, codexFullAuto, codexAutoReviewOn)
+
+/** Whether Auto review applies: chosen, and advertised by the agent. */
+val CreateSessionUiState.codexAutoReviewOn: Boolean
+    get() = codexAutoReview && codexAutoReviewSupported && !codexFullAuto
 
 /**
  * Effort levels offered for a Codex [model]: the agent-advertised per-model set
@@ -574,6 +584,7 @@ private fun CreateSessionUiState.toCodexLaunchPrefs() = CodexLaunchPrefs(
     sandbox = codexSandbox,
     approval = codexApproval,
     fullAuto = codexFullAuto,
+    autoReview = codexAutoReview,
     reasoningEffort = codexReasoningEffort,
     terminalUi = codexTerminalUi,
 )
@@ -762,7 +773,8 @@ fun CreateSessionUiState.autoScanTemplateSettings(): AutoScanTemplateSettingsDto
         linear_filter = wizard.linearFilter.toDraftDto(),
         github_filter = wizard.githubFilter.toDto(),
         claude_options = autoScanClaudeScanOptions().takeIf { cli == "claude" },
-        codex_options = agents.codex.toDto().takeIf { cli == "codex" },
+        // A template keeps the choice itself; a start sends what applies.
+        codex_options = agents.codex.toDto(autoReviewSupported = true).takeIf { cli == "codex" },
         antigravity_options = agents.antigravity.toDto().takeIf { cli == "antigravity" },
         opencode_options = OpenCodeScanOptionsDto(agents.opencodeAutoApprove, agents.opencodeCodeMode)
             .takeIf { cli == "opencode" },
@@ -950,6 +962,7 @@ class CreateSessionViewModel @Inject constructor(
                         codexSandbox = saved.sandbox,
                         codexApproval = currentCodexApproval(saved.approval),
                         codexFullAuto = saved.fullAuto,
+                        codexAutoReview = saved.autoReview,
                         codexTerminalUi = saved.terminalUi,
                         // The DataStore read races the ModePick capability
                         // probe: when the probe already resolved, its
@@ -1404,6 +1417,7 @@ class CreateSessionViewModel @Inject constructor(
                         junieChat = version.chatSupport("junie"),
                         piChat = version.chatSupport("pi"),
                         codexAvailable = version.cliAvailable("codex"),
+                        codexAutoReviewSupported = version.cliFeature("codex", "auto_review"),
                         antigravityAvailable = version.cliAvailable("antigravity"),
                         opencodeAvailable = version.cliAvailable("opencode"),
                         opencodeKnown = version.cliKnown("opencode"),
@@ -2075,7 +2089,7 @@ class CreateSessionViewModel @Inject constructor(
             interval_minutes = options.interval_minutes,
             initial_prompt = state.initialPrompt,
             claude_options = if (claude) state.autoScanClaudeOptions(initialPrompt = null) else null,
-            codex_options = options.codex_options,
+            codex_options = wizard.agents.codex.toDto(state.codexAutoReviewSupported).takeIf { cli == "codex" },
             antigravity_options = options.antigravity_options,
             opencode_options = options.opencode_options,
             copilot_options = options.copilot_options,
@@ -2320,15 +2334,25 @@ class CreateSessionViewModel @Inject constructor(
     fun setInitialPrompt(v: String) = _uiState.update { it.copy(initialPrompt = v) }
     fun clearError() = _uiState.update { it.copy(error = null) }
 
-    /** Sets sandbox + approval + full-auto together from a one-tap autonomy preset. */
+    /** Sets sandbox + approval + full-auto + auto-review together from a one-tap autonomy preset. */
     fun selectCodexPreset(preset: CodexAutonomyPreset) = _uiState.update {
         when (preset) {
-            CodexAutonomyPreset.ReadOnly ->
-                it.copy(codexSandbox = "read-only", codexApproval = "on-request", codexFullAuto = false)
-            CodexAutonomyPreset.Auto ->
-                it.copy(codexSandbox = "workspace-write", codexApproval = "on-request", codexFullAuto = false)
+            CodexAutonomyPreset.ReadOnly -> it.copy(
+                codexSandbox = "read-only", codexApproval = "on-request",
+                codexFullAuto = false, codexAutoReview = false,
+            )
+            CodexAutonomyPreset.Auto -> it.copy(
+                codexSandbox = "workspace-write", codexApproval = "on-request",
+                codexFullAuto = false, codexAutoReview = false,
+            )
+            // The sandbox and approval --approve-for-me sets itself, so an
+            // older agent that drops auto_review still asks a person.
+            CodexAutonomyPreset.AutoReview -> it.copy(
+                codexSandbox = "workspace-write", codexApproval = "on-request",
+                codexFullAuto = false, codexAutoReview = true,
+            )
             CodexAutonomyPreset.FullAccess ->
-                it.copy(codexFullAuto = true)
+                it.copy(codexFullAuto = true, codexAutoReview = false)
         }
     }
 
@@ -2504,6 +2528,7 @@ class CreateSessionViewModel @Inject constructor(
         approval = codexApproval,
         reasoning_effort = codexReasoningEffort,
         full_auto = codexFullAuto,
+        auto_review = codexAutoReviewOn,
         worktree = worktree,
         branch_name = branchName,
         base_branch = baseBranch,

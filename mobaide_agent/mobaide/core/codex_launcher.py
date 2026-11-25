@@ -27,6 +27,7 @@ from .cli_launcher import (
     conda_env_bin,
     posix_npm_fallbacks,
     prepend_path_dir,
+    require_feature_version,
     resolve_cli_binary,
     resolve_standard_worktree_cwd,
     shim_safe_argv,
@@ -54,6 +55,11 @@ _CODEX_FALLBACK_MODELS = (
     "gpt-5.4",
     "gpt-5.4-mini",
 )
+
+
+# ``--approve-for-me`` (Auto review) first shipped in Codex 0.147.0; an older
+# Codex fails to parse it and the session exits at once.
+CODEX_AUTO_REVIEW_MIN_VERSION = (0, 147, 0)
 
 
 class CodexBinaryNotFoundError(CliBinaryNotFoundError):
@@ -234,6 +240,10 @@ class CodexOptions:
     work). ``full_auto`` maps to ``--dangerously-bypass-approvals-and-sandbox``
     (Codex's ``--yolo``), the equivalent of Claude's ``--dangerously-skip-permissions``;
     when set, the sandbox/approval flags are omitted (they conflict with full bypass).
+    ``auto_review`` maps to ``--approve-for-me``: the workspace-write sandbox
+    with ``on-request`` approvals that a Codex reviewer agent answers instead
+    of a person. The flag sets both itself and Codex rejects ``--sandbox`` with
+    it, so ``sandbox`` and ``approval`` are not sent. ``full_auto`` wins over it.
     """
 
     model: str | None = None
@@ -241,6 +251,7 @@ class CodexOptions:
     approval: str = "never"
     reasoning_effort: str | None = "high"
     full_auto: bool = False
+    auto_review: bool = False
     initial_prompt: str | None = None
     # Worktree intent for a stored git workspace, resolved by ``_resolve_cwd``
     # exactly like Claude's Standard mode; ignored for ad-hoc launches.
@@ -274,6 +285,12 @@ class CodexLauncher:
         """Public access to the resolved Codex binary (honours the configured
         override) so the login endpoint runs the same ``codex`` sessions use."""
         return self._resolve_binary()
+
+    @property
+    def capability_flags(self) -> dict[str, object]:
+        """Launch options of this agent that clients show only behind a
+        ``capabilities.cli.codex`` key (see ``build_cli_capabilities``)."""
+        return {"auto_review": True}
 
     @property
     def cached_models(self) -> tuple[str, ...] | None:
@@ -358,6 +375,8 @@ class CodexLauncher:
         # A chat session skips it: the chat offers the sign-in itself.
         argv = self._build_argv(options)
         env = self._build_env(target)
+        if options.auto_review and not options.full_auto:
+            await self.check_auto_review_version(env)
         if require_auth and not await codex_auth_present(self._resolve_binary(), env):
             raise CodexAuthRequiredError()
         cwd = await self._resolve_cwd(target, options)
@@ -369,6 +388,8 @@ class CodexLauncher:
             argv += ["--model", options.model]
         if options.full_auto:
             argv.append("--dangerously-bypass-approvals-and-sandbox")
+        elif options.auto_review:
+            argv.append("--approve-for-me")
         else:
             argv += ["--sandbox", options.sandbox]
             argv += ["--ask-for-approval", current_codex_approval(options.approval)]
@@ -382,6 +403,24 @@ class CodexLauncher:
             # after ``--`` a prompt that starts with ``-`` stays a prompt.
             argv += ["--", options.initial_prompt]
         return argv
+
+    async def check_auto_review_version(self, env: dict[str, str]) -> None:
+        """Fail with a clear message on a Codex too old for ``--approve-for-me``.
+        A version that cannot be read does not block the launch."""
+        await require_feature_version(
+            self._resolve_binary(),
+            env,
+            CODEX_AUTO_REVIEW_MIN_VERSION,
+            feature="Auto review",
+            product="Codex",
+            update_command="codex update",
+            alternative="pick another preset",
+        )
+
+    async def check_auto_review(self, target: LaunchTarget) -> None:
+        """:meth:`check_auto_review_version` with the environment a session
+        for ``target`` gets."""
+        await self.check_auto_review_version(self._build_env(target))
 
     async def ensure_auth(self, target: LaunchTarget) -> None:
         """Raise ``CodexAuthRequiredError`` when a session for ``target`` would

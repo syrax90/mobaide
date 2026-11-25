@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from mobaide.agent.sessions.models import CodexOptionsModel
-from mobaide.core import codex_auth, codex_launcher
+from mobaide.core import cli_launcher, codex_auth, codex_launcher
 from mobaide.core.claude_launcher import AdHocLaunch
 from mobaide.core.codex_launcher import (
     CodexAuthRequiredError,
@@ -72,6 +72,69 @@ async def test_argv_full_auto_omits_sandbox_and_approval(tmp_path: Path):
     assert "--dangerously-bypass-approvals-and-sandbox" in spec.argv
     assert "--sandbox" not in spec.argv
     assert "--ask-for-approval" not in spec.argv
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("options", "flag"),
+    [
+        pytest.param(
+            CodexOptions(auto_review=True, sandbox="read-only", approval="never"),
+            "--approve-for-me", id="auto-review",
+        ),
+        pytest.param(
+            CodexOptions(auto_review=True, full_auto=True),
+            "--dangerously-bypass-approvals-and-sandbox", id="full-auto-wins",
+        ),
+    ],
+)
+async def test_argv_auto_review_sends_neither_sandbox_nor_approval(
+    tmp_path: Path, monkeypatch, options, flag,
+):
+    """``--approve-for-me`` sets the workspace-write sandbox and on-request
+    approvals itself, and Codex rejects ``--sandbox`` next to it: the
+    sandbox/approval the client also sent must not reach argv."""
+    monkeypatch.setattr(cli_launcher, "cli_version", lambda *_a, **_kw: (0, 147, 0))
+    spec = await CodexLauncher().build(_make_workspace(str(tmp_path)), options)
+    assert flag in spec.argv
+    assert {"--approve-for-me", "--dangerously-bypass-approvals-and-sandbox"} & set(spec.argv) == {flag}
+    assert "--sandbox" not in spec.argv
+    assert "--ask-for-approval" not in spec.argv
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("version", "refused"),
+    [
+        pytest.param((0, 146, 9), True, id="older"),
+        pytest.param((0, 147, 0), False, id="minimum"),
+        pytest.param(None, False, id="unreadable"),
+    ],
+)
+async def test_build_refuses_auto_review_on_a_codex_too_old_for_it(
+    tmp_path: Path, monkeypatch, version, refused,
+):
+    """An older Codex cannot parse ``--approve-for-me`` and the session would
+    exit at once; a version that cannot be read does not block the launch."""
+    asked: list[str] = []
+
+    def _version(cli_bin, env=None):
+        asked.append(cli_bin)
+        return version
+
+    monkeypatch.setattr(cli_launcher, "cli_version", _version)
+    build = CodexLauncher().build(_make_workspace(str(tmp_path)), CodexOptions(auto_review=True))
+
+    if refused:
+        with pytest.raises(ValueError) as excinfo:
+            await build
+        assert str(excinfo.value) == (
+            "Auto review needs Codex 0.147.0 or later. This PC has 0.146.9: "
+            "run `codex update` there, or pick another preset."
+        )
+    else:
+        assert "--approve-for-me" in (await build).argv
+    assert asked == ["codex"]
 
 
 @pytest.mark.asyncio

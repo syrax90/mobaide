@@ -104,6 +104,7 @@ export const codexOptionsSchema = z.strictObject({
    */
   reasoning_effort: z.string().nullable().default('high'),
   full_auto: z.boolean().default(false),
+  auto_review: z.boolean().default(false),
   initial_prompt: optionalWireString(),
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),

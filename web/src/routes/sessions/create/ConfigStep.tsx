@@ -2,6 +2,7 @@ import { useId } from 'react';
 import {
   autoScanCapability,
   chatSupport,
+  cliFeature,
   cliModelDetails,
   cliModels,
   gitCapability,
@@ -279,6 +280,7 @@ export function ConfigStep({
           bucket={state.codex}
           models={cliModels(capabilities, 'codex')}
           modelDetails={cliModelDetails(capabilities, 'codex')}
+          autoReviewSupported={cliFeature(capabilities, 'codex', 'auto_review')}
           dispatch={dispatch}
         />
       )}
@@ -335,6 +337,7 @@ export function ConfigStep({
               codex: cliModels(capabilities, 'codex'),
               codexDetails: cliModelDetails(capabilities, 'codex'),
               antigravity: cliModels(capabilities, 'antigravity'),
+              codexAutoReview: cliFeature(capabilities, 'codex', 'auto_review'),
             }}
             sourcesView={scan.view}
             templates={autoScanTemplates}

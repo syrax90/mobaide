@@ -385,6 +385,11 @@ def build_cli_capabilities(
     a CLI whose enumeration deliberately memoizes nothing on failure
     (Antigravity) from ever being reported as eternally pending.
 
+    A launcher's ``capability_flags`` (a mapping of feature keys, such as
+    Codex's ``{"auto_review": true}``) joins its entry: clients show a
+    launch option only behind its key, because an older agent drops an
+    option field it does not know.
+
     Shared by both transports that answer ``GET /api/version`` — the FastAPI
     handler (direct) and the relay client's proxy branch (relay) — so they
     report identical availability; one source here is what stops the two
@@ -407,6 +412,9 @@ def build_cli_capabilities(
             and callable(getattr(launcher, "list_models", None))
         ):
             entry["models_pending"] = True
+        flags = getattr(launcher, "capability_flags", None)
+        if isinstance(flags, Mapping):
+            entry.update(flags)
         capabilities[cli_id] = entry
     return capabilities
 
@@ -539,6 +547,28 @@ def _version_text(version: tuple[int, int, int]) -> str:
     return ".".join(str(part) for part in version)
 
 
+async def require_feature_version(
+    cli_bin: str,
+    env: Mapping[str, str],
+    minimum: tuple[int, int, int],
+    *,
+    feature: str,
+    product: str,
+    update_command: str,
+    alternative: str,
+) -> None:
+    """Refuse ``feature`` with a clear message on a CLI older than
+    ``minimum``; ``alternative`` ends the message ("turn Code Mode off").
+    A version that cannot be read does not block the launch."""
+    version = await asyncio.to_thread(cli_version, cli_bin, env)
+    if version is not None and version < minimum:
+        raise ValueError(
+            f"{feature} needs {product} {_version_text(minimum)} or later. "
+            f"This PC has {_version_text(version)}: run `{update_command}` there, "
+            f"or {alternative}."
+        )
+
+
 async def require_code_mode_version(
     cli_bin: str,
     env: Mapping[str, str],
@@ -547,15 +577,16 @@ async def require_code_mode_version(
     product: str,
     update_command: str,
 ) -> None:
-    """Refuse Code Mode with a clear message on a CLI older than ``minimum``.
-    A version that cannot be read does not block the launch."""
-    version = await asyncio.to_thread(cli_version, cli_bin, env)
-    if version is not None and version < minimum:
-        raise ValueError(
-            f"Code Mode needs {product} {_version_text(minimum)} or later. "
-            f"This PC has {_version_text(version)}: run `{update_command}` there, "
-            "or turn Code Mode off."
-        )
+    """:func:`require_feature_version` for Code Mode."""
+    await require_feature_version(
+        cli_bin,
+        env,
+        minimum,
+        feature="Code Mode",
+        product=product,
+        update_command=update_command,
+        alternative="turn Code Mode off",
+    )
 
 
 def prepend_path_dir(env: dict[str, str], directory: str) -> None:

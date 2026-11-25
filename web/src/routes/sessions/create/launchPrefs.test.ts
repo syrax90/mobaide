@@ -128,6 +128,7 @@ describe('applyLaunchPrefs', () => {
         sandbox: 'read-only',
         approval: 'never',
         fullAuto: true,
+        autoReview: false,
         reasoningEffort: null,
         terminalUi: true,
       },
@@ -138,6 +139,7 @@ describe('applyLaunchPrefs', () => {
       sandbox: 'read-only',
       approval: 'never',
       fullAuto: true,
+      autoReview: false,
       reasoningEffort: null,
       terminalUi: true,
     });
