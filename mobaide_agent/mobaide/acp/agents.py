@@ -76,7 +76,7 @@ if TYPE_CHECKING:
 # ``resolve_before`` follows each release: dependencies resolve as they were
 # then, not to whatever a range matches on the day a PC first installs.
 CLAUDE_ADAPTER = NpmAdapter(
-    "@agentclientprotocol/claude-agent-acp", "0.108.1", "claude-agent-acp", "2026-11-19T00:00:00Z"
+    "@agentclientprotocol/claude-agent-acp", "0.110.1", "claude-agent-acp", "2026-11-24T00:00:00Z"
 )
 CODEX_ADAPTER = NpmAdapter(
     "@agentclientprotocol/codex-acp", "2.7.0", "codex-acp", "2026-11-17T00:00:00Z"

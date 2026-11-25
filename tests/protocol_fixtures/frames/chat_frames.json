@@ -36,7 +36,7 @@
         "state": {
           "status": "running",
           "error": null,
-          "agent": { "name": "@agentclientprotocol/claude-agent-acp", "title": "Claude Agent", "version": "0.108.1" },
+          "agent": { "name": "@agentclientprotocol/claude-agent-acp", "title": "Claude Agent", "version": "0.110.1" },
           "title": "Fix the login bug",
           "cwd": "/home/user/proj",
           "acp_session_id": "7d5de896-463a-4ea9-98b4-c24e3e20398d",
