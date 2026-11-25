@@ -146,6 +146,21 @@ Claude (`claude-agent-acp`), Codex (`codex-acp`) and Cursor (`cursor-agent acp`)
 * Older clients skip the `subagent` item and ignore `subagent_id`: they still show the subagent's tool calls as flat tool cards, with its title before the tool title. They no longer see Claude's Agent/Task tool call, which the adapter replaces with the subagent session.
 * Claude's subagent replay after `session/load` needs `claude-agent-acp` 0.109.1 or later.
 
+### Delta 2026-11-25: Codex Auto review
+
+Additive delta within proto-v7 (2026-11-25, Codex Auto review — agent, web, Android and iOS): **one boolean in `codex_options` and one capability key. No version bump; `central_server` is untouched.**
+
+| Where | Change |
+|-------|--------|
+| `codex_options.auto_review` | `bool`, default `false`, on `POST /api/sessions`, `POST /api/autoscan/start`, workspace `auto_scan.codex_options` and template `settings.codex_options`. Terminal: `codex --approve-for-me` in place of `--sandbox` and `--ask-for-approval` (the flag sets the workspace-write sandbox and the `on-request` policy itself, and a Codex reviewer agent answers each approval request). Chat: the codex-acp mode `agent` (Auto review). Needs Codex 0.147.0 or later. |
+| `capabilities.cli.codex.auto_review` | `true` on `GET /api/version` (both transports). Clients show the **Auto review** preset only when the key is `true`. |
+
+* `auto_review` together with `full_auto` answers `422`.
+* A start with `auto_review` on a Codex older than 0.147.0 answers `400` ("Auto review needs Codex 0.147.0 or later. This PC has X: run `codex update` there, or pick another preset."), before a worktree is created. An Auto Scan start checks it before any issue is claimed. A version that cannot be read does not block the start.
+* Clients send `sandbox: "workspace-write"` and `approval: "on-request"` with `auto_review: true`, so an older agent, which drops the unknown field, asks a person instead of failing or bypassing the sandbox. Old clients send no `auto_review`: nothing changes.
+* On a denial, Codex takes a safer path or stops and asks the user, so an Auto Scan session with Auto review can still wait for a person. Every reviewer call uses Codex usage.
+* Golden fixtures: `auto_review` in `CodexOptionsModel.json` and the `cli_feature_flags` case in `VersionInfoResponse.json`.
+
 ### Delta 2026-11-23: keep the computer awake
 
 Additive delta within proto-v7 (2026-11-23, keep awake — agent, web, Android and iOS): **two REST routes, one capability key and one agent event. No version bump; `central_server` is untouched (it already forwards `PUT`).**
@@ -348,7 +363,7 @@ Auto Scan can now scan the open issues of the workspace's **GitHub** repository 
 | Agent | Fields (same names, values and checks as in `POST /api/sessions`) |
 |-------|------|
 | Claude Code | `model`, `effort`, `plan_mode`, `skip_permissions`, `no_memory`, `fast_mode`, `ultracode`, `append_system_prompt`, `debug`, `focus_mode`, `code_mode` |
-| Codex | `model`, `reasoning_effort`, `sandbox`, `approval`, `full_auto` |
+| Codex | `model`, `reasoning_effort`, `sandbox`, `approval`, `full_auto`, `auto_review` |
 | Antigravity | `model`, `skip_permissions`, `sandbox`, `add_dirs` (not both `skip_permissions` and `sandbox`) |
 | OpenCode | `auto_approve`, `code_mode` |
 | GitHub Copilot | `allow_all` |
@@ -1829,6 +1844,7 @@ The ``create_session`` control message (and the ``POST /api/sessions`` body prox
 | ``approval`` | ``on-request`` \| ``never``. Codex 0.149 retired ``untrusted``; the agent still accepts it (also in saved Auto Scan options) and reads it as ``on-request``. |
 | ``reasoning_effort`` | ``minimal`` \| ``low`` \| ``medium`` \| ``high`` \| null |
 | ``full_auto`` | bool — Codex ``--dangerously-bypass-approvals-and-sandbox`` |
+| ``auto_review`` | bool — Codex ``--approve-for-me`` (Delta 2026-11-25); not with ``full_auto`` |
 | ``initial_prompt`` | str\|null |
 
 #### Codex session kind

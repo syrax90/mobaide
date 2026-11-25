@@ -44,6 +44,7 @@ data class CodexScanOptionsDto(
     @EncodeDefault val approval: String = "never",
     @EncodeDefault val reasoning_effort: String? = "high",
     @EncodeDefault val full_auto: Boolean = true,
+    @EncodeDefault val auto_review: Boolean = false,
 )
 
 /** [skip_permissions] and [sandbox] are mutually exclusive (the agent answers 422). */

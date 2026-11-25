@@ -86,6 +86,7 @@ export const codexScanOptionsSchema = z.looseObject({
   /** Three-state, as in `codexOptionsSchema`: `null` is "Agent default". */
   reasoning_effort: z.string().nullable().optional(),
   full_auto: optionalWireBoolean(),
+  auto_review: optionalWireBoolean(),
 });
 
 export const antigravityScanOptionsSchema = z.looseObject({

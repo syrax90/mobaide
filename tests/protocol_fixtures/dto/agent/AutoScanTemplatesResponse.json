@@ -36,7 +36,7 @@
               "ui": "terminal",
               "interval_minutes": null,
               "claude_options": null,
-              "codex_options": { "model": "gpt-5.5-mini", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "low", "full_auto": true },
+              "codex_options": { "model": "gpt-5.5-mini", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "low", "full_auto": true, "auto_review": false },
               "antigravity_options": null,
               "opencode_options": null,
               "copilot_options": null,
@@ -74,7 +74,7 @@
             "updated_at": "2026-11-19T09:30:00+00:00",
             "settings": {
               "ui": "terminal",
-              "codex_options": { "model": "gpt-5.5-mini", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "low", "full_auto": true },
+              "codex_options": { "model": "gpt-5.5-mini", "sandbox": "workspace-write", "approval": "never", "reasoning_effort": "low", "full_auto": true, "auto_review": false },
               "source": "github",
               "cli": "codex",
               "initial_prompt": "",

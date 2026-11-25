@@ -3,6 +3,7 @@ import { CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../../protocol/dto/sessi
 import type { CliModelDetail } from '../../../../protocol/dto/agentVersion';
 import {
   CODEX_MODELS,
+  codexAutoReviewOn,
   codexEffortsFor,
   codexPreset,
   type CodexApproval,
@@ -23,6 +24,8 @@ interface CodexOptionsPanelProps {
   dispatch: (action: WizardAction) => void;
   /** Auto Scan edits its own copy of the options. */
   target?: AgentBucketTarget;
+  /** `capabilities.cli.codex.auto_review`: offer the Auto review preset. */
+  autoReviewSupported?: boolean;
 }
 
 const PRESETS: readonly { preset: CodexPreset; label: string; description: string }[] = [
@@ -37,6 +40,12 @@ const PRESETS: readonly { preset: CodexPreset; label: string; description: strin
     description: 'Edits within the workspace; asks before risky actions.',
   },
   {
+    preset: 'autoReview',
+    label: 'Auto review',
+    description:
+      'Edits within the workspace; a Codex reviewer approves safe requests. Uses extra Codex usage.',
+  },
+  {
     preset: 'fullAccess',
     label: 'Full access',
     description: 'No sandbox or approval prompts (--yolo).',
@@ -49,8 +58,18 @@ export function CodexOptionsPanel({
   modelDetails,
   dispatch,
   target,
+  autoReviewSupported = false,
 }: CodexOptionsPanelProps) {
-  const active = codexPreset(bucket);
+  const active = codexPreset(bucket, autoReviewSupported);
+  const autoReview = codexAutoReviewOn(bucket, autoReviewSupported);
+  const presets = autoReviewSupported
+    ? PRESETS
+    : PRESETS.filter((entry) => entry.preset !== 'autoReview');
+  const lockHint = bucket.fullAuto
+    ? 'Sandbox and approval are ignored in Full-access (--yolo).'
+    : autoReview
+      ? 'Auto review sets the workspace-write sandbox and on-request approval.'
+      : undefined;
   const efforts = codexEffortsFor(modelDetails, bucket.model);
   // Same keep-selected repair as `modelOptions`: a restored or late-probe
   // effort outside the advertised set must stay renderable, or the controlled
@@ -63,21 +82,24 @@ export function CodexOptionsPanel({
   return (
     <div className="option-group">
       <h3>Autonomy</h3>
-      <div className="preset-row">
-        {PRESETS.map((entry) => (
-          <button
-            key={entry.preset}
-            type="button"
-            className={`preset-card${active === entry.preset ? ' preset-card-active' : ''}`}
-            aria-pressed={active === entry.preset}
-            onClick={() => {
-              dispatch({ type: 'setCodexPreset', preset: entry.preset, target });
-            }}
-          >
-            <span className="preset-title">{entry.label}</span>
-            <span className="preset-description">{entry.description}</span>
-          </button>
-        ))}
+      {/* Four cards go 4, 2+2 or 1 per row (never 3+1): see `.preset-row-quad`. */}
+      <div className="preset-group">
+        <div className={`preset-row${presets.length === 4 ? ' preset-row-quad' : ''}`}>
+          {presets.map((entry) => (
+            <button
+              key={entry.preset}
+              type="button"
+              className={`preset-card${active === entry.preset ? ' preset-card-active' : ''}`}
+              aria-pressed={active === entry.preset}
+              onClick={() => {
+                dispatch({ type: 'setCodexPreset', preset: entry.preset, target });
+              }}
+            >
+              <span className="preset-title">{entry.label}</span>
+              <span className="preset-description">{entry.description}</span>
+            </button>
+          ))}
+        </div>
       </div>
       {active === null && (
         <p className="field-hint">Custom sandbox/approval set in Advanced.</p>
@@ -124,12 +146,8 @@ export function CodexOptionsPanel({
           label="Sandbox"
           value={bucket.sandbox}
           options={CODEX_SANDBOXES.map((value) => ({ value, label: value }))}
-          disabled={bucket.fullAuto}
-          hint={
-            bucket.fullAuto
-              ? 'Sandbox and approval are ignored in Full-access (--yolo).'
-              : undefined
-          }
+          disabled={bucket.fullAuto || autoReview}
+          hint={lockHint}
           onChange={(sandbox) => {
             if (sandbox !== null) {
               dispatch({ type: 'setCodexSandbox', sandbox: sandbox as CodexSandbox, target });
@@ -140,7 +158,7 @@ export function CodexOptionsPanel({
           label="Approval"
           value={bucket.approval}
           options={CODEX_APPROVALS.map((value) => ({ value, label: value }))}
-          disabled={bucket.fullAuto}
+          disabled={bucket.fullAuto || autoReview}
           onChange={(approval) => {
             if (approval !== null) {
               dispatch({

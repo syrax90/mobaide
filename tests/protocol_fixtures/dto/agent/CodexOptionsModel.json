@@ -9,6 +9,7 @@
         "approval": "on-request",
         "reasoning_effort": "low",
         "full_auto": true,
+        "auto_review": false,
         "initial_prompt": "hi",
         "worktree": true,
         "branch_name": "b",
@@ -23,6 +24,7 @@
         "approval": "never",
         "reasoning_effort": "high",
         "full_auto": false,
+        "auto_review": false,
         "worktree": false
       }
     },
@@ -34,6 +36,18 @@
         "approval": "never",
         "reasoning_effort": null,
         "full_auto": false,
+        "auto_review": false,
+        "worktree": false
+      }
+    },
+    {
+      "name": "auto_review_round_trips",
+      "wire": {
+        "sandbox": "workspace-write",
+        "approval": "on-request",
+        "reasoning_effort": "high",
+        "full_auto": false,
+        "auto_review": true,
         "worktree": false
       }
     },
@@ -45,6 +59,7 @@
         "approval": "never",
         "reasoning_effort": "ultra",
         "full_auto": false,
+        "auto_review": false,
         "worktree": false
       }
     }

@@ -70,6 +70,15 @@ extension VersionInfoResponse {
         }
     }
 
+    /// Whether the agent advertises the launch option `key` for a CLI
+    /// (`capabilities.cli.<id>.<key>`, such as Codex `auto_review`). Only an
+    /// explicit JSON `true` counts: an older agent drops an option field it
+    /// does not know, so the client must not offer it there.
+    func cliFeature(_ cliId: String, _ key: String) -> Bool {
+        guard case .bool(let flag)? = capabilities["cli"]?[cliId]?[key] else { return false }
+        return flag
+    }
+
     /// Whether the agent's startup model enumeration was still running when
     /// this response was built (`capabilities.cli.<id>.models_pending`): the
     /// absence of `models`/`model_details` is then provisional, not

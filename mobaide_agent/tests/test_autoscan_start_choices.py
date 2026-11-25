@@ -17,7 +17,7 @@ import pytest
 from mobaide.agent.autoscan.models import StartScanRequest
 from mobaide.agent.sessions.models import ClaudeScanOptionsModel, CopilotScanOptionsModel
 from mobaide.agent.workspaces.models import WorkspaceReadModel
-from mobaide.core import SessionManager, WorkspaceRecord, WorkspacesStore, codex_launcher
+from mobaide.core import SessionManager, WorkspaceRecord, WorkspacesStore, cli_launcher, codex_launcher
 from mobaide.core.cli_launcher import CliBinaryNotFoundError
 from mobaide.core.codex_launcher import CodexLauncher
 from mobaide.core.workspaces_config import AutoScanFilter, GitHubScanFilter
@@ -375,6 +375,39 @@ async def test_code_mode_on_a_too_old_agent_refuses_the_start(tmp_path, cli, wir
         assert agent.checked == 0
     # The choice is remembered either way, so the wizard shows it again.
     assert _saved(store)[f"{cli}_options"]["code_mode"] is wire[f"{cli}_options"]["code_mode"]
+
+
+@pytest.mark.parametrize("auto_review", [True, False], ids=["auto-review", "off"])
+async def test_auto_review_on_a_too_old_codex_refuses_the_start(tmp_path, monkeypatch, auto_review):
+    async def auth_present(*_args, **_kwargs) -> bool:
+        return True
+
+    asked: list[str] = []
+
+    def _version(cli_bin, env=None):  # noqa: ANN001
+        asked.append(cli_bin)
+        return (0, 146, 0)
+
+    monkeypatch.setattr(codex_launcher, "codex_auth_present", auth_present)
+    monkeypatch.setattr(cli_launcher, "cli_version", _version)
+    store = _make_store(tmp_path)
+    mgr = _make_manager(store, _RecordingEventBus(), agents={"codex": CodexLauncher()})
+    request = StartScanRequest.model_validate({
+        "project_name": "alpha", "source": "github", "cli": "codex",
+        "github_filter": {"labels": ["ai-ready"]},
+        "codex_options": {"sandbox": "workspace-write", "approval": "on-request",
+                          "auto_review": auto_review},
+    })
+
+    if auto_review:
+        # Refused before any issue is claimed: each session would exit at once.
+        with pytest.raises(AutoScanSourceError, match=r"^Auto review needs Codex 0\.147\.0"):
+            await mgr.start("alpha", request=request.to_start())
+        assert mgr.get("alpha") is None
+    else:
+        await mgr.start("alpha", request=request.to_start())
+        assert asked == []
+    assert _saved(store)["codex_options"]["auto_review"] is auto_review
 
 
 class _ChatAgent:

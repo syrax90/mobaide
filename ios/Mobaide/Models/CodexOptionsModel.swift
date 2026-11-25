@@ -12,6 +12,8 @@ struct CodexOptionsModel: Codable, Equatable, Sendable {
     /// silently re-enable "high").
     let reasoning_effort: String?
     let full_auto: Bool
+    /// Codex `--approve-for-me`; never with `full_auto` (the agent answers 422).
+    let auto_review: Bool
     let initial_prompt: String?
     let worktree: Bool
     let branch_name: String?
@@ -23,6 +25,7 @@ struct CodexOptionsModel: Codable, Equatable, Sendable {
         approval: String = "never",
         reasoning_effort: String? = "high",
         full_auto: Bool = false,
+        auto_review: Bool = false,
         initial_prompt: String? = nil,
         worktree: Bool = false,
         branch_name: String? = nil,
@@ -33,6 +36,7 @@ struct CodexOptionsModel: Codable, Equatable, Sendable {
         self.approval = approval
         self.reasoning_effort = reasoning_effort
         self.full_auto = full_auto
+        self.auto_review = auto_review
         self.initial_prompt = initial_prompt
         self.worktree = worktree
         self.branch_name = branch_name
@@ -47,6 +51,7 @@ extension CodexOptionsModel {
         case approval
         case reasoning_effort
         case full_auto
+        case auto_review
         case initial_prompt
         case worktree
         case branch_name
@@ -60,6 +65,7 @@ extension CodexOptionsModel {
         try container.encode(approval, forKey: .approval)
         try container.encode(reasoning_effort, forKey: .reasoning_effort)
         try container.encode(full_auto, forKey: .full_auto)
+        try container.encode(auto_review, forKey: .auto_review)
         try container.encodeIfPresent(initial_prompt, forKey: .initial_prompt)
         try container.encode(worktree, forKey: .worktree)
         try container.encodeIfPresent(branch_name, forKey: .branch_name)
@@ -77,6 +83,7 @@ extension CodexOptionsModel {
             reasoning_effort = "high"
         }
         full_auto = try container.decodeIfPresent(Bool.self, forKey: .full_auto) ?? false
+        auto_review = try container.decodeIfPresent(Bool.self, forKey: .auto_review) ?? false
         initial_prompt = try container.decodeIfPresent(String.self, forKey: .initial_prompt)
         worktree = try container.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)

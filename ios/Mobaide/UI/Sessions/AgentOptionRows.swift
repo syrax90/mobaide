@@ -7,10 +7,12 @@ import SwiftUI
 /// Codex's sandbox × approval shortcuts.
 struct CodexAutonomyRows: View {
     let preset: CodexAutonomyPreset?
+    /// `capabilities.cli.codex.auto_review`: offer the Auto review row.
+    let autoReviewSupported: Bool
     let onSelect: (CodexAutonomyPreset) -> Void
 
     var body: some View {
-        ForEach(CodexAutonomyPreset.allCases, id: \.self) { candidate in
+        ForEach(CodexAutonomyPreset.offered(autoReviewSupported: autoReviewSupported), id: \.self) { candidate in
             SelectableRow(title: candidate.title, subtitle: candidate.subtitle, selected: preset == candidate) {
                 onSelect(candidate)
             }
@@ -82,6 +84,8 @@ struct CodexSandboxApprovalRows: View {
     let sandbox: Binding<String>
     let approval: Binding<String>
     let fullAuto: Bool
+    /// Auto review is on: `--approve-for-me` sets both itself.
+    var autoReview = false
 
     @Environment(\.mobaideColors) private var colors
 
@@ -89,13 +93,17 @@ struct CodexSandboxApprovalRows: View {
         Picker("Sandbox", selection: sandbox) {
             ForEach(CreateSessionModel.codexSandboxes, id: \.self) { Text($0).tag($0) }
         }
-        .disabled(fullAuto)
+        .disabled(fullAuto || autoReview)
         Picker("Approval", selection: approval) {
             ForEach(CreateSessionModel.codexApprovals, id: \.self) { Text($0).tag($0) }
         }
-        .disabled(fullAuto)
+        .disabled(fullAuto || autoReview)
         if fullAuto {
             Text("Sandbox and approval are ignored in Full-access (--yolo).")
+                .font(.footnote)
+                .foregroundStyle(colors.textMuted)
+        } else if autoReview {
+            Text("Auto review sets the workspace-write sandbox and on-request approval.")
                 .font(.footnote)
                 .foregroundStyle(colors.textMuted)
         }

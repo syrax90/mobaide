@@ -107,6 +107,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -1628,6 +1629,8 @@ private fun CodexConfigSection(
         sandbox = state.codexSandbox,
         approval = state.codexApproval,
         fullAuto = state.codexFullAuto,
+        autoReview = state.codexAutoReviewOn,
+        autoReviewSupported = state.codexAutoReviewSupported,
         onPreset = viewModel::selectCodexPreset,
         onModel = viewModel::setCodexModel,
         onEffort = viewModel::setCodexReasoningEffort,
@@ -1666,6 +1669,10 @@ internal fun CodexOptionControls(
     sandbox: String,
     approval: String,
     fullAuto: Boolean,
+    // Auto review is on (and advertised): it sets the sandbox and approval itself.
+    autoReview: Boolean,
+    // capabilities.cli.codex.auto_review: offer the Auto review preset.
+    autoReviewSupported: Boolean,
     onPreset: (CodexAutonomyPreset) -> Unit,
     onModel: (String?) -> Unit,
     onEffort: (String) -> Unit,
@@ -1676,32 +1683,39 @@ internal fun CodexOptionControls(
     onAgentDefaultEffort: (() -> Unit)? = null,
 ) {
     Text("Autonomy", style = MaterialTheme.typography.labelLarge)
-    val presets = listOf(
-        CodexAutonomyPreset.ReadOnly to "Read-only",
-        CodexAutonomyPreset.Auto to "Auto",
-        CodexAutonomyPreset.FullAccess to "Full-access",
+    // One card per preset: four segments in one row break the labels
+    // mid-word on a phone.
+    val presets = listOfNotNull(
+        Triple(CodexAutonomyPreset.ReadOnly, "Read-only", "Reads the workspace; asks before any change."),
+        Triple(CodexAutonomyPreset.Auto, "Auto", "Edits within the workspace; asks before risky actions."),
+        Triple(
+            CodexAutonomyPreset.AutoReview,
+            "Auto review",
+            "Edits within the workspace; a Codex reviewer approves safe requests. Uses extra Codex usage.",
+        ).takeIf { autoReviewSupported },
+        Triple(CodexAutonomyPreset.FullAccess, "Full-access", "No sandbox or approval prompts (--yolo)."),
     )
-    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-        presets.forEach { (value, label) ->
-            SegmentedButton(
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.selectableGroup(),
+    ) {
+        presets.forEach { (value, title, hint) ->
+            ChoiceCard(
+                title = title,
+                hint = hint,
                 selected = preset == value,
+                enabled = true,
                 onClick = { onPreset(value) },
-                shape = RectangleShape,
-                colors = pixelSegmentedButtonColors(),
-                icon = {},
-            ) { Text(label) }
+            )
         }
     }
-    Text(
-        text = when (preset) {
-            CodexAutonomyPreset.ReadOnly -> "Reads the workspace; asks before any change."
-            CodexAutonomyPreset.Auto -> "Edits within the workspace; asks before risky actions."
-            CodexAutonomyPreset.FullAccess -> "No sandbox or approval prompts (--yolo)."
-            null -> "Custom sandbox/approval set in Advanced."
-        },
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    if (preset == null) {
+        Text(
+            text = "Custom sandbox/approval set in Advanced.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     autonomyHint?.let { AskHint(it) }
 
     CliModelDropdown(
@@ -1733,7 +1747,7 @@ internal fun CodexOptionControls(
                 SegmentedButton(
                     selected = sandbox == value,
                     onClick = { onSandbox(value) },
-                    enabled = !fullAuto,
+                    enabled = !fullAuto && !autoReview,
                     shape = RectangleShape,
                     colors = pixelSegmentedButtonColors(),
                     icon = {},
@@ -1750,16 +1764,20 @@ internal fun CodexOptionControls(
                 SegmentedButton(
                     selected = approval == value,
                     onClick = { onApproval(value) },
-                    enabled = !fullAuto,
+                    enabled = !fullAuto && !autoReview,
                     shape = RectangleShape,
                     colors = pixelSegmentedButtonColors(),
                     icon = {},
                 ) { Text(label) }
             }
         }
-        if (fullAuto) {
+        if (fullAuto || autoReview) {
             Text(
-                text = "Sandbox and approval are ignored in Full-access (--yolo).",
+                text = if (fullAuto) {
+                    "Sandbox and approval are ignored in Full-access (--yolo)."
+                } else {
+                    "Auto review sets the workspace-write sandbox and on-request approval."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

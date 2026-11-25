@@ -21,6 +21,7 @@ import type { AutoScanFilter } from '../../../protocol/dto/workspaces';
 import { isAutoScanAgentId } from '../../../autoscan/autoscanDisplay';
 import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import {
+  codexAutoReviewOn,
   effectiveClaudeEffort,
   effectiveClaudeModel,
   isCustomMode,
@@ -75,6 +76,8 @@ export interface BuildContext {
   autoScan?: AutoScanCapability | null;
   /** `capabilities.chat` for the agent the Auto Scan wizard has chosen. */
   autoScanChat?: ChatSupport;
+  /** `capabilities.cli.codex.auto_review`; absent reads as not supported. */
+  codexAutoReview?: boolean;
 }
 
 /**
@@ -209,6 +212,7 @@ function claudeOptions(
 function codexOptions(
   bucket: CodexBucket,
   extras: { worktree: boolean; branchName: string | undefined; baseBranch: string | null },
+  autoReviewSupported: boolean | undefined,
 ): CodexOptions {
   return {
     model: bucket.model ?? undefined,
@@ -216,6 +220,7 @@ function codexOptions(
     approval: bucket.approval,
     reasoning_effort: bucket.reasoningEffort,
     full_auto: bucket.fullAuto,
+    auto_review: codexAutoReviewOn(bucket, autoReviewSupported === true),
     worktree: extras.worktree,
     branch_name: extras.branchName,
     base_branch: extras.baseBranch,
@@ -339,11 +344,15 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     return {
       ...base,
       cli: 'codex',
-      codex_options: codexOptions(state.codex, {
-        worktree: place.worktree,
-        branchName: place.branchName,
-        baseBranch: place.baseBranch,
-      }),
+      codex_options: codexOptions(
+        state.codex,
+        {
+          worktree: place.worktree,
+          branchName: place.branchName,
+          baseBranch: place.baseBranch,
+        },
+        context.codexAutoReview,
+      ),
       worktree: false,
       ui: usesChatView(state.codex.terminalUi, context.chat) ? 'chat' : 'terminal',
     };
@@ -454,15 +463,19 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
  * match, else a plain `cwd`.
  */
 export function buildResumeRequest(
-  { state, workspace }: BuildContext,
+  context: BuildContext,
   kind: ChatAgentKind,
   stored: ChatStoredSession,
 ): CreateSessionRequest {
+  const { state, workspace } = context;
   const sameFolder = workspace !== null && workspace.path === stored.cwd;
   const noWorktree = { worktree: false, branchName: undefined, baseBranch: null };
   const options =
     kind === 'codex'
-      ? { cli: 'codex', codex_options: codexOptions(state.codex, noWorktree) }
+      ? {
+          cli: 'codex',
+          codex_options: codexOptions(state.codex, noWorktree, context.codexAutoReview),
+        }
       : kind === 'antigravity'
         ? {
             cli: 'antigravity',
@@ -571,13 +584,14 @@ function claudeScanOptions(bucket: ClaudeBucket): ClaudeScanOptions {
   };
 }
 
-function codexScanOptions(bucket: CodexBucket): CodexScanOptions {
+function codexScanOptions(bucket: CodexBucket, autoReviewSupported: boolean): CodexScanOptions {
   return {
     model: bucket.model,
     sandbox: bucket.sandbox,
     approval: bucket.approval,
     reasoning_effort: bucket.reasoningEffort,
     full_auto: bucket.fullAuto,
+    auto_review: codexAutoReviewOn(bucket, autoReviewSupported),
   };
 }
 
@@ -597,6 +611,7 @@ function antigravityScanOptions(bucket: AntigravityBucket): AntigravityScanOptio
 function scanAgentOptions(
   state: WizardState,
   cli: string,
+  codexAutoReview: boolean,
 ): Pick<
   StartScanRequest,
   | 'codex_options'
@@ -610,7 +625,7 @@ function scanAgentOptions(
   const agents = state.autoScanAgents;
   switch (cli) {
     case 'codex':
-      return { codex_options: codexScanOptions(agents.codex) };
+      return { codex_options: codexScanOptions(agents.codex, codexAutoReview) };
     case 'antigravity':
       return { antigravity_options: antigravityScanOptions(agents.antigravity) };
     case 'opencode':
@@ -679,7 +694,7 @@ export function buildStartScanRequest(context: BuildContext): StartScanRequest |
             state.autoScan.codeMode && autoScanUi(state, context.autoScanChat) === 'terminal',
           ),
         }
-      : scanAgentOptions(state, cli)),
+      : scanAgentOptions(state, cli, context.codexAutoReview === true)),
   };
 }
 
@@ -708,6 +723,7 @@ export function autoScanTemplateSettings(state: WizardState): AutoScanTemplateSe
     cursor_options: null,
     junie_options: null,
     pi_options: null,
-    ...(agent !== null && agent !== 'claude' ? scanAgentOptions(state, agent) : {}),
+    // A template keeps the choice itself; the start decides whether it applies.
+    ...(agent !== null && agent !== 'claude' ? scanAgentOptions(state, agent, true) : {}),
   };
 }

@@ -241,7 +241,7 @@ private fun AutoScanAgentOptions(
         "codex" -> {
             val codex = agents.codex
             CodexOptionControls(
-                preset = codex.preset,
+                preset = codex.preset(state.codexAutoReviewSupported),
                 models = state.codexModels?.takeIf { it.isNotEmpty() } ?: CreateSessionViewModel.CODEX_MODELS,
                 model = codex.model,
                 effort = codex.reasoningEffort,
@@ -249,6 +249,8 @@ private fun AutoScanAgentOptions(
                 sandbox = codex.sandbox,
                 approval = codex.approval,
                 fullAuto = codex.fullAuto,
+                autoReview = codex.autoReviewOn(state.codexAutoReviewSupported),
+                autoReviewSupported = state.codexAutoReviewSupported,
                 onPreset = viewModel::selectAutoScanCodexPreset,
                 onModel = viewModel::setAutoScanCodexModel,
                 onEffort = viewModel::setAutoScanCodexReasoningEffort,
@@ -624,7 +626,7 @@ private fun SaveTemplateDialog(
  * pattern for every one-of-many choice on this step.
  */
 @Composable
-private fun ChoiceCard(
+internal fun ChoiceCard(
     title: String,
     hint: String?,
     selected: Boolean,

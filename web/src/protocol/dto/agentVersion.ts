@@ -108,6 +108,22 @@ export function cliModelsPending(info: AgentVersionInfo | undefined, cliId: stri
   return (entry as { models_pending?: unknown }).models_pending === true;
 }
 
+/**
+ * Whether the agent advertises the launch option `key` for a CLI
+ * (`capabilities.cli.<id>.<key>`, such as Codex `auto_review`). Only an
+ * explicit JSON `true` counts: an older agent drops an option field it does
+ * not know, so the client must not offer it there.
+ */
+export function cliFeature(
+  info: AgentVersionInfo | undefined,
+  cliId: string,
+  key: string,
+): boolean {
+  const entry = cliEntry(info, cliId);
+  if (typeof entry !== 'object' || entry === null || !Object.hasOwn(entry, key)) return false;
+  return (entry as Record<string, unknown>)[key] === true;
+}
+
 export interface CliModelDetail {
   readonly id: string;
   readonly efforts: readonly string[];

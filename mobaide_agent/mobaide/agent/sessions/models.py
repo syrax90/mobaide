@@ -77,6 +77,10 @@ class CodexScanOptionsModel(BaseModel):
 
     ``approval`` still accepts the retired ``untrusted`` and reads it as
     ``on-request``: released clients and saved settings keep sending it.
+
+    ``auto_review`` (Codex ``--approve-for-me``) and ``full_auto`` are
+    mutually exclusive: the one bypasses the sandbox the other keeps, so the
+    pair is rejected with a 422 instead of one silently winning.
     """
 
     model_config = ConfigDict(protected_namespaces=())
@@ -88,11 +92,21 @@ class CodexScanOptionsModel(BaseModel):
     approval: Literal["on-request", "never"] = "never"
     reasoning_effort: str | None = "high"
     full_auto: bool = False
+    auto_review: bool = False
 
     @field_validator("approval", mode="before")
     @classmethod
     def _remap_retired_approval(cls, value: object) -> object:
         return current_codex_approval(value) if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _reject_auto_review_with_full_auto(self) -> "CodexScanOptionsModel":
+        if self.auto_review and self.full_auto:
+            raise ValueError(
+                "auto_review and full_auto are mutually exclusive: "
+                "full_auto turns the sandbox and every approval off"
+            )
+        return self
 
 
 class CodexOptionsModel(CodexScanOptionsModel):

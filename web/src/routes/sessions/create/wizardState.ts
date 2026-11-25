@@ -59,7 +59,7 @@ export type CodexApproval = (typeof CODEX_APPROVALS)[number];
  * values like `ultra`. `CODEX_REASONING_EFFORTS` remains the fallback UI list.
  */
 export type CodexReasoningEffort = string;
-export type CodexPreset = 'readOnly' | 'auto' | 'fullAccess';
+export type CodexPreset = 'readOnly' | 'auto' | 'autoReview' | 'fullAccess';
 
 export type WorkspaceSelection =
   | { kind: 'none' }
@@ -93,6 +93,12 @@ export interface CodexBucket {
   sandbox: CodexSandbox;
   approval: CodexApproval;
   fullAuto: boolean;
+  /**
+   * Codex Auto review (`--approve-for-me`): a Codex reviewer answers the
+   * approval requests. Sent only when the agent advertises
+   * `capabilities.cli.codex.auto_review` (see `codexAutoReviewOn`).
+   */
+  autoReview: boolean;
   reasoningEffort: CodexReasoningEffort | null;
   /** The classic terminal instead of the chat view. */
   terminalUi: boolean;
@@ -319,6 +325,7 @@ export const AUTO_SCAN_AGENT_DEFAULTS: AutoScanAgentBuckets = {
     sandbox: 'workspace-write',
     approval: 'never',
     fullAuto: true,
+    autoReview: false,
     reasoningEffort: 'high',
     terminalUi: false,
   },
@@ -354,6 +361,7 @@ export const INITIAL_WIZARD_STATE: WizardState = {
     sandbox: 'workspace-write',
     approval: 'on-request',
     fullAuto: false,
+    autoReview: false,
     reasoningEffort: 'high',
     terminalUi: false,
   },
@@ -456,11 +464,22 @@ export function codexEffortsFor(
 }
 
 /**
+ * Whether the bucket's Auto review takes effect: only on an agent that
+ * advertises it, because an older agent drops the field and runs the
+ * sandbox and approval the preset also sends.
+ */
+export function codexAutoReviewOn(bucket: CodexBucket, supported: boolean): boolean {
+  return supported && bucket.autoReview && !bucket.fullAuto;
+}
+
+/**
  * Which preset button reads as pressed, or `null` for a hand-dialled Advanced
  * combination. `fullAuto` is checked first because it makes the other two moot.
+ * `autoReviewSupported` is `capabilities.cli.codex.auto_review`.
  */
-export function codexPreset(bucket: CodexBucket): CodexPreset | null {
+export function codexPreset(bucket: CodexBucket, autoReviewSupported = false): CodexPreset | null {
   if (bucket.fullAuto) return 'fullAccess';
+  if (codexAutoReviewOn(bucket, autoReviewSupported)) return 'autoReview';
   if (bucket.approval !== 'on-request') return null;
   if (bucket.sandbox === 'read-only') return 'readOnly';
   if (bucket.sandbox === 'workspace-write') return 'auto';
@@ -545,6 +564,7 @@ export interface CodexScanOptionsInput {
   approval?: CodexApproval | null;
   reasoning_effort?: string | null;
   full_auto?: boolean | null;
+  auto_review?: boolean | null;
 }
 
 export interface AntigravityScanOptionsInput {
@@ -612,6 +632,7 @@ function codexFromScan(options: CodexScanOptionsInput): CodexBucket {
     sandbox: options.sandbox ?? defaults.sandbox,
     approval: options.approval ?? defaults.approval,
     fullAuto: options.full_auto ?? defaults.fullAuto,
+    autoReview: options.auto_review ?? defaults.autoReview,
     // Three-state: `null` is "Agent default", only an absent field defaults.
     reasoningEffort:
       options.reasoning_effort === undefined ? defaults.reasoningEffort : options.reasoning_effort,
@@ -939,15 +960,37 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return withAgentBucket(state, 'codex', action.target, (codex) => {
         switch (action.preset) {
           case 'readOnly':
-            return { ...codex, sandbox: 'read-only', approval: 'on-request', fullAuto: false };
+            return {
+              ...codex,
+              sandbox: 'read-only',
+              approval: 'on-request',
+              fullAuto: false,
+              autoReview: false,
+            };
           case 'auto':
-            return { ...codex, sandbox: 'workspace-write', approval: 'on-request', fullAuto: false };
+            return {
+              ...codex,
+              sandbox: 'workspace-write',
+              approval: 'on-request',
+              fullAuto: false,
+              autoReview: false,
+            };
+          case 'autoReview':
+            // The sandbox and approval `--approve-for-me` sets itself, so an
+            // older agent that drops `auto_review` still asks a person.
+            return {
+              ...codex,
+              sandbox: 'workspace-write',
+              approval: 'on-request',
+              fullAuto: false,
+              autoReview: true,
+            };
           default:
             // Only `full_auto` moves. The agent omits `--sandbox` and
             // `--ask-for-approval` entirely under `--yolo`, so overwriting them
             // (as iOS does) changes nothing on the wire and destroys the values
             // the user set in Advanced.
-            return { ...codex, fullAuto: true };
+            return { ...codex, fullAuto: true, autoReview: false };
         }
       });
 
