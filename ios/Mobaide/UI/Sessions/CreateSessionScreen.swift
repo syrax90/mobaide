@@ -959,6 +959,9 @@ private struct CreateSessionContent: View {
                     codeModeToggle(codeMode, hint: Self.claudeCodeModeHint)
                 }
                 Toggle("No memory", isOn: noMemory)
+                Text("Claude Code does not read or write its auto memory. CLAUDE.md files still load.")
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
                 Toggle("Fast mode (Opus only)", isOn: fastMode)
                 Toggle("Ultracode", isOn: ultracode)
                 Toggle("Debug logging", isOn: debug)

@@ -59,7 +59,12 @@ from mobaide.acp.trust import (
     PiFolderTrust,
 )
 from mobaide.core.antigravity_launcher import AntigravityBinaryNotFoundError, AntigravityOptions
-from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError, ClaudeOptions
+from mobaide.core.claude_launcher import (
+    NO_AUTO_MEMORY_ENV,
+    ClaudeBinaryNotFoundError,
+    ClaudeLauncher,
+    ClaudeOptions,
+)
 from mobaide.core.cli_launcher import AdHocLaunch, LaunchSpec
 from mobaide.core import codex_auth
 from mobaide.core.codex_launcher import CodexBinaryNotFoundError, CodexOptions
@@ -527,6 +532,21 @@ class TestPrepare:
         plan = await spec.prepare(AdHocLaunch(cwd="/work"), ClaudeOptions(debug=debug))
 
         assert plan.claude_sdk_options == expected
+
+    @pytest.mark.parametrize(("no_memory", "expected"), [(True, "1"), (False, None)])
+    async def test_no_memory_turns_off_auto_memory_in_the_chat(
+        self, bin_dir, tmp_path, monkeypatch, no_memory, expected
+    ):
+        # The real launcher: the chat must get the env a terminal session gets.
+        monkeypatch.delenv(NO_AUTO_MEMORY_ENV, raising=False)
+        spec = ClaudeChatSpec(ClaudeLauncher(), command_override="adapter")
+
+        plan = await spec.prepare(
+            AdHocLaunch(cwd=str(tmp_path)), ClaudeOptions(no_memory=no_memory)
+        )
+
+        assert plan.env.get(NO_AUTO_MEMORY_ENV) == expected
+        assert "CLAUDE_NO_MEMORY" not in plan.env
 
     async def test_catalog_plan_runs_in_home_with_the_claude_preset(self, bin_dir):
         spec = ClaudeChatSpec(FakeLauncher(), command_override="adapter")
