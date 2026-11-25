@@ -250,3 +250,14 @@ class TestAnswerFromTheLastMessage:
         Subagents.note_text(child, _chunk("Some last words."))
 
         assert self._end(subs, "end_turn").result == "The real answer."
+
+    def test_a_reused_child_that_runs_again_answers_with_its_new_last_message(self):
+        subs = Subagents()
+        child = _announced(subs)
+        Subagents.note_text(child, _chunk("First answer."))
+        assert self._end(subs, "end_turn").result == "First answer."
+
+        _announced(subs)
+        Subagents.note_text(child, _chunk("Second answer.", "m2"))
+
+        assert self._end(subs, "end_turn").result == "Second answer."

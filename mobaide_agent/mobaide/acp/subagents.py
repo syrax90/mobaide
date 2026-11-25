@@ -208,6 +208,12 @@ class Subagents:
             raw = update.get("state")
             if isinstance(raw, Mapping):
                 state = raw.get("state")
+                if was_idle and state in RUNNING_STATES:
+                    # A reused child works again: its earlier answer is stale.
+                    child.result = None
+                    child.plan = []
+                    child.message_text = ""
+                    child.message_id = None
                 child.state = state if state in STATES else "idle"
                 reason = raw.get("stopReason")
                 child.stop_reason = reason if child.state == "idle" and isinstance(reason, str) else None
@@ -302,6 +308,7 @@ class Subagents:
             if recipient.task is not None:
                 # A new delegation to a reused child: its earlier answer is stale.
                 recipient.result = None
+                recipient.plan = []
             recipient.task = task
             recipient.message_text = ""
             recipient.message_id = None
