@@ -2359,7 +2359,8 @@ class ChatSession:
             self._current_agent_item = self._current_thought_item = self._current_user_item = None
         if change.launch_tool_id is not None:
             item = self._timeline.get(change.launch_tool_id)
-            if item is not None and item.get("subagent_id") != child.child_id:
+            # A nested launch stays in the card of the child that made it.
+            if item is not None and item.get("subagent_id") is None:
                 item["subagent_id"] = child.child_id
                 self._timeline.touch(change.launch_tool_id)
         if change.ended:
@@ -2581,11 +2582,10 @@ class ChatSession:
                 self._scripts.pop(tool_id, None)
             else:
                 self._scripts[tool_id] = script
-        launched: sa.Subagent | None = None
+        launched = self._subagents.launch_owner(tool_id)
         if subagent is not None:
             sa.label_tool(item, subagent)
         else:
-            launched = self._subagents.launch_owner(tool_id)
             if launched is not None:
                 item["subagent_id"] = launched.child_id
             self._last_tool_id = tool_id

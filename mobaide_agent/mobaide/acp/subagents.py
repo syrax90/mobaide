@@ -248,6 +248,10 @@ class Subagents:
         cursor = meta.get("cursor") if isinstance(meta, Mapping) else None
         tool_id = cursor.get("toolCallId") if isinstance(cursor, Mapping) else None
         if isinstance(tool_id, str) and tool_id:
+            announcer = self.get(session_id)
+            if announcer is not None:
+                # A nested launch is a tool call of the child that made it.
+                tool_id = child_tool_id(announcer, tool_id)
             self._launches[tool_id] = child.child_id
             child.launch_tool_id = tool_id
             launch = tool_id

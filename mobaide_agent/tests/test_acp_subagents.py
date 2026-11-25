@@ -135,6 +135,27 @@ class TestLifecycle:
         child = change.child
         assert (child.state, child.stop_reason, child.can_cancel) == ("idle", stop_reason, False)
 
+    def test_a_draft_child_launched_by_a_child_keys_its_launch_in_the_launcher_s_tools(self):
+        subs = Subagents()
+        _announced(subs, "outer")
+
+        nested = subs.lifecycle(
+            "outer",
+            ROOT,
+            {
+                "sessionUpdate": "subagent_spawned",
+                "subagentSessionId": "inner",
+                "name": "shell",
+                "_meta": {"cursor": {"toolCallId": "t1"}},
+            },
+            replay=False,
+        )
+
+        assert nested is not None and nested.launch_tool_id == "outer:t1"
+        assert subs.launch_owner("outer:t1") is nested.child
+        # A root tool with the same id is another call.
+        assert subs.launch_owner("t1") is None
+
 
     def test_a_full_registry_forgets_the_oldest_idle_child_and_drops_a_new_one_while_all_run(
         self, monkeypatch
