@@ -84,6 +84,19 @@ fun VersionInfoResponse.cliModelsPending(cliId: String): Boolean = runCatching {
 }.getOrNull() == true
 
 /**
+ * Whether the agent advertises the launch option [key] for [cliId]
+ * (`capabilities.cli.<id>.<key>`, such as Codex `auto_review`). Only an
+ * explicit JSON `true` counts: an older agent drops an option field it does
+ * not know, so the client must not offer it there.
+ */
+fun VersionInfoResponse.cliFeature(cliId: String, key: String): Boolean = runCatching {
+    capabilities["cli"]?.jsonObject
+        ?.get(cliId)?.jsonObject
+        ?.get(key)?.jsonPrimitive
+        ?.let { !it.isString && it.booleanOrNull == true }
+}.getOrNull() == true
+
+/**
  * One entry of `capabilities.cli.<id>.model_details`: the reasoning efforts a
  * model supports and (when the catalog names one) its default effort. Plain
  * data class, not `@Serializable` — it is only ever built by the loose walk in

@@ -84,6 +84,16 @@ describe('selectors', () => {
     expect(codexPreset({ ...base, sandbox: 'danger-full-access' })).toBeNull();
   });
 
+  it('reads Auto review as pressed only on an agent that supports it, under full access', () => {
+    const review = { ...INITIAL_WIZARD_STATE.codex, autoReview: true };
+
+    expect(codexPreset(review, true)).toBe('autoReview');
+    // An older agent drops auto_review and runs the sandbox and approval the
+    // preset also set, so the button that matches what runs is Auto.
+    expect(codexPreset(review, false)).toBe('auto');
+    expect(codexPreset({ ...review, fullAuto: true }, true)).toBe('fullAccess');
+  });
+
   it('splits added directories on any newline flavour and on commas', () => {
     expect(parseAddDirs(' /a ,\r\n/b\n\n , \r /c ')).toEqual(['/a', '/b', '/c']);
     expect(parseAddDirs('   ')).toEqual([]);
@@ -233,6 +243,25 @@ describe('wizardReducer', () => {
       sandbox: 'read-only',
       approval: 'on-request',
     });
+  });
+
+  it('sets the Auto review preset in full and clears it on every other preset', () => {
+    const review = reduce([
+      { type: 'setCodexSandbox', sandbox: 'read-only' },
+      { type: 'setCodexApproval', approval: 'never' },
+      { type: 'setCodexPreset', preset: 'fullAccess' },
+      { type: 'setCodexPreset', preset: 'autoReview' },
+    ]);
+
+    expect(review.codex).toMatchObject({
+      autoReview: true,
+      fullAuto: false,
+      sandbox: 'workspace-write',
+      approval: 'on-request',
+    });
+    for (const preset of ['readOnly', 'auto', 'fullAccess'] as const) {
+      expect(reduce([{ type: 'setCodexPreset', preset }], review).codex.autoReview).toBe(false);
+    }
   });
 
   it('re-defaults a stranded codex effort to the model default on switch', () => {

@@ -31,6 +31,7 @@ const CODEX_BLOB = {
   sandbox: 'read-only',
   approval: 'never',
   fullAuto: true,
+  autoReview: false,
   reasoningEffort: 'minimal',
   terminalUi: true,
 } as const;
@@ -122,6 +123,7 @@ describe('hydration', () => {
       sandbox: 'workspace-write',
       approval: 'on-request',
       fullAuto: false,
+      autoReview: false,
       reasoningEffort: 'high',
       terminalUi: false,
     });

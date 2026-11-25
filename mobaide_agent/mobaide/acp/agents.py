@@ -1567,11 +1567,18 @@ def claude_config_intents(options: ClaudeOptions) -> list[ConfigIntent]:
 def codex_mode(options: CodexOptions) -> str:
     """The codex-acp mode for the sandbox choice.
 
-    The adapter's modes pair a sandbox with an approval policy. "Never ask"
-    inside the workspace sandbox has no twin; it gets Workspace access, where
-    a person (not a reviewer model) approves each step outside the sandbox.
+    The adapter's modes pair a sandbox with an approval policy. ``auto_review``
+    is its ``agent`` mode (Auto review: a Codex reviewer, not a person,
+    approves each step outside the workspace sandbox). "Never ask" inside the
+    workspace sandbox has no twin; it gets Workspace access, where a person
+    approves each step outside the sandbox.
     """
-    if options.full_auto or (options.sandbox == "danger-full-access" and options.approval == "never"):
+    # The terminal's order: ``--approve-for-me`` ignores sandbox and approval.
+    if options.full_auto:
+        return "agent-full-access"
+    if options.auto_review:
+        return "agent"
+    if options.sandbox == "danger-full-access" and options.approval == "never":
         return "agent-full-access"
     if options.sandbox == "read-only":
         return "read-only"

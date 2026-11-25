@@ -186,6 +186,7 @@ final class AutoScanSetupModelTests: XCTestCase {
         model.githubActiveLabel = " ai-doing "
         model.toggleGitHubIssueType("Task")
         model.codexOptions.full_auto = false
+        model.codexOptions.auto_review = true
         model.codexOptions.reasoning_effort = nil
 
         let request = try XCTUnwrap(
@@ -312,7 +313,7 @@ final class AutoScanSetupModelTests: XCTestCase {
         let chat = codexChat ? #","chat":{"codex":{"resume":true}}"# : ""
         let wire = Data(#"""
         {"name":"mobaide_agent","server_version":"0.3.30","protocol_versions":[6,7],"min_client_version":6,
-         "capabilities":{"cli":{"claude":{"available":true},"codex":{"available":true}},
+         "capabilities":{"cli":{"claude":{"available":true},"codex":{"available":true,"auto_review":true}},
           "autoscan":{"sources":["linear","github"],"clis":["claude","codex"],"github_setup":true}\#(chat)}}
         """#.utf8)
         let model = AutoScanSetupModel(

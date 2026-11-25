@@ -586,12 +586,15 @@ private struct CreateSessionContent: View {
             autoScanClaudeSections(legacy: false)
         case "codex"?:
             Section {
-                CodexAutonomyRows(preset: setup.codexOptions.preset) { setup.codexOptions.apply($0) }
+                CodexAutonomyRows(
+                    preset: setup.codexOptions.preset(autoReviewSupported: setup.codexAutoReviewSupported),
+                    autoReviewSupported: setup.codexAutoReviewSupported
+                ) { setup.codexOptions.apply($0) }
                 mayAskHint("codex")
             } header: {
                 PixelSectionHeader("Codex autonomy")
             } footer: {
-                if setup.codexOptions.preset == nil {
+                if setup.codexOptions.preset(autoReviewSupported: setup.codexAutoReviewSupported) == nil {
                     PixelSectionFooter("Custom sandbox/approval set in Advanced.")
                 }
             }
@@ -611,7 +614,8 @@ private struct CreateSessionContent: View {
                     CodexSandboxApprovalRows(
                         sandbox: $setup.codexOptions.sandbox,
                         approval: $setup.codexOptions.approval,
-                        fullAuto: setup.codexOptions.full_auto
+                        fullAuto: setup.codexOptions.full_auto,
+                        autoReview: setup.codexOptions.autoReviewOn(supported: setup.codexAutoReviewSupported)
                     )
                 }
             }
@@ -990,7 +994,10 @@ private struct CreateSessionContent: View {
         // Sandbox and approval live under Advanced, so the preset rows show
         // which one the current pair matches (none for a hand-picked pair).
         Section {
-            CodexAutonomyRows(preset: model.codexPreset) { model.applyCodexPreset($0) }
+            CodexAutonomyRows(
+                preset: model.codexPreset,
+                autoReviewSupported: model.codexAutoReviewSupported
+            ) { model.applyCodexPreset($0) }
         } header: {
             PixelSectionHeader("Autonomy")
         } footer: {
@@ -1021,7 +1028,8 @@ private struct CreateSessionContent: View {
                 CodexSandboxApprovalRows(
                     sandbox: $model.codexSandbox,
                     approval: $model.codexApproval,
-                    fullAuto: model.codexFullAuto
+                    fullAuto: model.codexFullAuto,
+                    autoReview: model.codexAutoReviewOn
                 )
             }
         }

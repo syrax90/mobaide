@@ -5,6 +5,7 @@ import { fetchAgentCapabilities } from '../../../api/agentCapabilities';
 import {
   autoScanCapability,
   chatSupport,
+  cliFeature,
   cliModelDetails,
   cliModelsPending,
   gitCapability,
@@ -807,6 +808,7 @@ export function NewSession() {
       worktreeBase,
       autoScan: scanCapability,
       autoScanChat: chatSupport(capabilities.data, state.autoScanSetup.cli ?? 'claude'),
+      codexAutoReview: cliFeature(capabilities.data, 'codex', 'auto_review'),
     };
     const request =
       location.mode === 'auto_scan'
@@ -869,6 +871,7 @@ export function NewSession() {
       state: { ...state, selection: location.selection },
       mode: location.mode,
       workspace,
+      codexAutoReview: cliFeature(capabilities.data, 'codex', 'auto_review'),
     };
     pendingPrefs.current = launchPrefsFromState(state, kind);
     create.mutate(buildResumeRequest(context, kind, stored));

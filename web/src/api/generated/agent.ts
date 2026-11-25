@@ -1829,6 +1829,11 @@ export interface components {
              * @enum {string}
              */
             approval: "on-request" | "never";
+            /**
+             * Auto Review
+             * @default false
+             */
+            auto_review: boolean;
             /** Base Branch */
             base_branch?: string | null;
             /** Branch Name */
@@ -1876,6 +1881,10 @@ export interface components {
          *
          *     ``approval`` still accepts the retired ``untrusted`` and reads it as
          *     ``on-request``: released clients and saved settings keep sending it.
+         *
+         *     ``auto_review`` (Codex ``--approve-for-me``) and ``full_auto`` are
+         *     mutually exclusive: the one bypasses the sandbox the other keeps, so the
+         *     pair is rejected with a 422 instead of one silently winning.
          */
         CodexScanOptionsModel: {
             /**
@@ -1884,6 +1893,11 @@ export interface components {
              * @enum {string}
              */
             approval: "on-request" | "never";
+            /**
+             * Auto Review
+             * @default false
+             */
+            auto_review: boolean;
             /**
              * Full Auto
              * @default false

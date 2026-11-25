@@ -7,6 +7,8 @@ struct CodexLaunchPrefs: Codable, Equatable, Sendable {
     let sandbox: String
     let approval: String
     let fullAuto: Bool
+    /// Codex Auto review; an older blob reads as off.
+    let autoReview: Bool
     let reasoningEffort: String
     /// The classic terminal instead of the chat view.
     let terminalUI: Bool
@@ -16,6 +18,7 @@ struct CodexLaunchPrefs: Codable, Equatable, Sendable {
         sandbox: String = "workspace-write",
         approval: String = "on-request",
         fullAuto: Bool = false,
+        autoReview: Bool = false,
         reasoningEffort: String = "high",
         terminalUI: Bool = false
     ) {
@@ -23,6 +26,7 @@ struct CodexLaunchPrefs: Codable, Equatable, Sendable {
         self.sandbox = sandbox
         self.approval = approval
         self.fullAuto = fullAuto
+        self.autoReview = autoReview
         self.reasoningEffort = reasoningEffort
         self.terminalUI = terminalUI
     }
@@ -37,6 +41,7 @@ extension CodexLaunchPrefs {
             try container.decodeIfPresent(String.self, forKey: .approval) ?? "on-request"
         )
         fullAuto = try container.decodeIfPresent(Bool.self, forKey: .fullAuto) ?? false
+        autoReview = try container.decodeIfPresent(Bool.self, forKey: .autoReview) ?? false
         reasoningEffort = try container.decodeIfPresent(String.self, forKey: .reasoningEffort) ?? "high"
         terminalUI = try container.decodeIfPresent(Bool.self, forKey: .terminalUI) ?? false
     }

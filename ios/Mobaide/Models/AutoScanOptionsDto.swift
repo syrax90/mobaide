@@ -73,36 +73,49 @@ struct CodexScanOptionsDto: Codable, Equatable, Sendable {
     /// null = no reasoning-effort override.
     var reasoning_effort: String?
     var full_auto: Bool
+    /// Codex Auto review; applies only where the agent advertises it.
+    var auto_review: Bool
 
     init(
         model: String? = nil,
         sandbox: String = "workspace-write",
         approval: String = "never",
         reasoning_effort: String? = "high",
-        full_auto: Bool = true
+        full_auto: Bool = true,
+        auto_review: Bool = false
     ) {
         self.model = model
         self.sandbox = sandbox
         self.approval = approval
         self.reasoning_effort = reasoning_effort
         self.full_auto = full_auto
+        self.auto_review = auto_review
     }
 
+    /// Auto review is chosen and the agent advertises it (`supported`).
+    func autoReviewOn(supported: Bool) -> Bool { auto_review && supported && !full_auto }
+
     /// The autonomy preset the options match; nil for a hand-picked pair.
-    var preset: CodexAutonomyPreset? {
-        CodexAutonomyPreset.matching(sandbox: sandbox, approval: approval, fullAuto: full_auto)
+    func preset(autoReviewSupported: Bool) -> CodexAutonomyPreset? {
+        CodexAutonomyPreset.matching(
+            sandbox: sandbox,
+            approval: approval,
+            fullAuto: full_auto,
+            autoReview: autoReviewOn(supported: autoReviewSupported)
+        )
     }
 
     mutating func apply(_ preset: CodexAutonomyPreset) {
         sandbox = preset.sandbox
         approval = preset.approval
         full_auto = preset == .fullAccess
+        auto_review = preset == .autoReview
     }
 }
 
 extension CodexScanOptionsDto {
     private enum CodingKeys: String, CodingKey {
-        case model, sandbox, approval, reasoning_effort, full_auto
+        case model, sandbox, approval, reasoning_effort, full_auto, auto_review
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -112,6 +125,7 @@ extension CodexScanOptionsDto {
         try container.encode(approval, forKey: .approval)
         try container.encode(reasoning_effort, forKey: .reasoning_effort)
         try container.encode(full_auto, forKey: .full_auto)
+        try container.encode(auto_review, forKey: .auto_review)
     }
 
     init(from decoder: any Decoder) throws {
@@ -125,6 +139,7 @@ extension CodexScanOptionsDto {
             ? try container.decodeIfPresent(String.self, forKey: .reasoning_effort)
             : "high"
         full_auto = try container.decodeIfPresent(Bool.self, forKey: .full_auto) ?? false
+        auto_review = try container.decodeIfPresent(Bool.self, forKey: .auto_review) ?? false
     }
 }
 

@@ -287,6 +287,19 @@ class TestCodexToOptions:
             with pytest.raises(pydantic.ValidationError):
                 CodexOptionsModel.model_validate(bad)
 
+    @pytest.mark.parametrize("model_name", ["CodexOptionsModel", "CodexScanOptionsModel"])
+    def test_auto_review_with_full_auto_is_rejected_at_wire_boundary(self, model_name):
+        """Auto review keeps the sandbox that full_auto turns off: the pair is a
+        422, not one flag silently winning (a session and an Auto Scan start)."""
+        import pydantic
+
+        from mobaide.agent.sessions import models
+
+        model = getattr(models, model_name)
+        with pytest.raises(pydantic.ValidationError, match="mutually exclusive"):
+            model.model_validate({"auto_review": True, "full_auto": True})
+        assert model.model_validate({"auto_review": True}).auto_review is True
+
     def test_reasoning_effort_is_free_form_for_dynamic_catalog(self):
         """``reasoning_effort`` must NOT be a closed Literal: the vocabulary is
         enumerated per-model at runtime (``capabilities.cli.codex.model_details``),

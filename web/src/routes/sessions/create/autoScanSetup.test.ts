@@ -269,6 +269,7 @@ describe('Auto Scan agent options', () => {
       sandbox: 'workspace-write',
       approval: 'never',
       fullAuto: true,
+      autoReview: false,
       reasoningEffort: 'high',
       terminalUi: false,
     });

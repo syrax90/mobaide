@@ -31,7 +31,7 @@ async def test_get_version(client) -> None:
     assert body["capabilities"] == {
         "cli": {
             "claude": {"available": True},
-            "codex": {"available": True},
+            "codex": {"available": True, "auto_review": True},
             "antigravity": {"available": True},
             "opencode": {"available": True},
             "copilot": {"available": True},
@@ -116,7 +116,7 @@ async def test_get_version_claude_missing_reports_unavailable(
     assert response.status_code == 200
     cli = response.json()["capabilities"]["cli"]
     assert cli["claude"] == {"available": False}
-    assert cli["codex"] == {"available": True}
+    assert cli["codex"] == {"available": True, "auto_review": True}
     assert cli["antigravity"] == {"available": True}
     assert cli["opencode"] == {"available": True}
 
@@ -172,7 +172,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
     assert response.status_code == 200
     assert response.json()["capabilities"]["cli"] == {
         "claude": {"available": False},
-        "codex": {"available": False},
+        "codex": {"available": False, "auto_review": True},
         "antigravity": {"available": False},
         "opencode": {"available": True},
         "copilot": {"available": False},
@@ -225,6 +225,7 @@ async def test_get_version_reports_model_details_for_warm_codex_cache(
     cli = response.json()["capabilities"]["cli"]
     assert cli["codex"] == {
         "available": True,
+        "auto_review": True,
         "models": ["gpt-5.6-sol", "gpt-5.4-mini"],
         "model_details": [
             {
@@ -273,7 +274,9 @@ async def test_get_version_marks_models_pending_while_warmup_outlasts_the_wait(
         app.state.codex_launcher._cached_models = ("gpt-5.6-sol",)
         response = await client.get("/api/version")
         cli = response.json()["capabilities"]["cli"]
-        assert cli["codex"] == {"available": True, "models": ["gpt-5.6-sol"]}
+        assert cli["codex"] == {
+            "available": True, "auto_review": True, "models": ["gpt-5.6-sol"],
+        }
         assert cli["antigravity"]["models_pending"] is True
     finally:
         app.state.cli_models_warmup.cancel()

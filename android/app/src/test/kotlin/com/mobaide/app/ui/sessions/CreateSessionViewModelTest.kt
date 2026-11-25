@@ -1705,6 +1705,53 @@ class CreateSessionViewModelTest {
     }
 
     @Test
+    fun submitCodex_autoReviewPreset_sendsAutoReviewOnlyWhereTheAgentAdvertisesIt() = runTest {
+        for (supported in listOf(true, false)) {
+            val fx = newFixture()
+            val codexCaps =
+                if (supported) """{"available":true,"auto_review":true}""" else """{"available":true}"""
+            coEvery { fx.sessionRepo.getAgentVersion() } returns VersionInfoResponse(
+                name = "mobaide_agent",
+                server_version = "0.2.16",
+                protocol_versions = listOf(5),
+                min_client_version = 5,
+                capabilities = Json.parseToJsonElement("""{"cli":{"codex":$codexCaps}}""").jsonObject,
+            )
+            val vm = fx.buildVm()
+            advanceUntilIdle()
+            vm.refreshCliAvailability()
+            advanceUntilIdle()
+
+            val requestSlot = slot<CreateSessionRequest>()
+            coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+                SessionResponse("sess-review", "starting", "2026-06-23T00:00:00Z")
+            val prefsSlot = slot<CodexLaunchPrefs>()
+            coEvery { fx.prefs.setLastUsedCodexOptions(capture(prefsSlot)) } just Runs
+
+            vm.selectWorkspace("alpha")
+            vm.selectCodexPreset(CodexAutonomyPreset.FullAccess)
+            vm.selectCodexPreset(CodexAutonomyPreset.AutoReview)
+            // An older agent drops auto_review and runs what it understands, so
+            // the button that matches what runs there is Auto.
+            assertEquals(
+                if (supported) CodexAutonomyPreset.AutoReview else CodexAutonomyPreset.Auto,
+                vm.uiState.value.codexPreset,
+            )
+            vm.submitCodex()
+            advanceUntilIdle()
+
+            val codex = requestSlot.captured.codex_options
+            assertEquals("supported=$supported", supported, codex?.auto_review)
+            assertEquals(false, codex?.full_auto)
+            // The preset's own sandbox and approval, so an older agent still asks a person.
+            assertEquals("workspace-write", codex?.sandbox)
+            assertEquals("on-request", codex?.approval)
+            // The choice itself is remembered for the next launch either way.
+            assertTrue(prefsSlot.captured.autoReview)
+        }
+    }
+
+    @Test
     fun submitCodex_gitWorkspace_withWorktree_carriesWorktreeAndBranchInCodexOptions() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()

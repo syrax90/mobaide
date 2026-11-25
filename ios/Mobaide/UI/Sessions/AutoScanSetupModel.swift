@@ -82,6 +82,8 @@ final class AutoScanSetupModel {
     private var cliAvailability: [String: Bool] = [:]
     /// `capabilities.chat` for each agent kind; empty until a probe answers.
     private var chatCapabilities: [String: ChatCapability] = [:]
+    /// `capabilities.cli.codex.auto_review`: offer Codex Auto review.
+    private(set) var codexAutoReviewSupported = false
 
     /// The workspace the choices belong to, kept current with the live list.
     private(set) var workspace: WorkspaceInfo?
@@ -185,6 +187,7 @@ final class AutoScanSetupModel {
             chat[kind] = version.chatCapability(kind)
         }
         chatCapabilities = chat
+        codexAutoReviewSupported = version.cliFeature("codex", "auto_review")
     }
 
     /// GitHub first, as the wizard lists them.
@@ -444,6 +447,14 @@ final class AutoScanSetupModel {
     func setAntigravitySandbox(_ on: Bool) {
         antigravityOptions.sandbox = on
         if on { antigravityOptions.skip_permissions = false }
+    }
+
+    /// A start sends Auto review only where the agent advertises it; a
+    /// template keeps the choice itself.
+    var codexOptionsForStart: CodexScanOptionsDto {
+        var options = codexOptions
+        options.auto_review = options.autoReviewOn(supported: codexAutoReviewSupported)
+        return options
     }
 
     /// The Antigravity options as sent: `add_dirs` parsed from the draft.
@@ -849,7 +860,7 @@ final class AutoScanSetupModel {
         return StartScanRequest(
             workspace_name: workspaceName,
             claude_options: cli == "claude" ? claudeOptions : nil,
-            codex_options: cli == "codex" ? codexOptions : nil,
+            codex_options: cli == "codex" ? codexOptionsForStart : nil,
             antigravity_options: cli == "antigravity" ? antigravityOptionsForStart : nil,
             opencode_options: cli == "opencode" ? opencodeOptions : nil,
             copilot_options: cli == "copilot" ? copilotOptions : nil,
