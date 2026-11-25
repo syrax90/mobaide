@@ -41,6 +41,19 @@ prompt text picks the scenario:
   wakes the agent, with no prompt pending;
 * ``detached`` — the Copilot flavor's detached shell: it ends after the
   answer and wakes the agent (the other flavors: as ``background``);
+* ``subagent`` — subagent sessions, when the client declares
+  ``clientCapabilities.subagents``. The Claude and Codex flavors use the
+  stable form (``subagent_update``, ``session_message``): a foreground
+  subagent with a tool call and a checklist answers, then a background one
+  runs a command for ``MOBAIDE_FAKE_ACP_SUBAGENT_DELAY`` seconds after the
+  prompt's answer (default 3); ``session/cancel`` with its id stops it. The
+  Claude flavor sends the foreground answer as a ``session_message``; the
+  Codex flavor only as the subagent's own message, and grants ``cancel``
+  only while a subagent runs. With ``permission`` in the prompt the
+  foreground subagent asks to run a command first. The Cursor flavor uses the
+  draft form (``subagent_spawned``, ``subagent_state_update``) and its
+  prompt waits for the background subagent. Without the capability the
+  subagent's tool calls come flat in the parent stream;
 * ``fail`` — the turn fails with an error;
 * ``usagelimit [N]`` — the Claude flavor refuses this prompt and the next
   N-1 ones (default 1) for a usage limit that resets in
@@ -77,6 +90,8 @@ from typing import Any
 WAKE_DELAY = float(os.environ.get("MOBAIDE_FAKE_ACP_WAKE_DELAY") or 1.0)
 # How long the ``async question`` scenario works before it gives up on an answer.
 ASYNC_QUESTION_WORK = float(os.environ.get("MOBAIDE_FAKE_ACP_ASYNC_WORK") or 3.0)
+# How long the ``subagent`` scenario's background subagent runs.
+SUBAGENT_DELAY = float(os.environ.get("MOBAIDE_FAKE_ACP_SUBAGENT_DELAY") or 3.0)
 
 MODES = [
     {"value": "default", "name": "Ask first", "description": "Ask before edits and commands"},
@@ -239,6 +254,8 @@ class FakeAgent:
         self.tool_seq = 0
         # ``clientCapabilities._meta`` of ``initialize``.
         self.client_meta: dict[str, Any] = {}
+        # The client declared ``clientCapabilities.subagents``.
+        self.subagents = False
 
     def send(self, message: dict[str, Any]) -> None:
         data = (json.dumps(message) + "\n").encode("utf-8")
@@ -477,6 +494,7 @@ class FakeAgent:
             caps = params.get("clientCapabilities")
             meta = caps.get("_meta") if isinstance(caps, dict) else None
             self.client_meta = meta if isinstance(meta, dict) else {}
+            self.subagents = isinstance(caps, dict) and isinstance(caps.get("subagents"), dict)
             if self.agy:
                 return {
                     "protocolVersion": 1,
@@ -659,6 +677,21 @@ class FakeAgent:
             # input, and ``cursor/create_plan`` is not asked again.
             self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": "replay-plan", "title": "Create Plan: Fix the login", "kind": "other", "status": "completed",
                               "rawInput": {"_toolName": "createPlan", "name": "Fix the login", "plan": "## Steps\n\n1. Read the code\n2. Write the fix\n"}})
+        if self.subagents and self.cursor:
+            # Cursor replays a finished subagent with its final state.
+            child = "replay-agent"
+            self.update(sid, {"sessionUpdate": "subagent_spawned", "subagentSessionId": child, "name": "explore",
+                              "task": "Find the login handler", "capabilities": {}})
+            self.update(sid, {"sessionUpdate": "subagent_state_update", "subagentSessionId": child, "state": "completed"})
+        elif self.subagents and (self.codex or not (self.agy or self.opencode or self.copilot or self.junie or self.pi)):
+            # A replayed subagent: idle, with no capabilities.
+            child = f"{sid}-replay-agent"
+            self.update(sid, {"sessionUpdate": "subagent_update", "sessionId": child, "title": "Find the login handler",
+                              "description": "Explore", "state": {"state": "idle", "stopReason": "end_turn"}})
+            self.update(child, {"sessionUpdate": "session_message", "messageId": "replay-task", "senderSessionId": sid,
+                                "recipientSessionId": child, "content": [{"type": "text", "text": "Find the login handler."}]})
+            self.update(child, {"sessionUpdate": "tool_call", "toolCallId": "replay-read", "title": "Read login.py",
+                                "kind": "read", "status": "completed"})
         if not self.copilot:
             # Copilot replays a stored session without its title.
             self.update(sid, {"sessionUpdate": "session_info_update", "title": "Earlier session"})
@@ -768,6 +801,147 @@ class FakeAgent:
             asyncio.ensure_future(finish())
         return ok
 
+    def subagent_state(self, sid: str, child: str, state: dict[str, Any], **extra: Any) -> None:
+        self.update(sid, {"sessionUpdate": "subagent_update", "sessionId": child, "state": state, **extra})
+
+    def subagent_task(self, sid: str, child: str, message_id: str, text: str) -> None:
+        """A task as claude-agent-acp sends it: the parent's outgoing view and
+        the child's incoming one, linked."""
+        content = [{"type": "text", "text": text}]
+        self.update(sid, {"sessionUpdate": "session_message", "messageId": message_id, "senderSessionId": sid,
+                          "recipientSessionId": child, "recipientMessageId": message_id, "content": content})
+        self.update(child, {"sessionUpdate": "session_message", "messageId": message_id, "senderSessionId": sid,
+                            "recipientSessionId": child, "senderMessageId": message_id, "content": content})
+
+    async def rfd_subagents(self, sid: str, ask: bool) -> bool:
+        """Subagent sessions in the stable form, as claude-agent-acp and
+        codex-acp send them."""
+        if not self.subagents:
+            # Without the capability the adapter flattens them into the parent stream.
+            launch = self.tool_id("task")
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": launch, "title": "Find the login code",
+                              "kind": "think", "status": "in_progress",
+                              "rawInput": {"subagent_type": "Explore", "description": "Find the login code"}})
+            self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": self.tool_id("read"), "title": "Read login.py",
+                              "kind": "read", "status": "completed", "_meta": {"claudeCode": {"parentToolUseId": launch}}})
+            self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": launch, "status": "completed",
+                              "content": [{"type": "content", "content": {"type": "text", "text": "The handler checks the user."}}]})
+            return await self.stream(sid, "The subagent found the login handler.")
+        # codex-acp grants cancel only while a child's turn runs.
+        idle_caps: dict[str, Any] = {"capabilities": None} if self.codex else {}
+        child = f"{sid}-agent-{self.tool_id('a')}"
+        launch = self.tool_id("task")
+        self.update(sid, {"sessionUpdate": "subagent_update", "sessionId": child, "title": "Find the login code",
+                          "description": "Explore", "capabilities": {"cancel": {}}, "state": {"state": "running"}})
+        self.subagent_task(sid, child, launch, "Find where the login handler checks the user.")
+        read = self.tool_id("read")
+        self.update(child, {"sessionUpdate": "tool_call", "toolCallId": read, "title": "Read login.py", "kind": "read",
+                            "status": "in_progress"})
+        steps = ["Find the handler", "Check the user test"]
+        self.update(child, {"sessionUpdate": "plan", "entries": [
+            {"content": step, "priority": "medium", "status": "in_progress" if i == 0 else "pending"}
+            for i, step in enumerate(steps)]})
+        if ask:
+            perm = self.tool_id("perm")
+            self.update(child, {"sessionUpdate": "tool_call", "toolCallId": perm, "title": "rm -rf build/",
+                                "kind": "execute", "status": "pending"})
+            self.subagent_state(sid, child, {"state": "requires_action"})
+            asked = asyncio.ensure_future(self.call("session/request_permission", {
+                "sessionId": child,
+                "toolCall": {"toolCallId": perm, "title": "rm -rf build/", "kind": "execute"},
+                "options": [{"optionId": "allow", "name": "Allow once", "kind": "allow_once"},
+                            {"optionId": "reject", "name": "Reject", "kind": "reject_once"}],
+            }))
+            while not asked.done():
+                if self.stopped(sid) or self.stopped(child):
+                    # As claude-agent-acp: a stop ends the child, which the
+                    # client takes as the end of its open requests.
+                    self.subagent_state(sid, child, {"state": "idle", "stopReason": "cancelled"}, **idle_caps)
+                    break
+                await asyncio.sleep(0.05)
+            result = await asked
+            outcome = (result or {}).get("outcome") or {}
+            allowed = outcome.get("outcome") == "selected" and outcome.get("optionId") == "allow"
+            if not (self.stopped(child) or self.stopped(sid)):
+                self.subagent_state(sid, child, {"state": "running"})
+                self.update(child, {"sessionUpdate": "tool_call_update", "toolCallId": perm,
+                                    "status": "completed" if allowed else "failed"})
+        for _ in range(4):
+            if self.stopped(child) or self.stopped(sid):
+                # A parent's cancel stops the foreground subagent it waits on.
+                self.subagent_state(sid, child, {"state": "idle", "stopReason": "cancelled"}, **idle_caps)
+                return False if self.stopped(sid) else await self.stream(sid, "The subagent was stopped.")
+            await asyncio.sleep(0.05)
+        self.update(child, {"sessionUpdate": "tool_call_update", "toolCallId": read, "status": "completed"})
+        self.update(child, {"sessionUpdate": "plan", "entries": [
+            {"content": step, "priority": "medium", "status": "completed"} for step in steps]})
+        answer = "The login handler checks the user in login.py, line 12."
+        self.update(child, {"sessionUpdate": "agent_message_chunk", "messageId": str(uuid.uuid4()),
+                            "content": {"type": "text", "text": answer}})
+        if not self.codex:
+            # claude-agent-acp: the launch's result as the child's message to the parent.
+            self.update(sid, {"sessionUpdate": "session_message", "messageId": f"{launch}:reply",
+                              "senderSessionId": child, "recipientSessionId": sid,
+                              "content": [{"type": "text", "text": answer}]})
+        self.subagent_state(sid, child, {"state": "idle", "stopReason": "end_turn"}, **idle_caps)
+        background = f"{sid}-agent-{self.tool_id('a')}"
+        self.update(sid, {"sessionUpdate": "subagent_update", "sessionId": background, "title": "Run the tests",
+                          "description": "general-purpose", "capabilities": {"cancel": {}}, "state": {"state": "running"}})
+        self.subagent_task(sid, background, self.tool_id("task"), "Run the test suite and report failures.")
+        run = self.tool_id("exec")
+        self.update(background, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "pytest -q", "kind": "execute",
+                                 "status": "in_progress", "rawInput": {"command": "pytest -q"}})
+        asyncio.ensure_future(self.background_subagent(sid, background, run, idle_caps))
+        return await self.stream(sid, "The login handler checks the user. The tests run in the background.")
+
+    async def background_subagent(self, sid: str, child: str, run: str, idle_caps: dict[str, Any]) -> None:
+        for _ in range(max(1, int(SUBAGENT_DELAY / 0.05))):
+            if sid not in self.sessions:
+                return
+            if self.stopped(child):
+                self.subagent_state(sid, child, {"state": "idle", "stopReason": "cancelled"}, **idle_caps)
+                return
+            await asyncio.sleep(0.05)
+        self.update(child, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                            "content": [{"type": "content", "content": {"type": "text", "text": "12 passed"}}]})
+        self.update(child, {"sessionUpdate": "agent_message_chunk", "messageId": str(uuid.uuid4()),
+                            "content": {"type": "text", "text": "All 12 tests passed."}})
+        self.subagent_state(sid, child, {"state": "idle", "stopReason": "end_turn"}, **idle_caps)
+
+    async def cursor_subagents(self, sid: str) -> bool:
+        """A background subagent in Cursor's draft form: the prompt waits for it."""
+        launch = self.tool_id("task")
+        self.update(sid, {"sessionUpdate": "tool_call", "toolCallId": launch, "title": "Run the tests", "kind": "other",
+                          "status": "in_progress", "rawInput": {"_toolName": "task", "description": "Run the tests"}})
+        if not self.subagents:
+            # Without the capability the prompt ends while the subagent runs.
+            return await self.stream(sid, "A subagent runs the tests in the background.")
+        child = f"agent-{self.tool_id('a')}"
+        meta = {"cursor": {"toolCallId": launch, "agentId": child}}
+        self.update(sid, {"sessionUpdate": "subagent_spawned", "subagentSessionId": child, "name": "shell",
+                          "task": "Run the test suite and report failures.", "capabilities": {}, "_meta": meta})
+        run = self.tool_id("exec")
+        self.update(child, {"sessionUpdate": "tool_call", "toolCallId": run, "title": "pytest -q", "kind": "execute",
+                            "status": "in_progress", "rawInput": {"command": "pytest -q"}})
+        if not await self.stream(sid, "A subagent runs the tests in the background."):
+            self.update(sid, {"sessionUpdate": "subagent_state_update", "subagentSessionId": child,
+                              "state": "cancelled", "_meta": meta})
+            return False
+        for _ in range(max(1, int(SUBAGENT_DELAY / 0.05))):
+            if self.stopped(sid):
+                # Stop ends the prompt and its subagents.
+                self.update(sid, {"sessionUpdate": "subagent_state_update", "subagentSessionId": child,
+                                  "state": "cancelled", "_meta": meta})
+                return False
+            await asyncio.sleep(0.05)
+        self.update(child, {"sessionUpdate": "tool_call_update", "toolCallId": run, "status": "completed",
+                            "content": [{"type": "content", "content": {"type": "text", "text": "12 passed"}}]})
+        self.update(sid, {"sessionUpdate": "subagent_state_update", "subagentSessionId": child,
+                          "state": "completed", "_meta": meta})
+        self.update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": launch, "status": "completed",
+                          "content": [{"type": "content", "content": {"type": "text", "text": "All 12 tests passed."}}]})
+        return await self.stream(sid, "The subagent finished: all 12 tests passed.")
+
     async def copilot_background(self, sid: str) -> bool:
         """An async shell: the prompt stays open after the foreground settled."""
         run = self.tool_id("exec")
@@ -812,7 +986,11 @@ class FakeAgent:
         if self.junie and "nomodel" in lower:
             raise _RpcError(-32002, "No models are currently available for submission", {"reason": "model_not_available"})
         ok = True
-        if "background" in lower and self.opencode:
+        if "subagent" in lower and self.cursor:
+            ok = await self.cursor_subagents(sid)
+        elif "subagent" in lower:
+            ok = await self.rfd_subagents(sid, ask="permission" in lower)
+        elif "background" in lower and self.opencode:
             ok = await self.opencode_background(sid)
         elif "background" in lower and self.copilot:
             ok = await self.copilot_background(sid)

@@ -80,6 +80,8 @@ final class ChatSessionModel {
     private(set) var restarting = false
     /// A `new_conversation` this client sent has no result yet.
     private(set) var startingNew = false
+    /// Subagents with a Stop in flight, until their item changes or the stop fails.
+    private(set) var stoppingSubagents: Set<String> = []
     /// Rows the user expanded; kept here so a row scrolled out of the lazy
     /// list comes back the way it was left.
     private(set) var expandedItems: Set<String> = []
@@ -131,6 +133,7 @@ final class ChatSessionModel {
         case dequeue(queueId: String)
         case steer(queueId: String)
         case cancel
+        case cancelSubagent(subagentId: String)
         case restart
         case newConversation
 
@@ -394,6 +397,9 @@ final class ChatSessionModel {
             configOverrides = configOverrides.filter { inFlight.contains($0.key) }
         }
         if changes.contains(.items) {
+            if !stoppingSubagents.isEmpty {
+                pruneStoppingSubagents(old: items, new: timeline.items)
+            }
             items = timeline.items
             truncated = timeline.truncated
             itemsVersion &+= 1
@@ -418,6 +424,19 @@ final class ChatSessionModel {
         }
         lastSync = (request, Date())
         enqueue(.sync(id: nextCommandId(), epoch: request.epoch, afterSeq: request.afterSeq), pending: nil)
+    }
+
+    private func pruneStoppingSubagents(old: [ChatItem], new: [ChatItem]) {
+        func subagent(_ id: String, _ items: [ChatItem]) -> ChatSubagent? {
+            for item in items {
+                if case .subagent(let subagent) = item.body, subagent.subagentId == id { return subagent }
+            }
+            return nil
+        }
+        stoppingSubagents = stoppingSubagents.filter { id in
+            guard let current = subagent(id, new) else { return false }
+            return current == subagent(id, old)
+        }
     }
 
     private func pruneOptimisticState() {
@@ -472,6 +491,10 @@ final class ChatSessionModel {
             if !result.ok, let error = result.error {
                 message = ToastMessage(text: error, tone: .danger)
             }
+        case .cancelSubagent(let subagentId):
+            guard !result.ok else { return }
+            stoppingSubagents.remove(subagentId)
+            message = ToastMessage(text: result.error ?? "The subagent was not stopped", tone: .danger)
         case .restart:
             restarting = false
             if !result.ok {
@@ -517,6 +540,7 @@ final class ChatSessionModel {
         configOverrides = [:]
         restarting = false
         startingNew = false
+        stoppingSubagents = []
         pending = pending.filter { _, command in
             if case .prompt = command { return true }
             return false
@@ -539,6 +563,8 @@ final class ChatSessionModel {
             restarting = false
         case .newConversation:
             startingNew = false
+        case .cancelSubagent(let subagentId):
+            stoppingSubagents.remove(subagentId)
         case .cancel:
             break
         }
@@ -630,6 +656,15 @@ final class ChatSessionModel {
     func stop() {
         guard isLive, isRunning, !state.cancelling else { return }
         enqueue(.cancel(id: nextCommandId()), pending: .cancel)
+    }
+
+    func cancelSubagent(_ subagentId: String) {
+        guard isLive, !stoppingSubagents.contains(subagentId) else { return }
+        stoppingSubagents.insert(subagentId)
+        enqueue(
+            .cancelSubagent(id: nextCommandId(), subagentId: subagentId),
+            pending: .cancelSubagent(subagentId: subagentId)
+        )
     }
 
     func setConfig(_ option: ChatConfigOption, to value: ChatConfigValue) {

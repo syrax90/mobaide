@@ -299,7 +299,9 @@ final class AgentListModelTests: XCTestCase {
         StubURLProtocol.enqueue(status: 200, body: mobileTokensJSON())
 
         model.connect(agent(id: "a1", name: "Prod Box"))
-        await waitUntil { harness.session.tokenStore.getAgentId() == "a1" }
+        // The token store is written inside the connect call; the model and
+        // router change only after it returns, so wait for the last of them.
+        await waitUntil { harness.router.path == [.sessionList] }
 
         XCTAssertEqual(
             StubURLProtocol.requests.count, 1,

@@ -3264,10 +3264,11 @@ def _slow_mode_agent(log, hold) -> list[str]:
     return [sys.executable, "-c", SLOW_MODE_AGENT, str(log), str(hold)]
 
 # Opens any stored session by replaying the session updates that argv[1]
-# holds as a JSON list.
+# holds as a JSON list; those in argv[2], if any, follow the load's answer.
 REPLAY_AGENT = r"""
 import json, sys
 updates = json.loads(sys.argv[1])
+after = json.loads(sys.argv[2]) if len(sys.argv) > 2 else []
 
 def send(message):
     sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
@@ -3283,7 +3284,11 @@ for line in sys.stdin:
         for body in updates:
             send({"method": "session/update",
                   "params": {"sessionId": msg["params"]["sessionId"], "update": body}})
-        result = {}
+        send({"id": msg["id"], "result": {}})
+        for body in after:
+            send({"method": "session/update",
+                  "params": {"sessionId": msg["params"]["sessionId"], "update": body}})
+        continue
     else:
         send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
         continue
@@ -3291,8 +3296,16 @@ for line in sys.stdin:
 """
 
 
-def _replay_agent(updates: list[dict[str, Any]]) -> list[str]:
-    return [sys.executable, "-c", REPLAY_AGENT, orjson.dumps(updates).decode()]
+def _replay_agent(
+    updates: list[dict[str, Any]], after: list[dict[str, Any]] | None = None
+) -> list[str]:
+    return [
+        sys.executable,
+        "-c",
+        REPLAY_AGENT,
+        orjson.dumps(updates).decode(),
+        orjson.dumps(after or []).decode(),
+    ]
 
 
 class TestCursorChat:
@@ -3866,6 +3879,16 @@ class TestClientCapabilities:
         await open_chat(load_session_id="conv-9", argv=_stored_title_agent(log, "replayed"))
 
         assert self._capabilities(log) == session_mod.CLIENT_CAPABILITIES
+
+    async def test_a_plan_with_subagents_declares_them(self, open_chat, tmp_path):
+        log = tmp_path / "agent.log"
+
+        await open_chat(
+            load_session_id="conv-9", argv=_stored_title_agent(log, "replayed"), subagents=True
+        )
+
+        assert self._capabilities(log) == {**session_mod.CLIENT_CAPABILITIES, "subagents": {}}
+        assert "subagents" not in session_mod.CLIENT_CAPABILITIES
 
 
 _NOTES_PATH = "/project/notes.md"
@@ -5878,3 +5901,336 @@ class TestWakeAfterTurn:
         await m.until(lambda: m.status == "ready")
         assert m.session.to_info().attention == "turn_finished"
         assert wake_windows.pending == 0
+
+
+
+# A Claude-like agent whose subagent outlives the turn's cancel: it asks
+# permission (request 900) and waits. Cancelling the parent ends the prompt
+# only; cancelling the subagent reports idle. The answer to 900 goes to the
+# file named by argv[1].
+SUBAGENT_OUTLIVES_CANCEL_AGENT = r"""
+import json, sys
+SID, CHILD = "parent", "parent-agent-1"
+prompt = None
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def update(sid, body):
+    send({"method": "session/update", "params": {"sessionId": sid, "update": body}})
+
+def subagent(state):
+    update(SID, {"sessionUpdate": "subagent_update", "sessionId": CHILD, "title": "Run the tests",
+                 "capabilities": {"cancel": {}}, "state": state})
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None:
+        if msg.get("id") == 900:
+            with open(sys.argv[1], "w", encoding="utf-8") as answer:
+                json.dump(msg.get("result"), answer)
+        continue
+    if method == "session/cancel":
+        if msg["params"]["sessionId"] == SID and prompt is not None:
+            send({"id": prompt, "result": {"stopReason": "cancelled"}})
+            prompt = None
+        elif msg["params"]["sessionId"] == CHILD:
+            subagent({"state": "idle", "stopReason": "cancelled"})
+        continue
+    if "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": SID}
+    elif method == "session/prompt":
+        prompt = msg["id"]
+        subagent({"state": "running"})
+        update(CHILD, {"sessionUpdate": "tool_call", "toolCallId": "run", "title": "pytest -q",
+                       "kind": "execute", "status": "pending"})
+        subagent({"state": "requires_action"})
+        send({"id": 900, "method": "session/request_permission", "params": {
+            "sessionId": CHILD,
+            "toolCall": {"toolCallId": "run", "title": "pytest -q", "kind": "execute"},
+            "options": [{"optionId": "allow", "name": "Allow once", "kind": "allow_once"}]}})
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+class TestSubagents:
+    """ACP subagent sessions (``clientCapabilities.subagents``), against the
+    fake agent's ``subagent`` scenario: each child is a ``subagent`` item
+    with its task, checklist and answer; its tool calls are tool items of its
+    own (``<child id>:<tool call id>``). The Claude and Codex flavors send
+    the stable form, Cursor the draft form."""
+
+    FOREGROUND = "Find the login code"
+    BACKGROUND = "Run the tests"
+    ANSWER = "The login handler checks the user in login.py, line 12."
+
+    @staticmethod
+    def _card(m: TimelineMirror, title: str) -> dict[str, Any]:
+        (card,) = [item for item in m.of_type("subagent") if item["title"] == title]
+        return card
+
+    @staticmethod
+    def _tools_of(m: TimelineMirror, card: dict[str, Any]) -> list[dict[str, Any]]:
+        prefix = f"{card['subagent_id']}:"
+        return [item for item in m.of_type("tool") if item["id"].startswith(prefix)]
+
+    @staticmethod
+    async def _run(m: TimelineMirror, answer: str = "The tests run in the background.") -> None:
+        await m.command("prompt", text="subagent")
+        await m.until(lambda: m.status == "ready" and _says(m, answer))
+
+    async def test_a_subagent_is_a_card_with_its_task_checklist_tool_calls_and_answer(
+        self, open_chat, monkeypatch
+    ):
+        monkeypatch.setenv("MOBAIDE_FAKE_ACP_SUBAGENT_DELAY", "30")
+        m = await open_chat(subagents=True)
+
+        await self._run(m)
+
+        done = self._card(m, self.FOREGROUND)
+        assert done["id"] == f"sa:{done['subagent_id']}"
+        assert done["parent_subagent_id"] is None
+        assert (done["description"], done["task"]) == (
+            "Explore",
+            "Find where the login handler checks the user.",
+        )
+        assert (done["state"], done["stop_reason"], done["can_cancel"]) == ("idle", "end_turn", False)
+        assert done["result"] == self.ANSWER
+        assert [(e["content"], e["status"]) for e in done["plan"]] == [
+            ("Find the handler", "completed"),
+            ("Check the user test", "completed"),
+        ]
+        (read,) = self._tools_of(m, done)
+        assert (read["subagent_id"], read["title"], read["status"]) == (
+            done["subagent_id"],
+            "Find the login code: Read login.py",
+            "completed",
+        )
+        # The child's checklist and its own text stay on its card.
+        assert not m.state.get("plan")
+        assert not _says(m, "line 12")
+
+        running = self._card(m, self.BACKGROUND)
+        assert (running["state"], running["can_cancel"]) == ("running", True)
+        assert running["task"] == "Run the test suite and report failures."
+        (run,) = self._tools_of(m, running)
+        assert (run["title"], run["status"]) == ("Run the tests: pytest -q", "in_progress")
+
+    async def test_the_chat_s_stop_spares_a_running_subagent_and_its_own_stop_ends_it(
+        self, open_chat, monkeypatch
+    ):
+        monkeypatch.setenv("MOBAIDE_FAKE_ACP_SUBAGENT_DELAY", "30")
+        m = await open_chat(subagents=True)
+        await self._run(m)
+        card = self._card(m, self.BACKGROUND)
+        (run,) = self._tools_of(m, card)
+
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running" and _says(m, "Working"))
+        await m.command("cancel")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("turn_end")))
+
+        assert m.of_type("turn_end")[0]["stop_reason"] == "cancelled"
+        assert m.items[run["id"]]["status"] == "in_progress"
+        assert self._card(m, self.BACKGROUND)["state"] == "running"
+
+        ok = await m.command("cancel_subagent", subagent_id=card["subagent_id"])
+
+        assert ok["ok"] is True
+        await m.until(lambda: self._card(m, self.BACKGROUND)["state"] == "idle")
+        stopped = self._card(m, self.BACKGROUND)
+        assert (stopped["stop_reason"], stopped["can_cancel"]) == ("cancelled", False)
+        await m.until(lambda: m.items[run["id"]]["status"] == "cancelled")
+        assert self._card(m, self.FOREGROUND)["state"] == "idle"
+        again = await m.command("cancel_subagent", subagent_id=card["subagent_id"])
+        assert again["error"] == "This subagent cannot be stopped"
+        unknown = await m.command("cancel_subagent", subagent_id="no-such-agent")
+        assert unknown["error"] == "Unknown subagent"
+
+    async def test_a_foreground_subagent_the_chat_s_stop_ends_takes_its_request_with_it(
+        self, open_chat
+    ):
+        m = await open_chat(subagents=True)
+        await m.command("prompt", text="subagent permission")
+        await m.until(lambda: bool(m.state.get("requests")))
+        (request,) = m.state["requests"]
+        await m.until(lambda: self._card(m, self.FOREGROUND)["state"] == "requires_action")
+        card = self._card(m, self.FOREGROUND)
+
+        tool = m.items[request["tool_call_id"]]
+        assert request["tool_call_id"].startswith(f"{card['subagent_id']}:")
+        assert (tool["subagent_id"], tool["title"]) == (
+            card["subagent_id"],
+            "Find the login code: rm -rf build/",
+        )
+
+        await m.command("cancel")
+
+        await m.until(lambda: m.state["requests"] == [])
+        late = await m.command("respond", request_id=request["id"], option_id="allow")
+        assert late["ok"] is False
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("turn_end")))
+        await m.until(lambda: self._card(m, self.FOREGROUND)["state"] == "idle")
+        ended = self._card(m, self.FOREGROUND)
+        assert (ended["stop_reason"], ended["result"]) == ("cancelled", None)
+        read = next(t for t in self._tools_of(m, ended) if t["title"].endswith("Read login.py"))
+        await m.until(lambda: m.items[read["id"]]["status"] == "cancelled")
+        assert m.state["requests"] == []
+
+    async def test_a_request_from_a_session_never_announced_is_refused(self, open_chat):
+        m = await open_chat(argv=CLIENT_REQUEST_AGENT_ARGV, subagents=True)
+        call = {
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "someone-else",
+                "toolCall": {"toolCallId": "t1", "title": "rm -rf build/", "kind": "execute"},
+                "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
+            },
+        }
+
+        await m.command("prompt", text=orjson.dumps(call).decode())
+        await m.until(lambda: m.status == "ready" and bool(m.texts("agent")))
+
+        assert orjson.loads(m.texts("agent")[-1]) == {"error": -32602}
+        assert not _asked(m.frames)
+        assert "t1" not in m.items
+
+    async def test_codex_subagents_answer_with_their_last_message_and_keep_the_chat_working(
+        self, open_chat, monkeypatch
+    ):
+        monkeypatch.setenv("MOBAIDE_FAKE_ACP_SUBAGENT_DELAY", "30")
+        m = await open_chat(argv=fake_agent_argv("codex"), subagents=True)
+
+        await self._run(m)
+
+        assert self._card(m, self.FOREGROUND)["result"] == self.ANSWER
+        card = self._card(m, self.BACKGROUND)
+        assert card["can_cancel"] is True
+        await m.until(lambda: m.state.get("background") == "working")
+        assert m.session.to_info().activity == "working"
+
+        ok = await m.command("cancel_subagent", subagent_id=card["subagent_id"])
+
+        assert ok["ok"] is True
+        await m.until(lambda: m.state.get("background") is None)
+        assert self._card(m, self.BACKGROUND)["state"] == "idle"
+        assert m.session.to_info().activity == "idle"
+
+    async def test_cursor_s_draft_subagent_is_a_card_tied_to_the_tool_call_that_launched_it(
+        self, open_chat, monkeypatch
+    ):
+        monkeypatch.setenv("MOBAIDE_FAKE_ACP_SUBAGENT_DELAY", "0.2")
+        m = await open_chat(argv=fake_agent_argv("cursor"), kind=SessionKind.CURSOR, subagents=True)
+
+        await self._run(m, answer="The subagent finished: all 12 tests passed.")
+
+        (card,) = m.of_type("subagent")
+        assert (card["title"], card["task"]) == ("shell", "Run the test suite and report failures.")
+        assert (card["state"], card["stop_reason"], card["can_cancel"]) == ("idle", "end_turn", False)
+        # Cursor sends the answer only as the launching tool call's output.
+        await m.until(lambda: self._card(m, "shell")["result"] == "All 12 tests passed.")
+        (run,) = self._tools_of(m, card)
+        assert (run["subagent_id"], run["status"]) == (card["subagent_id"], "completed")
+        (launch,) = [
+            item
+            for item in m.of_type("tool")
+            if item.get("subagent_id") == card["subagent_id"] and item is not run
+        ]
+        assert not launch["id"].startswith(f"{card['subagent_id']}:")
+        assert launch["status"] == "completed"
+
+    async def test_a_replayed_subagent_keeps_its_tool_calls_and_cannot_be_stopped(self, open_chat):
+        m = await open_chat(load_session_id="external-1111", subagents=True)
+        await m.until(lambda: m.state.get("title") == "Earlier session")
+
+        (card,) = m.of_type("subagent")
+        child = "external-1111-replay-agent"
+        assert card["subagent_id"] == child
+        assert (card["state"], card["can_cancel"], card["task"]) == (
+            "idle",
+            False,
+            "Find the login handler.",
+        )
+        assert m.items[f"{child}:replay-read"]["subagent_id"] == child
+        assert "replay-read" not in m.items
+
+    async def test_the_chat_s_stop_keeps_a_waiting_subagent_s_request_until_it_reports_idle(
+        self, open_chat, tmp_path
+    ):
+        answer = tmp_path / "answer.json"
+        m = await open_chat(
+            argv=[sys.executable, "-c", SUBAGENT_OUTLIVES_CANCEL_AGENT, str(answer)], subagents=True
+        )
+        await m.command("prompt", text="work")
+        await m.until(lambda: bool(m.state.get("requests")))
+        (request,) = m.state["requests"]
+
+        await m.command("cancel")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("turn_end")))
+
+        assert [r["id"] for r in m.state["requests"]] == [request["id"]]
+        assert self._card(m, "Run the tests")["state"] == "requires_action"
+        assert not answer.exists()
+
+        ok = await m.command("cancel_subagent", subagent_id="parent-agent-1")
+
+        assert ok["ok"] is True
+        await m.until(lambda: self._card(m, "Run the tests")["state"] == "idle")
+        assert self._card(m, "Run the tests")["stop_reason"] == "cancelled"
+        assert m.state["requests"] == []
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 10
+        while not answer.exists() or not answer.read_text(encoding="utf-8"):
+            assert loop.time() < deadline
+            await asyncio.sleep(0.02)
+        assert orjson.loads(answer.read_text(encoding="utf-8")) == {"outcome": {"outcome": "cancelled"}}
+
+    async def test_after_a_load_a_subagent_the_agent_reports_running_runs_and_the_rest_are_unknown(
+        self, open_chat
+    ):
+        def subagent(child: str, title: str) -> dict[str, Any]:
+            return {
+                "sessionUpdate": "subagent_update",
+                "sessionId": child,
+                "title": title,
+                "capabilities": {"cancel": {}},
+                "state": {"state": "running"},
+            }
+
+        replayed = [subagent("live", "Run the tests"), subagent("left", "Explore")]
+        current = [
+            subagent("live", "Run the tests"),
+            {"sessionUpdate": "session_info_update", "title": "Loaded"},
+        ]
+        m = await open_chat(
+            argv=_replay_agent(replayed, current), load_session_id="stored-1", subagents=True
+        )
+        await m.until(lambda: m.state.get("title") == "Loaded" and len(m.of_type("subagent")) == 2)
+
+        live, left = self._card(m, "Run the tests"), self._card(m, "Explore")
+        assert (live["state"], live["can_cancel"]) == ("running", True)
+        assert (left["state"], left["can_cancel"]) == ("unknown", False)
+
+    async def test_the_agent_s_exit_leaves_no_subagent_running(self, open_chat, monkeypatch):
+        monkeypatch.setenv("MOBAIDE_FAKE_ACP_SUBAGENT_DELAY", "30")
+        m = await open_chat(subagents=True)
+        await self._run(m)
+        card = self._card(m, self.BACKGROUND)
+
+        await m.command("prompt", text="crash")
+        await m.until(lambda: m.status == "error")
+        await m.until(lambda: self._card(m, self.BACKGROUND)["state"] == "unknown")
+
+        assert self._card(m, self.BACKGROUND)["can_cancel"] is False
+        gone = await m.command("cancel_subagent", subagent_id=card["subagent_id"])
+        assert gone["error"] == "Unknown subagent"

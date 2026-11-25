@@ -277,6 +277,10 @@ class ChatLaunchPlan:
     # Agent SDK options for claude-agent-acp, sent as
     # ``_meta.claudeCode.options`` with ``session/new`` and ``session/load``.
     claude_sdk_options: Mapping[str, Any] = field(default_factory=dict)
+    # Declare ``clientCapabilities.subagents``: the agent reports its
+    # subagents as child sessions (see :mod:`.subagents`). Only for an agent
+    # whose child traffic the chat routes; others keep the flat tool calls.
+    subagents: bool = False
 
 
 class ChatAgentSpec(Protocol):
@@ -850,6 +854,7 @@ class ClaudeChatSpec(_AdapterSpec):
             hook_port=hook_endpoint[0] if hook_endpoint is not None else None,
             # With no terminal, Claude Code writes the log to ~/.claude/debug/.
             claude_sdk_options={"debug": True} if options.debug else {},
+            subagents=True,
         )
 
     def _claude_bin(self) -> str | None:
@@ -944,6 +949,7 @@ class CodexChatSpec(_AdapterSpec):
             sign_in=codex_sign_in_methods(
                 codex_bin, spec.env, fake=fake, shared_app_server=self.live_sessions
             ),
+            subagents=True,
         )
 
     def _shared_codex_path(
@@ -1365,6 +1371,9 @@ class CursorChatSpec(_ChatSpecBase):
             auto_approve=options.force and fixed,
             client_meta=CURSOR_CLIENT_META,
             markdown_titles=True,
+            # Cursor reads the top-level key too; with it a prompt waits for
+            # its background subagents.
+            subagents=True,
         )
 
 

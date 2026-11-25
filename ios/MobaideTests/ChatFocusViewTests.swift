@@ -29,6 +29,34 @@ final class ChatFocusViewTests: XCTestCase {
         )))
     }
 
+    private func ownedTool(_ id: String, _ subagentId: String) -> ChatItem {
+        ChatItem(id: id, body: .tool(ChatToolCall(
+            title: "Run tests",
+            kind: "execute",
+            status: "in_progress",
+            subtitle: nil,
+            locations: [],
+            content: [],
+            input: nil,
+            subagentId: subagentId
+        )))
+    }
+
+    private func card(_ subagentId: String, parent: String? = nil, state: String = "running") -> ChatItem {
+        ChatItem(id: "sa:\(subagentId)", body: .subagent(ChatSubagent(
+            subagentId: subagentId,
+            parentSubagentId: parent,
+            title: "Explore",
+            description: nil,
+            task: nil,
+            state: state,
+            stopReason: nil,
+            result: nil,
+            canCancel: false,
+            plan: []
+        )))
+    }
+
     private func notice(_ id: String) -> ChatItem {
         ChatItem(id: id, body: .notice(severity: "info", title: "Loaded", text: ""))
     }
@@ -55,12 +83,13 @@ final class ChatFocusViewTests: XCTestCase {
         ChatFocusView.rows(items, focus: focus, running: running, waitingToolIds: waiting, open: open)
     }
 
-    /// Item rows by id (nested ones indented), steps rows as `<id> ×<count>`.
+    /// Item rows by id (nested ones indented), steps rows as `<id> ×<count>`, groups as `<id> [<card ids>]`.
     private func outline(_ rows: [ChatTimelineRow]) -> [String] {
         rows.map { row in
             switch row {
             case .item(let item, let nested): return nested ? "  \(item.id)" : item.id
             case .steps(let id, let count, _, _, _): return "\(id) ×\(count)"
+            case .subagents(let id, let cards, _): return "\(id) [\(cards.map(\.item.id).joined(separator: " "))]"
             }
         }
     }
@@ -157,5 +186,82 @@ final class ChatFocusViewTests: XCTestCase {
             ["u:1", "steps:t:2 ×3", "  t:2", "  m:3", "  tool-4", "m:5", "u:6", "steps:tool-7 ×1", "m:8"]
         )
         XCTAssertEqual(steps(result).map(\.open), [true, false])
+    }
+
+    func testACardTakesItsToolCallsAndTheCardsNestedInItOutOfTheMainFlow() throws {
+        let items = [
+            user("u:1"), card("c1"), ownedTool("c1:read", "c1"), card("c2", parent: "c1"),
+            ownedTool("c2:grep", "c2"), ownedTool("c9:run", "c9"), agent("m:2"),
+        ]
+
+        let layout = ChatSubagentLayout(items)
+
+        XCTAssertEqual(layout.visible.map(\.id), ["u:1", "sa:c1", "c9:run", "m:2"])
+        let outer = try XCTUnwrap(layout.nodes["sa:c1"])
+        XCTAssertEqual(outer.tools.map(\.id), ["c1:read"])
+        XCTAssertEqual(outer.children.map(\.item.id), ["sa:c2"])
+        XCTAssertEqual(outer.children.first?.tools.map(\.id), ["c2:grep"])
+        XCTAssertEqual(layout.nodes["sa:c2"]?.tools.map(\.id), ["c2:grep"])
+    }
+
+    func testACardStaysInTheMainFlowWhenItsParentCardIsAbsentOrTheParentsLoop() {
+        let orphan = ChatSubagentLayout([card("c2", parent: "gone"), ownedTool("c2:grep", "c2")])
+        XCTAssertEqual(orphan.visible.map(\.id), ["sa:c2"])
+        XCTAssertEqual(orphan.nodes["sa:c2"]?.tools.map(\.id), ["c2:grep"])
+
+        let loop = ChatSubagentLayout([card("c1", parent: "c2"), card("c2", parent: "c1"), card("c3", parent: "c1")])
+        XCTAssertEqual(loop.visible.map(\.id), ["sa:c1", "sa:c2", "sa:c3"])
+        XCTAssertTrue(loop.nodes.values.allSatisfy { $0.children.isEmpty })
+    }
+
+    func testACardNeverFoldsAndTheAgentMessageBeforeItFoldsAsWork() {
+        let items = [user("u:1"), agent("m:2"), card("c1"), ownedTool("c1:read", "c1"), agent("m:3")]
+
+        XCTAssertEqual(outline(rows(items)), ["u:1", "steps:m:2 ×1", "sa:c1", "m:3"])
+        XCTAssertEqual(outline(rows(items, focus: false)), ["u:1", "m:2", "sa:c1", "m:3"])
+    }
+
+    func testCardsWithOnlyWorkBetweenThemFormOneGroupAtTheFirstCard() {
+        let items = [user("u:1"), card("c1"), tool("tool-2"), card("c2"), thought("t:3"), card("c3"), agent("m:4"), card("c4")]
+
+        XCTAssertEqual(
+            outline(rows(items, focus: false)),
+            ["u:1", "subagents:sa:c1 [sa:c1 sa:c2 sa:c3]", "tool-2", "t:3", "m:4", "sa:c4"]
+        )
+        // The agent message folds: the card after it counts as work.
+        XCTAssertEqual(outline(rows(items)), ["u:1", "subagents:sa:c1 [sa:c1 sa:c2 sa:c3]", "steps:tool-2 ×3", "sa:c4"])
+    }
+
+    func testACardThatNeedsTheUserStaysOutOfItsGroupAndAGroupOpensOnlyOnRequest() {
+        let items = [card("c1"), card("c2", state: "requires_action"), card("c3"), card("c4"), ownedTool("c4:run", "c4")]
+        let group = ChatFocusView.subagentGroupId(firstCardId: "sa:c1")
+
+        let opened = rows(items, waiting: ["c4:run"], open: [group])
+
+        XCTAssertEqual(outline(opened), ["\(group) [sa:c1 sa:c3]", "sa:c2", "sa:c4"])
+        guard case .subagents(_, _, let isOpen) = opened.first, case .subagents(_, _, let closed) = rows(items, waiting: ["c4:run"]).first else {
+            return XCTFail("expected a group first")
+        }
+        XCTAssertTrue(isOpen)
+        XCTAssertFalse(closed)
+    }
+
+    func testCardsShowOnTheirOwnWhenFewerThanTwoAreCalmCountingANestedRequest() {
+        let items = [card("c1"), card("c2"), card("c3", parent: "c2"), ownedTool("c3:run", "c3")]
+
+        XCTAssertEqual(outline(rows(items, waiting: ["c3:run"])), ["sa:c1", "sa:c2"])
+    }
+
+    func testAGroupListsTheCardsStillWorkingFirstAndTheFinishedOnesLastEachInLaunchOrder() {
+        let items = [card("c1", state: "idle"), card("c2"), card("c3", state: "idle"), card("c4")]
+
+        XCTAssertEqual(outline(rows(items)), ["subagents:sa:c1 [sa:c2 sa:c4 sa:c1 sa:c3]"])
+    }
+
+    func testResultPreviewIsTheFirstTextLineWithoutMarkdownMarks() {
+        XCTAssertEqual(ChatFocusView.resultPreview("\n## **Found** the `login` handler\nmore"), "Found the login handler")
+        XCTAssertEqual(ChatFocusView.resultPreview("---\n- one item"), "one item")
+        XCTAssertNil(ChatFocusView.resultPreview("  \n"))
+        XCTAssertNil(ChatFocusView.resultPreview(nil))
     }
 }

@@ -100,14 +100,29 @@ fun ChatTimeline(
     onRestart: () -> Unit,
     modifier: Modifier = Modifier,
     focusView: Boolean = false,
+    onStopSubagent: (String) -> Unit = {},
 ) {
     val items = ui.items
     val streamingId = ui.streamingItemId
     val waitingTools = ui.waitingToolIds
     val running = ui.running
     var openSteps by rememberSaveable(stateSaver = OpenStepsSaver) { mutableStateOf(emptySet<String>()) }
-    val rows = remember(items, focusView, running, waitingTools, openSteps) {
-        chatTimelineRows(items, focusView, running, waitingTools, openSteps)
+    val subagents = remember(items) { chatSubagentTree(items) }
+    val stoppingSubagents = ui.stoppingSubagents.keys
+    val canAct = ui.canAct
+    val rows = remember(items, subagents, focusView, running, waitingTools, openSteps) {
+        chatTimelineRows(items, focusView, running, waitingTools, openSteps, subagents)
+    }
+    val subagentContext = remember(subagents, waitingTools, stoppingSubagents, canAct, openSteps, onStopSubagent) {
+        SubagentCardContext(
+            tree = subagents,
+            waitingToolIds = waitingTools,
+            stopping = stoppingSubagents,
+            canAct = canAct,
+            open = openSteps,
+            onToggle = { key -> openSteps = if (key in openSteps) openSteps - key else openSteps + key },
+            onStop = onStopSubagent,
+        )
     }
     val reversed = remember(rows) { rows.asReversed() }
     val canRestart = ui.state.status == ChatStatus.ERROR && ui.live && !ui.sessionClosed
@@ -122,7 +137,7 @@ fun ChatTimeline(
         items(
             items = reversed,
             key = { it.key },
-            contentType = { row -> if (row is ChatTimelineRow.Item) row.item::class else ChatTimelineRow.Steps::class },
+            contentType = { row -> if (row is ChatTimelineRow.Item) row.item::class else row::class },
         ) { row ->
             when (row) {
                 is ChatTimelineRow.Steps -> StepsRow(
@@ -130,6 +145,12 @@ fun ChatTimeline(
                     onToggle = {
                         openSteps = if (row.key in openSteps) openSteps - row.key else openSteps + row.key
                     },
+                )
+                is ChatTimelineRow.Subagents -> ChatSubagentGroup(
+                    key = row.key,
+                    cards = row.cards,
+                    open = row.open,
+                    context = subagentContext,
                 )
                 is ChatTimelineRow.Item -> Box(
                     modifier = if (row.nested) Modifier.nestedStep(MaterialTheme.colorScheme.outlineVariant) else Modifier,
@@ -139,6 +160,7 @@ fun ChatTimeline(
                         is ChatItem.Agent -> AgentMessage(item, streaming = item.id == streamingId)
                         is ChatItem.Thought -> ThoughtRow(item, streaming = item.id == streamingId)
                         is ChatItem.Tool -> ChatToolCard(item, waitingForApproval = item.id in waitingTools)
+                        is ChatItem.Subagent -> ChatSubagentCard(item, subagentContext)
                         is ChatItem.Notice -> NoticeBanner(item)
                         is ChatItem.Compaction -> CompactionDivider(item)
                         is ChatItem.TurnEnd -> TurnEndLabel(item)

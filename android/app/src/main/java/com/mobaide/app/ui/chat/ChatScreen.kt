@@ -400,6 +400,7 @@ fun ChatScreen(
                                 listState = listState,
                                 onRestart = viewModel::restart,
                                 focusView = focusView,
+                                onStopSubagent = viewModel::stopSubagent,
                             )
                         }
                     }

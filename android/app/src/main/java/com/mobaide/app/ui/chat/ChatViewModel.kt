@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.chat.ChatConfigOption
 import com.mobaide.app.data.chat.ChatFrame
 import com.mobaide.app.data.chat.ChatImageEncoder
+import com.mobaide.app.data.chat.ChatItem
 import com.mobaide.app.data.chat.ChatProtocol
 import com.mobaide.app.data.chat.ChatReduction
 import com.mobaide.app.data.chat.ChatRequest
@@ -123,6 +124,7 @@ class ChatViewModel @Inject constructor(
         data class Respond(val requestId: String) : PendingCommand
         data class Simple(val failure: String?) : PendingCommand
         data class Queue(val queueId: String, val failure: String?) : PendingCommand
+        data class StopSubagent(val subagentId: String) : PendingCommand
         data object Restart : PendingCommand
         data object NewConversation : PendingCommand
     }
@@ -289,6 +291,7 @@ class ChatViewModel @Inject constructor(
                 restarting = false,
                 startingNew = false,
                 queueBusy = emptySet(),
+                stoppingSubagents = emptyMap(),
             )
         }
     }
@@ -362,6 +365,12 @@ class ChatViewModel @Inject constructor(
                 formDrafts = ui.formDrafts.filterKeys { it in requestIds },
                 restarting = ui.restarting && state.status == ChatStatus.ERROR,
                 queueBusy = ui.queueBusy.filterTo(HashSet()) { it in queueIds },
+                stoppingSubagents = if (ui.stoppingSubagents.isEmpty()) {
+                    ui.stoppingSubagents
+                } else {
+                    val cards = timeline.items.filterIsInstance<ChatItem.Subagent>().associateBy { it.subagentId }
+                    ui.stoppingSubagents.filter { (subagentId, card) -> cards[subagentId] == card }
+                },
             )
         }
     }
@@ -420,6 +429,11 @@ class ChatViewModel @Inject constructor(
                     reviewPromptCoordinator.noteError()
                     _messages.trySend(result.error ?: command.failure)
                 }
+            }
+            is PendingCommand.StopSubagent -> if (!result.ok) {
+                _ui.update { it.copy(stoppingSubagents = it.stoppingSubagents - command.subagentId) }
+                reviewPromptCoordinator.noteError()
+                _messages.trySend(result.error ?: "Could not stop the subagent")
             }
             PendingCommand.Restart -> {
                 _ui.update { it.copy(restarting = false) }
@@ -491,6 +505,20 @@ class ChatViewModel @Inject constructor(
     fun stop() {
         if (!_ui.value.canAct) return
         sendSimple("Could not stop the turn") { id -> ChatProtocol.cancel(id) }
+    }
+
+    fun stopSubagent(subagentId: String) {
+        val ui = _ui.value
+        if (!ui.canAct || subagentId in ui.stoppingSubagents) return
+        val card = ui.items.firstOrNull { it is ChatItem.Subagent && it.subagentId == subagentId } as? ChatItem.Subagent
+        if (card == null || !card.canCancel) return
+        val id = nextCommandId()
+        if (!send(ChatProtocol.cancelSubagent(id, subagentId))) {
+            _messages.trySend("Not connected. Try again.")
+            return
+        }
+        pending[id] = PendingCommand.StopSubagent(subagentId)
+        _ui.update { it.copy(stoppingSubagents = it.stoppingSubagents + (subagentId to card)) }
     }
 
     fun restart() {

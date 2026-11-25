@@ -35,32 +35,44 @@ export function PlanBar({ plan }: { plan: readonly ChatPlanEntry[] }) {
           <ChevronIcon />
         </span>
       </button>
-      {open && (
-        <ol className="chat-plan-list" id={listId}>
-          {plan.map((entry, index) => (
-            <li key={index} className={`chat-plan-entry chat-plan-${entry.status}`}>
-              <span className="chat-plan-mark" aria-hidden="true">
-                {entry.status === 'completed' ? (
-                  <CheckIcon />
-                ) : entry.status === 'in_progress' ? (
-                  <span className="chat-plan-active" />
-                ) : (
-                  <CircleIcon />
-                )}
-              </span>
-              <span className="chat-plan-text">{entry.content}</span>
-              <span className="visually-hidden">
-                {entry.status === 'completed'
-                  ? '(done)'
-                  : entry.status === 'in_progress'
-                    ? '(in progress)'
-                    : '(to do)'}
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
+      {open && <PlanList id={listId} plan={plan} />}
     </section>
+  );
+}
+
+export function PlanList({
+  id,
+  plan,
+  className,
+}: {
+  id: string;
+  plan: readonly ChatPlanEntry[];
+  className?: string;
+}) {
+  return (
+    <ol className={className === undefined ? 'chat-plan-list' : `chat-plan-list ${className}`} id={id}>
+      {plan.map((entry, index) => (
+        <li key={index} className={`chat-plan-entry chat-plan-${entry.status}`}>
+          <span className="chat-plan-mark" aria-hidden="true">
+            {entry.status === 'completed' ? (
+              <CheckIcon />
+            ) : entry.status === 'in_progress' ? (
+              <span className="chat-plan-active" />
+            ) : (
+              <CircleIcon />
+            )}
+          </span>
+          <span className="chat-plan-text">{entry.content}</span>
+          <span className="visually-hidden">
+            {entry.status === 'completed'
+              ? '(done)'
+              : entry.status === 'in_progress'
+                ? '(in progress)'
+                : '(to do)'}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
 

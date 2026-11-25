@@ -138,6 +138,7 @@ struct ChatToolCall: Equatable, Sendable {
     var locations: [ChatLocation]
     var content: [ChatContentPart]
     var input: String?
+    var subagentId: String? = nil
 
     var diffStats: (added: Int, removed: Int)? {
         guard ["edit", "delete", "move"].contains(kind) else { return nil }
@@ -161,6 +162,24 @@ struct ChatToolCall: Equatable, Sendable {
     }
 }
 
+/// A subagent the agent runs as a child session. An unknown `state` reads as `unknown`.
+struct ChatSubagent: Equatable, Sendable {
+    static let states: Set<String> = ["running", "requires_action", "idle", "unknown"]
+
+    var subagentId: String
+    var parentSubagentId: String?
+    var title: String
+    var description: String?
+    var task: String?
+    var state: String
+    var stopReason: String?
+    var result: String?
+    var canCancel: Bool
+    var plan: [ChatPlanEntry]
+
+    var isRunning: Bool { state == "running" }
+}
+
 struct ChatItem: Identifiable, Equatable, Sendable, Decodable {
     enum Body: Equatable, Sendable {
         case user(text: String, attachments: [ChatAttachment])
@@ -171,6 +190,7 @@ struct ChatItem: Identifiable, Equatable, Sendable, Decodable {
         case compaction(status: String, text: String)
         case turnEnd(stopReason: String?, text: String)
         case error(text: String)
+        case subagent(ChatSubagent)
     }
 
     let id: String
@@ -201,7 +221,8 @@ struct ChatItem: Identifiable, Equatable, Sendable, Decodable {
                 subtitle: c.string("subtitle"),
                 locations: c.list(ChatLocation.self, "locations"),
                 content: c.list(ChatContentPart.self, "content"),
-                input: c.string("input")
+                input: c.string("input"),
+                subagentId: c.string("subagent_id")
             ))
         case "notice":
             body = .notice(severity: c.string("severity") ?? "info", title: c.string("title") ?? "", text: text)
@@ -211,6 +232,22 @@ struct ChatItem: Identifiable, Equatable, Sendable, Decodable {
             body = .turnEnd(stopReason: c.string("stop_reason"), text: text)
         case "error":
             body = .error(text: text)
+        case "subagent":
+            let subagentId = c.string("subagent_id") ?? (id.hasPrefix("sa:") ? String(id.dropFirst(3)) : id)
+            let title = c.string("title") ?? ""
+            let state = c.string("state") ?? "unknown"
+            body = .subagent(ChatSubagent(
+                subagentId: subagentId,
+                parentSubagentId: c.string("parent_subagent_id"),
+                title: title.isEmpty ? "Subagent" : title,
+                description: c.string("description"),
+                task: c.string("task"),
+                state: ChatSubagent.states.contains(state) ? state : "unknown",
+                stopReason: c.string("stop_reason"),
+                result: c.string("result"),
+                canCancel: c.bool("can_cancel") ?? false,
+                plan: c.list(ChatPlanEntry.self, "plan")
+            ))
         default:
             throw ChatSkipError()
         }
@@ -225,7 +262,7 @@ struct ChatItem: Identifiable, Equatable, Sendable, Decodable {
         case .compaction(let status, let text): body = .compaction(status: status, text: text + suffix)
         case .turnEnd(let reason, let text): body = .turnEnd(stopReason: reason, text: text + suffix)
         case .error(let text): body = .error(text: text + suffix)
-        case .tool: break
+        case .tool, .subagent: break
         }
     }
 }

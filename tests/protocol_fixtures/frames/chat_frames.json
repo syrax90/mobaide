@@ -23,7 +23,8 @@
     { "name": "sign_in_start", "command": { "id": "c-14", "op": "sign_in", "action": "start", "method": "claude_ai" } },
     { "name": "sign_in_submit", "command": { "id": "c-15", "op": "sign_in", "action": "submit", "value": "ab12-cd34" } },
     { "name": "sign_in_cancel", "command": { "id": "c-16", "op": "sign_in", "action": "cancel" } },
-    { "name": "new_conversation", "command": { "id": "c-17", "op": "new_conversation" } }
+    { "name": "new_conversation", "command": { "id": "c-17", "op": "new_conversation" } },
+    { "name": "cancel_subagent", "command": { "id": "c-18", "op": "cancel_subagent", "subagent_id": "sess-7f2a-agent-1" } }
   ],
   "server": [
     {
@@ -311,6 +312,99 @@
         "seq": 54,
         "events": [
           { "type": "state", "seq": 54, "patch": { "queue": [], "limit_wait": null } }
+        ]
+      }
+    },
+    {
+      "name": "events_subagent_running",
+      "frame": {
+        "t": "events",
+        "epoch": "9f3a1c2b7d4e",
+        "seq": 57,
+        "events": [
+          {
+            "type": "item",
+            "seq": 55,
+            "item": {
+              "id": "sa:sess-7f2a-agent-1",
+              "type": "subagent",
+              "subagent_id": "sess-7f2a-agent-1",
+              "parent_subagent_id": null,
+              "title": "Find the login code",
+              "description": "Explore",
+              "task": "Find where the login handler checks the user.",
+              "state": "running",
+              "stop_reason": null,
+              "result": null,
+              "can_cancel": true,
+              "plan": [
+                { "content": "Find the handler", "status": "completed", "priority": "medium" },
+                { "content": "Check the user test", "status": "in_progress", "priority": "medium" }
+              ]
+            }
+          },
+          {
+            "type": "item",
+            "seq": 56,
+            "item": {
+              "id": "sess-7f2a-agent-1:toolu_07",
+              "type": "tool",
+              "title": "Find the login code: Read login.py",
+              "kind": "read",
+              "status": "in_progress",
+              "subtitle": "/project/login.py",
+              "locations": [{ "path": "/project/login.py" }],
+              "content": [],
+              "input": null,
+              "subagent_id": "sess-7f2a-agent-1"
+            }
+          },
+          {
+            "type": "item",
+            "seq": 57,
+            "item": {
+              "id": "sa:sess-7f2a-agent-2",
+              "type": "subagent",
+              "subagent_id": "sess-7f2a-agent-2",
+              "parent_subagent_id": "sess-7f2a-agent-1",
+              "title": "Read the tests",
+              "description": null,
+              "task": null,
+              "state": "requires_action",
+              "stop_reason": null,
+              "result": null,
+              "can_cancel": false,
+              "plan": []
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "events_subagent_done",
+      "frame": {
+        "t": "events",
+        "epoch": "9f3a1c2b7d4e",
+        "seq": 58,
+        "events": [
+          {
+            "type": "item",
+            "seq": 58,
+            "item": {
+              "id": "sa:sess-7f2a-agent-1",
+              "type": "subagent",
+              "subagent_id": "sess-7f2a-agent-1",
+              "parent_subagent_id": null,
+              "title": "Find the login code",
+              "description": "Explore",
+              "task": "Find where the login handler checks the user.",
+              "state": "idle",
+              "stop_reason": "end_turn",
+              "result": "The login handler checks the user in login.py, line 12.",
+              "can_cancel": false,
+              "plan": []
+            }
+          }
         ]
       }
     },

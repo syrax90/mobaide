@@ -36,12 +36,14 @@ struct ChatTimelineView: View {
                 let lastErrorId = model.items.last { if case .error = $0.body { return true } else { return false } }?.id
                 let waiting = model.waitingToolIds
                 let canRestart = model.phase == .error && model.isLive && !model.restarting
+                let layout = ChatSubagentLayout(model.items)
                 let rows = ChatFocusView.rows(
                     model.items,
                     focus: focusView,
                     running: model.isRunning,
                     waitingToolIds: waiting,
-                    open: model.expandedItems
+                    open: model.expandedItems,
+                    layout: layout
                 )
                 ForEach(rows) { row in
                     switch row {
@@ -50,6 +52,35 @@ struct ChatTimelineView: View {
                             model.toggleExpanded(id)
                         }
                         .chatTimelineRow()
+                    case .subagents(let id, let cards, _):
+                        ChatSubagentGroup(
+                            id: id,
+                            cards: cards,
+                            nested: false,
+                            expandedItems: model.expandedItems,
+                            waitingToolIds: waiting,
+                            stopping: model.stoppingSubagents,
+                            canStop: model.isLive,
+                            onToggle: { model.toggleExpanded($0) },
+                            onStop: { model.cancelSubagent($0) }
+                        )
+                        .equatable()
+                        .chatTimelineRow()
+                    case .item(let item, _) where layout.nodes[item.id] != nil:
+                        if let node = layout.nodes[item.id] {
+                            ChatSubagentCard(
+                                node: node,
+                                nested: false,
+                                expandedItems: model.expandedItems,
+                                waitingToolIds: waiting,
+                                stopping: model.stoppingSubagents,
+                                canStop: model.isLive,
+                                onToggle: { model.toggleExpanded($0) },
+                                onStop: { model.cancelSubagent($0) }
+                            )
+                            .equatable()
+                            .chatTimelineRow()
+                        }
                     case .item(let item, let nested):
                         ChatItemRow(
                             item: item,

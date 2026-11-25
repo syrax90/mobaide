@@ -176,7 +176,7 @@ fun ChatPlanBar(plan: List<ChatPlanEntry>, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PlanEntryRow(entry: ChatPlanEntry) {
+internal fun PlanEntryRow(entry: ChatPlanEntry) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val (icon, tint, label) = when (entry.status) {
         "completed" -> Triple(Icons.Default.Check, MaterialTheme.pixel.ok, "Done")

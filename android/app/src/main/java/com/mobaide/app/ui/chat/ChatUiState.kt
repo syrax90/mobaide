@@ -55,6 +55,8 @@ data class ChatUiState(
     val startingNew: Boolean = false,
     /** Queued messages with a remove or a Send now in flight. */
     val queueBusy: Set<String> = emptySet(),
+    /** Subagent id → its card as it was when this client sent Stop; Stop waits while the card is unchanged. */
+    val stoppingSubagents: Map<String, ChatItem.Subagent> = emptyMap(),
 ) {
     val status: String get() = if (sessionClosed) ChatStatus.STOPPED else state.status
 

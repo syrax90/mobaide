@@ -197,6 +197,17 @@ object ToolKind {
     fun normalize(raw: String?): String = if (raw in KNOWN) raw!! else "other"
 }
 
+object SubagentState {
+    const val RUNNING = "running"
+    const val REQUIRES_ACTION = "requires_action"
+    const val IDLE = "idle"
+    const val UNKNOWN = "unknown"
+
+    private val KNOWN = setOf(RUNNING, REQUIRES_ACTION, IDLE, UNKNOWN)
+
+    fun normalize(raw: String?): String = if (raw in KNOWN) raw!! else UNKNOWN
+}
+
 object ToolStatus {
     const val PENDING = "pending"
     const val IN_PROGRESS = "in_progress"
@@ -228,11 +239,28 @@ sealed interface ChatItem {
         val locations: List<ChatLocation>,
         val content: List<ChatContentPart>,
         val input: String?,
+        /** The subagent that owns this call; its card shows it instead of the main flow. */
+        val subagentId: String? = null,
     ) : ChatItem {
         val diffAdded: Int get() = content.sumOf { (it as? ChatContentPart.Diff)?.added ?: 0 }
         val diffRemoved: Int get() = content.sumOf { (it as? ChatContentPart.Diff)?.removed ?: 0 }
         val hasDiff: Boolean get() = content.any { it is ChatContentPart.Diff }
     }
+
+    /** A subagent the agent started, shown as a card with its own tool calls and nested subagents. */
+    data class Subagent(
+        override val id: String,
+        val subagentId: String,
+        val parentSubagentId: String?,
+        val title: String,
+        val description: String?,
+        val task: String?,
+        val state: String,
+        val stopReason: String?,
+        val result: String?,
+        val canCancel: Boolean,
+        val plan: List<ChatPlanEntry>,
+    ) : ChatItem
 
     data class Notice(
         override val id: String,
@@ -258,6 +286,7 @@ fun ChatItem.appendText(extra: String): ChatItem? = when (this) {
     is ChatItem.TurnEnd -> copy(text = text + extra)
     is ChatItem.Error -> copy(text = text + extra)
     is ChatItem.Tool -> null
+    is ChatItem.Subagent -> null
 }
 
 @Immutable
@@ -315,14 +344,7 @@ internal object ChatJson {
                 },
             )
         },
-        plan = obj.objects("plan").mapNotNull { entry ->
-            val content = entry.str("content") ?: return@mapNotNull null
-            ChatPlanEntry(
-                content = content,
-                status = entry.str("status") ?: "pending",
-                priority = entry.str("priority") ?: "medium",
-            )
-        },
+        plan = obj.objects("plan").mapNotNull(::planEntry),
         requests = obj.objects("requests").mapNotNull(::request),
         queue = obj.objects("queue").mapNotNull { q ->
             val id = q.str("id") ?: return@mapNotNull null
@@ -340,6 +362,15 @@ internal object ChatJson {
         },
         newConversation = obj.bool("new_conversation") == true,
     )
+
+    private fun planEntry(entry: JsonObject): ChatPlanEntry? {
+        val content = entry.str("content") ?: return null
+        return ChatPlanEntry(
+            content = content,
+            status = entry.str("status") ?: "pending",
+            priority = entry.str("priority") ?: "medium",
+        )
+    }
 
     private fun configOption(obj: JsonObject): ChatConfigOption? {
         val id = obj.str("id") ?: return null
@@ -486,7 +517,24 @@ internal object ChatJson {
                 },
                 content = obj.objects("content").mapNotNull(::contentPart),
                 input = obj.str("input"),
+                subagentId = obj.str("subagent_id"),
             )
+            "subagent" -> {
+                val state = SubagentState.normalize(obj.str("state"))
+                ChatItem.Subagent(
+                    id = id,
+                    subagentId = obj.str("subagent_id") ?: id.removePrefix("sa:"),
+                    parentSubagentId = obj.str("parent_subagent_id"),
+                    title = obj.str("title")?.takeIf { it.isNotBlank() } ?: "Subagent",
+                    description = obj.str("description")?.takeIf { it.isNotBlank() },
+                    task = obj.str("task")?.takeIf { it.isNotBlank() },
+                    state = state,
+                    stopReason = obj.str("stop_reason"),
+                    result = obj.str("result")?.takeIf { it.isNotBlank() },
+                    canCancel = obj.bool("can_cancel") == true,
+                    plan = obj.objects("plan").mapNotNull(::planEntry),
+                )
+            }
             "notice" -> ChatItem.Notice(
                 id = id,
                 severity = obj.str("severity") ?: "info",

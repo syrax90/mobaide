@@ -255,6 +255,11 @@ export class ChatSessionModel {
     return this.command({ op: 'cancel' });
   }
 
+  /** Stops only that subagent; the parent's turn goes on. */
+  cancelSubagent(subagentId: string): Promise<ChatResult> {
+    return this.command({ op: 'cancel_subagent', subagent_id: subagentId });
+  }
+
   /** A second call while one is in flight shares its result instead of sending again. */
   restart(): Promise<ChatResult> {
     if (this.restartInFlight !== null) return this.restartInFlight;

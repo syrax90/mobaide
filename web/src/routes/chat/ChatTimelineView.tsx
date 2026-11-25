@@ -9,9 +9,9 @@ import {
 } from 'react';
 import { useStore } from 'zustand';
 import type { ChatSessionModel } from '../../chat/chatModel';
-import { timelineRows } from '../../chat/focusView';
+import { subagentTree, timelineRows } from '../../chat/focusView';
 import { useChatPrefsStore } from '../../stores/chatPrefsStore';
-import { ChatItemView, StepsRow } from './ChatItems';
+import { ChatItemView, StepsRow, SubagentGroup, type SubagentContext } from './ChatItems';
 import { MiddleEllipsis } from './MiddleEllipsis';
 
 /** Within this many pixels of the end counts as "at the bottom". */
@@ -60,10 +60,12 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
   }, [requests]);
 
   const running = status === 'running';
+  const tree = useMemo(() => subagentTree(items), [items]);
   const rows = useMemo(
-    () => timelineRows(items, { focus, running, waitingTools, open: openSteps }),
-    [items, focus, running, waitingTools, openSteps],
+    () => timelineRows(tree.visible, { focus, running, waitingTools, open: openSteps, tree }),
+    [tree, focus, running, waitingTools, openSteps],
   );
+  const live = useStore(model.store, (view) => view.connection === 'live');
   const toggleSteps = useCallback((id: string) => {
     setOpenSteps((current) => {
       const next = new Set(current);
@@ -71,6 +73,17 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
       return next;
     });
   }, []);
+  const subagents = useMemo<SubagentContext>(
+    () => ({
+      tree,
+      waitingTools,
+      live,
+      onStop: (subagentId) => model.cancelSubagent(subagentId),
+      open: openSteps,
+      onToggle: toggleSteps,
+    }),
+    [tree, waitingTools, live, model, openSteps, toggleSteps],
+  );
 
   const scrollToEnd = useCallback(() => {
     const scroller = scrollRef.current;
@@ -189,6 +202,13 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
               </div>
             );
           }
+          if (row.kind === 'subagents') {
+            return (
+              <div key={row.id} className="chat-row chat-row-subagent">
+                <SubagentGroup id={row.id} cards={row.cards} open={row.open} context={subagents} />
+              </div>
+            );
+          }
           const { item } = row;
           return (
             <div
@@ -202,6 +222,7 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
                 canRestart={item.id === lastErrorId}
                 restarting={item.id === lastErrorId && restarting}
                 onRestart={onRestart}
+                subagents={item.type === 'subagent' ? subagents : undefined}
               />
             </div>
           );

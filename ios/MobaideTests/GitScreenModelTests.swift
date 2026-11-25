@@ -774,7 +774,8 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertEqual(sleeper.durations.last, GitScreenModel.deleteJobPollInterval)
 
         await tick(sleeper)
-        await waitUntil { model.forcePrompt != nil && !model.isDeleting }
+        // The prompt and the end of the progress come before the list reload is sent.
+        await waitUntil { model.forcePrompt != nil && !model.isDeleting && StubURLProtocol.requests.count == 5 }
 
         XCTAssertEqual(StubURLProtocol.requests.map(\.httpMethod), ["POST", "GET", "GET", "GET", "GET"])
         XCTAssertEqual(StubURLProtocol.requests.first?.url?.absoluteString.hasSuffix("/git/delete-jobs"), true)
