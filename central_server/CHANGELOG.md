@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.2.33](https://github.com/syrax90/mobaide/compare/server-v0.2.32...server-v0.2.33) (2026-11-25)
+
+
+### Features
+
+* **server:** add a page per AI agent with web, Android and iPhone demos ([#977](https://github.com/syrax90/mobaide/issues/977)) ([3fc056d](https://github.com/syrax90/mobaide/commit/3fc056d916f24a43ca372c8aeb0b6f5d59c09182))
+* **server:** mention Keep awake on the landing page ([#980](https://github.com/syrax90/mobaide/issues/980)) ([5c32e47](https://github.com/syrax90/mobaide/commit/5c32e4712fa94098f9ac0efa8e761a6678257aed))
+
 ## [0.2.32](https://github.com/syrax90/mobaide/compare/server-v0.2.31...server-v0.2.32) (2026-11-23)
 
 

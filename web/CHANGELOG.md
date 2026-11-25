@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.33](https://github.com/syrax90/mobaide/compare/web-v0.1.32...web-v0.1.33) (2026-11-25)
+
+
+### Features
+
+* **agent,android,ios,web:** keep the computer awake ([#957](https://github.com/syrax90/mobaide/issues/957)) ([83a6d10](https://github.com/syrax90/mobaide/commit/83a6d10d73d3dc318273c6eff3e0a61bf2a62ca1))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** make the No memory toggle turn off Claude Code auto memory ([#978](https://github.com/syrax90/mobaide/issues/978)) ([0d7f422](https://github.com/syrax90/mobaide/commit/0d7f4226cd42fc4412550a31a65621e73c943303))
+* **agent,android,ios,web:** show the next scan time on the Auto Scan detail screen ([#956](https://github.com/syrax90/mobaide/issues/956)) ([11fa545](https://github.com/syrax90/mobaide/commit/11fa54591869b3946d649f2d5aa2f5b7d160f7cc))
+
 ## [0.1.32](https://github.com/syrax90/mobaide/compare/web-v0.1.31...web-v0.1.32) (2026-11-23)
 
 

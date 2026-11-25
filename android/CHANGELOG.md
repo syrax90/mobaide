@@ -1,5 +1,19 @@
 # Android Changelog
 
+## [3.7.13](https://github.com/syrax90/mobaide/compare/android-v3.7.12...android-v3.7.13) (2026-11-25)
+
+
+### Features
+
+* **agent,android,ios,web:** keep the computer awake ([#957](https://github.com/syrax90/mobaide/issues/957)) ([83a6d10](https://github.com/syrax90/mobaide/commit/83a6d10d73d3dc318273c6eff3e0a61bf2a62ca1))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** make the No memory toggle turn off Claude Code auto memory ([#978](https://github.com/syrax90/mobaide/issues/978)) ([0d7f422](https://github.com/syrax90/mobaide/commit/0d7f4226cd42fc4412550a31a65621e73c943303))
+* **agent,android,ios,web:** show the next scan time on the Auto Scan detail screen ([#956](https://github.com/syrax90/mobaide/issues/956)) ([11fa545](https://github.com/syrax90/mobaide/commit/11fa54591869b3946d649f2d5aa2f5b7d160f7cc))
+* **android,ios:** follow a restarted Auto Scan run on the detail screen ([#979](https://github.com/syrax90/mobaide/issues/979)) ([2efffaf](https://github.com/syrax90/mobaide/commit/2efffaf3038d65c94b58ce05b7cd9fce29beef58))
+
 ## [3.7.12](https://github.com/syrax90/mobaide/compare/android-v3.7.11...android-v3.7.12) (2026-11-23)
 
 
