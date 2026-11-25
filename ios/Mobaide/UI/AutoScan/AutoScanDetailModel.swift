@@ -63,6 +63,15 @@ final class AutoScanDetailModel {
     private let repository: AutoScanRepository
     private var lastSeq: Int64 = 0
     private var nextLogId: Int64 = 0
+    /// `started_at` of the last run this screen knew as running. A listed run
+    /// that differs from it while the screen is stopped was started elsewhere.
+    private var knownRun: Double?
+    private var listedRun: Double?
+    private var wasStopped = false
+    private var frameTask: Task<Void, Never>?
+    private var restartPending = false
+    /// Bumped by a restart, so a reduction that awaited across it drops its old-run output.
+    private var generation = 0
 
     init(workspaceName: String, repository: AutoScanRepository) {
         self.workspaceName = workspaceName
@@ -80,12 +89,74 @@ final class AutoScanDetailModel {
 
     /// Consumes the detail frame stream until cancelled (the screen's `.task`
     /// cancels it on disappear, which disconnects the socket).
+    ///
+    /// `ws/autoscan` follows only the scans that ran when it connected, so a
+    /// scan started again elsewhere is noticed on the Sessions list, and the
+    /// frame stream is opened again from a fresh state.
     func run() async {
-        let resume = lastSeq > 0 ? [workspaceName: lastSeq] : [:]
-        let stream = repository.observeDetailFrames(workspace: workspaceName, resume: resume)
-        for await frame in stream {
-            await handle(frame)
+        let scans = repository.scans()
+        let watcher = Task { [weak self] in
+            for await list in scans {
+                guard let self else { return }
+                self.listedRun = list.first { $0.workspace_name == self.workspaceName }?.started_at
+                self.followRestart()
+            }
         }
+        defer { watcher.cancel() }
+        repeat {
+            restartPending = false
+            let resume = lastSeq > 0 ? [workspaceName: lastSeq] : [:]
+            let stream = repository.observeDetailFrames(workspace: workspaceName, resume: resume)
+            let consumer = Task { [weak self] in
+                for await frame in stream {
+                    // A cancelled stream can still hand over its buffered frames.
+                    guard !Task.isCancelled else { break }
+                    await self?.handle(frame)
+                }
+            }
+            frameTask = consumer
+            await withTaskCancellationHandler {
+                await consumer.value
+            } onCancel: {
+                consumer.cancel()
+            }
+            frameTask = nil
+        } while restartPending && !Task.isCancelled
+    }
+
+    private func followRestart() {
+        let justStopped = stopped && !wasStopped
+        wasStopped = stopped
+        guard stopped else {
+            // The snapshot names the running run; the list only fills in before it.
+            if knownRun == nil { knownRun = listedRun }
+            return
+        }
+        // Stopped before any run was known: a row listed now is the stopped run.
+        if justStopped, knownRun == nil { knownRun = listedRun }
+        guard let listedRun, listedRun != knownRun else { return }
+        knownRun = listedRun
+        restartDetail()
+    }
+
+    /// A new run's `seq` starts at 1, so the old cursor and log must go.
+    private func restartDetail() {
+        instance = nil
+        nextScanAt = nil
+        cycleNumber = 0
+        activePhase = nil
+        phases = Dictionary(uniqueKeysWithValues: Self.phaseOrder.map { ($0, PhaseState()) })
+        recentIssues = []
+        logLines = []
+        newLineCount = 0
+        connection = .connecting
+        stopped = false
+        wasStopped = false
+        lastSeq = 0
+        generation += 1
+        guard let frameTask else { return }
+        restartPending = true
+        frameTask.cancel()
     }
 
     func runNow() async {
@@ -114,6 +185,9 @@ final class AutoScanDetailModel {
         stopped = true
         activePhase = nil
         nextScanAt = nil
+        // Not inline: this runs inside a frame reduction, which must finish
+        // with the old run's state before a restart clears it.
+        Task { [weak self] in self?.followRestart() }
     }
 
     func setPaused(_ paused: Bool) {
@@ -136,13 +210,16 @@ final class AutoScanDetailModel {
             connection = .connecting
         case .snapshot(let scans, let events):
             let match = scans.first { $0.workspace_name == workspaceName }
+            if let match { knownRun = match.started_at }
             instance = match
             nextScanAt = match?.next_scan_at
             // Not listed: the PC no longer runs it. Listed again: started elsewhere.
-            if match == nil { markStopped() } else { stopped = false }
+            if match == nil { markStopped() } else { stopped = false; followRestart() }
             if let cycle = match?.cycle_number { cycleNumber = cycle }
             connection = .replaying
+            let current = generation
             for event in events[workspaceName] ?? [] {
+                guard current == generation else { return }
                 await reduceEvent(event)
             }
         case .caughtUp:
@@ -169,9 +246,11 @@ final class AutoScanDetailModel {
             let suffix = pid.map { " (pid=\($0))" } ?? ""
             appendLog(AttributedString("session: \(sessionId)\(suffix)"))
         case .log(let line, _, let ansi):
+            let current = generation
             let attributed = ansi
                 ? await Task.detached { AnsiParser.parse(line) }.value
                 : AttributedString(line)
+            guard current == generation else { return }
             appendLog(attributed)
         case .unknown:
             break

@@ -240,6 +240,114 @@ final class AutoScanDetailModelTests: XCTestCase {
         XCTAssertFalse(model.stopped)
         XCTAssertEqual(model.nextScanAt, "T1")
     }
+
+    // MARK: - Follow a scan started again elsewhere
+
+    private struct LiveStack {
+        let model: AutoScanDetailModel
+        let repository: AutoScanRepository
+        let sockets: FakeWebSocketTransportFactory
+        let runTask: Task<Void, Never>
+    }
+
+    /// `run()` over a scripted `ws/autoscan` socket, with the list seeded over REST.
+    private func liveModel(listedRun: Double) async throws -> LiveStack {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: listBody(startedAt: listedRun))
+        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
+        let bus = AgentEventBus(
+            webSocketFactory: .live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
+            sessionManager: harness.sessionManager,
+            tokenStore: harness.tokenStore
+        )
+        let agentAPI = AgentAPI(
+            baseURL: { "http://agent.example.com" },
+            tokens: FakeAgentTokens(token: AgentToken(value: "tok")),
+            client: HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
+        )
+        let sockets = FakeWebSocketTransportFactory()
+        let wsClient = AutoScanWsClient(
+            webSocketFactory: .live(transportFactory: sockets, sleeper: RecordingSleeper()),
+            urlProvider: { "ws://host/ws/autoscan?token=t" },
+            isAuthenticated: { true }
+        )
+        let repo = AutoScanRepository(agentAPI: agentAPI, agentEventBus: bus, wsClient: wsClient)
+        _ = await repo.refresh()
+        let model = AutoScanDetailModel(workspaceName: "p", repository: repo)
+        let runTask = Task { await model.run() }
+
+        let socket = try await sockets.connection(1)
+        socket.emit(.opened)
+        socket.emit(.text(#"{"type":"snapshot","data":{"scans":[\#(scanJSON(startedAt: listedRun))],"events":{}}}"#))
+        socket.emit(.text(wsEvent(seq: 5, type: "log", payload: #"{"line":"old run","level":"info","ansi":false}"#)))
+        await waitUntil { model.logLines.count == 1 }
+        XCTAssertEqual(model.logLines.count, 1)
+        return LiveStack(model: model, repository: repo, sockets: sockets, runTask: runTask)
+    }
+
+    private func scanJSON(startedAt: Double) -> String {
+        #"{"project_name":"p","status":"scanning","started_at":\#(startedAt),"last_activity_at":\#(startedAt)}"#
+    }
+
+    private func listBody(startedAt: Double) -> String {
+        #"{"scans":[\#(scanJSON(startedAt: startedAt))],"max_scans":5}"#
+    }
+
+    private func wsEvent(seq: Int64, type: String, payload: String) -> String {
+        #"{"type":"event","project_name":"p","event":{"seq":\#(seq),"ts":"T","type":"\#(type)","payload":\#(payload)}}"#
+    }
+
+    private func resumeMap(_ sent: String?) -> [String: Any]? {
+        guard let sent, let object = try? JSONSerialization.jsonObject(with: Data(sent.utf8)) as? [String: Any] else { return nil }
+        return object["resume_from_seq"] as? [String: Any]
+    }
+
+    func testAScanStoppedElsewhereAndListedWithANewRunRestartsTheStreamFromAFreshState() async throws {
+        let stack = try await liveModel(listedRun: 1.5)
+        defer { stack.runTask.cancel() }
+        let model = stack.model
+        let first = try await stack.sockets.connection(1)
+        first.emit(.text(wsEvent(seq: 6, type: "phase", payload: #"{"phase":"scan_stopped","cycle_number":1}"#)))
+        await waitUntil { model.stopped }
+        XCTAssertTrue(model.stopped)
+
+        // Started again elsewhere: a new run's seq starts at 1, so the cursor must not carry over.
+        StubURLProtocol.enqueue(status: 200, body: listBody(startedAt: 2.5))
+        _ = await stack.repository.refresh()
+        let second = try await stack.sockets.connection(2)
+        XCTAssertFalse(model.stopped)
+        XCTAssertTrue(model.logLines.isEmpty)
+        XCTAssertNil(model.instance)
+        XCTAssertTrue(model.phases.values.allSatisfy { $0.status == "pending" })
+
+        second.emit(.opened)
+        await waitUntil { !second.sentTexts.isEmpty }
+        let resume = try XCTUnwrap(resumeMap(second.sentTexts.first))
+        XCTAssertTrue(resume.isEmpty, "a restarted detail must not resume from the old run's cursor")
+
+        // The reopened stream feeds the fresh state.
+        second.emit(.text(wsEvent(seq: 1, type: "log", payload: #"{"line":"new run","level":"info","ansi":false}"#)))
+        await waitUntil { model.logLines.count == 1 }
+        XCTAssertEqual(model.logLines.count, 1)
+    }
+
+    func testAStopMadeOnTheScreenDoesNotRestartTheStream() async throws {
+        let stack = try await liveModel(listedRun: 1.5)
+        defer { stack.runTask.cancel() }
+        let model = stack.model
+
+        StubURLProtocol.enqueue(status: 200, body: "{}")
+        await model.stopScan()
+        XCTAssertTrue(model.stopped)
+        // A late list push that still names the stopped run is not a new run either.
+        StubURLProtocol.enqueue(status: 200, body: listBody(startedAt: 1.5))
+        _ = await stack.repository.refresh()
+
+        let noNewSocket = await stack.sockets.assertNoConnection(beyond: 1)
+        XCTAssertTrue(noNewSocket)
+        XCTAssertTrue(model.stopped)
+        XCTAssertEqual(model.logLines.count, 1)
+    }
 }
 
 private extension AutoScanFrame {

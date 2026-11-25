@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
@@ -97,6 +99,11 @@ class AutoScanDetailViewModel @Inject constructor(
     private var nextLogId: Long = 0L
     private var streamJob: Job? = null
 
+    // `started_at` of the last run this screen knew as running. A listed run
+    // that differs from it while the screen is stopped was started elsewhere.
+    private var knownRun: Double? = null
+    private var wasStopped = false
+
     init {
         // The stream is started by the foreground collector below rather than
         // here: `isForeground` is a StateFlow, so it replays its current value
@@ -113,6 +120,45 @@ class AutoScanDetailViewModel @Inject constructor(
                 if (foreground) startStream() else stopStream()
             }
         }
+        // `ws/autoscan` follows only the scans that ran when it connected, so a
+        // scan started again elsewhere is noticed on the Sessions list instead.
+        viewModelScope.launch {
+            combine(
+                repository.observeScans(),
+                _ui.map { it.stopped }.distinctUntilChanged(),
+            ) { scans, stopped ->
+                scans.firstOrNull { it.workspace_name == workspaceName }?.started_at to stopped
+            }.distinctUntilChanged().collect { (listedRun, stopped) ->
+                followRestart(listedRun, stopped)
+            }
+        }
+    }
+
+    private fun followRestart(listedRun: Double?, stopped: Boolean) {
+        val justStopped = stopped && !wasStopped
+        wasStopped = stopped
+        if (!stopped) {
+            // The snapshot names the running run; the list only fills in before it.
+            if (knownRun == null) knownRun = listedRun
+            return
+        }
+        // Stopped before any run was known: a row listed now is the stopped run.
+        if (justStopped && knownRun == null) knownRun = listedRun
+        if (listedRun == null || listedRun == knownRun) return
+        knownRun = listedRun
+        restartDetail()
+    }
+
+    /** A new run's `seq` starts at 1, so the old cursor and log must go. */
+    private fun restartDetail() {
+        logRing.clear()
+        _ui.update {
+            UiState(
+                connection = ConnectionState.Connecting,
+                isPausedAutoscroll = it.isPausedAutoscroll,
+            )
+        }
+        if (streamJob != null) startStream()
     }
 
     fun startStream() {
@@ -138,6 +184,7 @@ class AutoScanDetailViewModel @Inject constructor(
             }
             is AutoScanWsClient.Frame.Snapshot -> {
                 val instance = frame.scans.firstOrNull { it.workspace_name == workspaceName }
+                if (instance != null) knownRun = instance.started_at
                 _ui.update {
                     it.copy(
                         instance = instance,
