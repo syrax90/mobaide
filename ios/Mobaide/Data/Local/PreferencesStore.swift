@@ -277,8 +277,8 @@ struct PreferencesStore: @unchecked Sendable {
         let key = Self.recentCustomPathsKey(agentKey: agentKey)
         let remaining = getRecentCustomPaths(agentKey: agentKey).filter { $0 != trimmed }
         // Drop the key outright once emptied rather than parking an "[]" blob:
-        // in DIRECT mode the key embeds the agent URL, and `setOrRemove` /
-        // `removeAllAttentionSeen` set the same remove-don't-blank precedent.
+        // `setOrRemove` / `removeAllAttentionSeen` set the same
+        // remove-don't-blank precedent.
         if remaining.isEmpty {
             defaults.removeObject(forKey: key)
         } else {

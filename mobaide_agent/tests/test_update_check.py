@@ -1,6 +1,6 @@
 """Tests for the HTTPS-bootstrap update path in ``mobaide.agent.update_check``.
 
-Three public entry points:
+Four public entry points:
 
 * ``fetch_signed_manifest`` — parses ``GET /api/v1/agent/manifest.json``
   into ``(body, signature_b64, latest_version)``; raises
@@ -16,6 +16,9 @@ Three public entry points:
   every other exception is swallowed so a transient failure cannot
   silently tear down the background poll for the lifetime of the
   process.
+* ``refresh_manifest_trust`` — fetches the signed manifest before a
+  pairing and stores the trust data it carries. Best effort: a manifest
+  that does not verify, or that is older than this agent, stores nothing.
 
 Mocks rather than real HTTP: every test patches ``_http.urlopen`` via
 ``mobaide.agent.update_check._http.urlopen`` so no socket is opened.
@@ -23,18 +26,25 @@ Mocks rather than real HTTP: every test patches ``_http.urlopen`` via
 from __future__ import annotations
 
 import asyncio
+import base64
+import http.client
 import json
 import urllib.error
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from mobaide.agent.trust_store import ManifestTrust, load_manifest_trust
 from mobaide.agent.update_check import (
     UpdateCheckError,
     fetch_signed_manifest,
+    refresh_manifest_trust,
     run_https_update_check,
     run_periodic_check_loop,
 )
+from mobaide.agent.updater import InstallLayout
+from mobaide.manifest_signing import canonical_json
 
 
 class _FakeResponse:
@@ -146,6 +156,19 @@ class TestRunHttpsUpdateCheckOutcomes:
         # as a fresh manifest.
         updater = AsyncMock()
         with _patch_urlopen(side_effect=OSError("offline")):
+            outcome = await run_https_update_check(
+                updater, "https://example.com/x",
+            )
+
+        assert outcome == "unreachable"
+        updater.consider_manifest.assert_not_awaited()
+
+    async def test_an_answer_that_ends_early_is_unreachable(self):
+        # ``http.client`` errors are not ``OSError``. The startup check and
+        # the periodic poll await this call, so the error must become an
+        # outcome and must not reach them.
+        updater = AsyncMock()
+        with _patch_urlopen(side_effect=http.client.IncompleteRead(b"{")):
             outcome = await run_https_update_check(
                 updater, "https://example.com/x",
             )
@@ -273,3 +296,157 @@ class TestRunPeriodicCheckLoopBudget:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
+
+
+def _key_b64(private_key: Ed25519PrivateKey) -> str:
+    return base64.b64encode(private_key.public_key().public_bytes_raw()).decode()
+
+
+def _signed_trust_record(
+    private_key: Ed25519PrivateKey, *, version: str, pairing_key_b64: str
+) -> dict:
+    record = _valid_manifest_record(version=version)
+    record["body"]["trust"] = {"relay_pairing_public_keys": [pairing_key_b64]}
+    record["signature_b64"] = base64.b64encode(
+        private_key.sign(canonical_json(record["body"]))
+    ).decode()
+    return record
+
+
+class TestRefreshManifestTrust:
+    """An agent that is not paired has no relay tunnel and no updater, so
+    this fetch is how it learns the relay pairing keys. The relay serves the
+    manifest, so only the signature of a trusted release key gives it
+    authority.
+
+    The result tells the pairing loop when to ask again: ``None`` means no
+    manifest was fetched and verified (ask again soon), ``False`` means a
+    verified manifest changed nothing, ``True`` means new trust data was
+    stored."""
+
+    @pytest.fixture
+    def release_key(self) -> Ed25519PrivateKey:
+        return Ed25519PrivateKey.generate()
+
+    @pytest.fixture
+    def layout(self, tmp_path, monkeypatch, release_key) -> InstallLayout:
+        monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+        monkeypatch.delenv(
+            "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH", raising=False,
+        )
+        layout = InstallLayout(prefix=tmp_path / "mobaide")
+        layout.trust_dir.mkdir(parents=True)
+        layout.trust_public_key.write_text(
+            _key_b64(release_key) + "\n", encoding="utf-8",
+        )
+        return layout
+
+    async def test_stores_the_pairing_keys_of_a_verified_manifest(
+        self, layout, release_key
+    ):
+        pairing_key = _key_b64(Ed25519PrivateKey.generate())
+        record = _signed_trust_record(
+            release_key, version="0.5.0", pairing_key_b64=pairing_key,
+        )
+
+        with _patch_urlopen(body=json.dumps(record)) as urlopen:
+            changed = await refresh_manifest_trust(
+                layout, "wss://relay.test", current_version="0.5.0",
+            )
+
+        assert changed is True
+        assert load_manifest_trust(layout).relay_pairing_public_keys == (pairing_key,)
+        assert urlopen.call_args.args[0] == (
+            "https://relay.test/api/v1/agent/manifest.json"
+        )
+
+    async def test_a_verified_manifest_that_is_already_stored_changes_nothing(
+        self, layout, release_key
+    ):
+        pairing_key = _key_b64(Ed25519PrivateKey.generate())
+        record = _signed_trust_record(
+            release_key, version="0.5.0", pairing_key_b64=pairing_key,
+        )
+
+        with _patch_urlopen(body=json.dumps(record)):
+            first = await refresh_manifest_trust(
+                layout, "wss://relay.test", current_version="0.5.0",
+            )
+            second = await refresh_manifest_trust(
+                layout, "wss://relay.test", current_version="0.5.0",
+            )
+
+        assert first is True
+        # Not None: the fetch worked, so the caller does not ask again soon.
+        assert second is False
+        assert load_manifest_trust(layout).relay_pairing_public_keys == (pairing_key,)
+
+    @pytest.mark.parametrize(
+        "case, expected",
+        [
+            ("unknown_signer", None),
+            ("changed_after_signing", None),
+            # The signature is good, so this is an answer and not a failure.
+            ("older_than_agent", False),
+        ],
+    )
+    async def test_stores_nothing_from_a_manifest_it_cannot_accept(
+        self, layout, release_key, case, expected
+    ):
+        pairing_key = _key_b64(Ed25519PrivateKey.generate())
+        signer = (
+            Ed25519PrivateKey.generate() if case == "unknown_signer" else release_key
+        )
+        record = _signed_trust_record(
+            signer,
+            version="0.4.0" if case == "older_than_agent" else "0.5.0",
+            pairing_key_b64=pairing_key,
+        )
+        if case == "changed_after_signing":
+            record["body"]["trust"]["relay_pairing_public_keys"] = [
+                _key_b64(Ed25519PrivateKey.generate())
+            ]
+
+        with _patch_urlopen(body=json.dumps(record)):
+            changed = await refresh_manifest_trust(
+                layout, "wss://relay.test", current_version="0.5.0",
+            )
+
+        assert changed is expected
+        assert load_manifest_trust(layout) == ManifestTrust()
+
+    async def test_a_fetch_failure_is_not_an_error(self, layout):
+        with _patch_urlopen(side_effect=OSError("offline")):
+            changed = await refresh_manifest_trust(
+                layout, "wss://relay.test", current_version="0.5.0",
+            )
+
+        assert changed is None
+
+    async def test_an_answer_that_ends_early_is_not_an_error(self, layout):
+        # ``http.client`` errors are not ``OSError``. The pairing loop awaits
+        # this call and must not see the error.
+        with _patch_urlopen(side_effect=http.client.IncompleteRead(b"{")):
+            changed = await refresh_manifest_trust(
+                layout, "wss://relay.test", current_version="0.5.0",
+            )
+
+        assert changed is None
+
+    @pytest.mark.parametrize("case", ["no_pinned_key", "cleartext_relay_url"])
+    async def test_does_not_fetch_without_a_pinned_key_or_over_cleartext(
+        self, layout, case
+    ):
+        relay_server_url = "wss://relay.test"
+        if case == "no_pinned_key":
+            layout.trust_public_key.unlink()
+        else:
+            relay_server_url = "ws://relay.test"
+
+        with _patch_urlopen(body="{}") as urlopen:
+            changed = await refresh_manifest_trust(
+                layout, relay_server_url, current_version="0.5.0",
+            )
+
+        assert changed is None
+        urlopen.assert_not_called()

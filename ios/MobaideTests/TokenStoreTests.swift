@@ -7,23 +7,27 @@ final class TokenStoreTests: XCTestCase {
         return (TokenStore(keychain: keychain, now: { now }), keychain)
     }
 
-    func testSaveAgentUrlTrimsTrailingSlashes() {
-        let (store, _) = makeStore()
-        store.saveAgentUrl("https://agent.example.com///")
-        XCTAssertEqual(store.getAgentUrl(), "https://agent.example.com")
-    }
-
-    func testSaveRelayCredentialsSetsEverything() {
-        let (store, _) = makeStore()
+    private func saveRelayCredentials(_ store: TokenStore, serverUrl: String = "https://relay.example.com") {
         store.saveRelayCredentials(
-            serverUrl: "https://relay.example.com/",
+            serverUrl: serverUrl,
             agentId: "A1",
             pairingId: "P1",
             deviceId: "D1",
             accessToken: "at",
             refreshToken: "rt"
         )
-        XCTAssertEqual(store.getConnectionMode(), .relay)
+    }
+
+    /// What an app version with the removed direct connection mode left in
+    /// the keychain: an agent URL and tokens, and no relay connection.
+    private func seedCredentialsWithoutRelay(_ store: TokenStore, _ keychain: InMemoryKeychainStore) {
+        keychain.set("https://agent.example.com", forKey: TokenStore.keyAgentUrl)
+        store.saveTokens(accessToken: "direct-access", refreshToken: "direct-refresh")
+    }
+
+    func testSaveRelayCredentialsSetsEverything() {
+        let (store, _) = makeStore()
+        saveRelayCredentials(store, serverUrl: "https://relay.example.com/")
         XCTAssertEqual(store.getRelayServerUrl(), "https://relay.example.com")
         XCTAssertEqual(store.getAgentId(), "A1")
         XCTAssertEqual(store.getPairingId(), "P1")
@@ -32,68 +36,33 @@ final class TokenStoreTests: XCTestCase {
         XCTAssertEqual(store.getRefreshToken(), "rt")
     }
 
-    func testEffectiveBaseUrl() {
-        let (direct, _) = makeStore()
-        XCTAssertNil(direct.getEffectiveBaseUrl())
-        direct.saveAgentUrl("https://agent.example.com")
-        XCTAssertEqual(direct.getEffectiveBaseUrl(), "https://agent.example.com")
+    func testEffectiveBaseUrlIsTheRelayProxyOfTheAgent() {
+        let (store, _) = makeStore()
+        XCTAssertNil(store.getEffectiveBaseUrl())
 
-        let (relay, _) = makeStore()
-        relay.saveRelayCredentials(
-            serverUrl: "https://relay.example.com",
-            agentId: "A1",
-            pairingId: "P1",
-            deviceId: "D1",
-            accessToken: "at",
-            refreshToken: "rt"
-        )
-        XCTAssertEqual(relay.getEffectiveBaseUrl(), "https://relay.example.com/proxy/A1")
+        saveRelayCredentials(store)
+        XCTAssertEqual(store.getEffectiveBaseUrl(), "https://relay.example.com/proxy/A1")
     }
 
-    func testAgentScopeKeyPrefersTheAgentIdAndFallsBackToTheAgentUrl() {
+    func testAgentScopeKeyIsTheAgentId() {
         let (store, keychain) = makeStore()
         XCTAssertNil(store.getAgentScopeKey(), "a device that reached no agent has no per-agent bucket")
 
-        store.saveAgentUrl("https://agent.example.com///")
-        XCTAssertEqual(
-            store.getAgentScopeKey(), "https://agent.example.com",
-            "DIRECT mode is never issued an agent id, so the stored (trimmed) URL carries the scope"
-        )
-
-        store.saveRelayCredentials(
-            serverUrl: "https://relay.example.com",
-            agentId: "A1",
-            pairingId: "P1",
-            deviceId: "D1",
-            accessToken: "at",
-            refreshToken: "rt"
-        )
-        XCTAssertEqual(
-            store.getAgentScopeKey(), "A1",
-            "a paired agent keeps one bucket even though a direct URL is still on file"
-        )
+        saveRelayCredentials(store)
+        XCTAssertEqual(store.getAgentScopeKey(), "A1")
 
         keychain.removeValue(forKey: TokenStore.keyAgentId)
-        XCTAssertEqual(store.getAgentScopeKey(), "https://agent.example.com")
+        XCTAssertNil(store.getAgentScopeKey())
     }
 
-    func testIsLoggedInPerMode() {
-        let (direct, _) = makeStore()
-        XCTAssertFalse(direct.isLoggedIn())
-        direct.saveTokens(accessToken: "a", refreshToken: "r")
-        XCTAssertFalse(direct.isLoggedIn(), "direct mode also requires the agent URL")
-        direct.saveAgentUrl("https://agent.example.com")
-        XCTAssertTrue(direct.isLoggedIn())
+    func testIsLoggedInNeedsARelayConnection() {
+        let (stale, staleKeychain) = makeStore()
+        XCTAssertFalse(stale.isLoggedIn())
+        seedCredentialsWithoutRelay(stale, staleKeychain)
+        XCTAssertFalse(stale.isLoggedIn(), "tokens without a relay connection cannot reach an agent")
 
         let (relay, relayKeychain) = makeStore()
-        relay.saveRelayCredentials(
-            serverUrl: "https://relay.example.com",
-            agentId: "A1",
-            pairingId: "P1",
-            deviceId: "D1",
-            accessToken: "a",
-            refreshToken: "r"
-        )
+        saveRelayCredentials(relay)
         XCTAssertTrue(relay.isLoggedIn())
         // Pairing/device ids are NOT required for relay login state.
         relayKeychain.removeValue(forKey: TokenStore.keyPairingId)
@@ -103,12 +72,35 @@ final class TokenStoreTests: XCTestCase {
         XCTAssertFalse(relay.isLoggedIn())
     }
 
+    func testClearCredentialsWithoutRelayRemovesThem() {
+        let (store, keychain) = makeStore()
+        seedCredentialsWithoutRelay(store, keychain)
+
+        store.clearCredentialsWithoutRelay()
+
+        XCTAssertNil(store.getAccessToken())
+        XCTAssertNil(store.getRefreshToken())
+        XCTAssertNil(keychain.string(forKey: TokenStore.keyAgentUrl))
+    }
+
+    func testClearCredentialsWithoutRelayKeepsARelayConnection() {
+        let (store, _) = makeStore()
+        saveRelayCredentials(store)
+
+        store.clearCredentialsWithoutRelay()
+
+        XCTAssertTrue(store.isLoggedIn())
+        XCTAssertEqual(store.getAccessToken(), "at")
+        XCTAssertEqual(store.getRefreshToken(), "rt")
+        XCTAssertEqual(store.getEffectiveBaseUrl(), "https://relay.example.com/proxy/A1")
+    }
+
     func testClearWipesTheWholeStore() {
         let (store, _) = makeStore()
-        store.saveAgentUrl("https://agent.example.com")
-        store.saveTokens(accessToken: "a", refreshToken: "r")
+        saveRelayCredentials(store)
         store.clear()
-        XCTAssertNil(store.getAgentUrl())
+        XCTAssertNil(store.getRelayServerUrl())
+        XCTAssertNil(store.getAgentId())
         XCTAssertNil(store.getAccessToken())
         XCTAssertNil(store.getRefreshToken())
     }

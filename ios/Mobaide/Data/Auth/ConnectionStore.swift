@@ -1,7 +1,7 @@
 import Foundation
 
 /// Mirror of Android `ConnectionStore` (EncryptedSharedPreferences file
-/// "mobaide_connections"): saved connection profiles (direct + relay). One
+/// "mobaide_connections"): saved connection profiles. One
 /// profile is "active" at a time — its credentials are loaded into
 /// `TokenStore` for the rest of the app to use.
 struct ConnectionStore: Sendable {
@@ -11,11 +11,12 @@ struct ConnectionStore: Sendable {
     static let keyActiveId = "active_profile_id"
 
     struct ConnectionProfile: Codable, Equatable, Sendable {
+        static let relayMode = "relay"
+
         let id: String
         let label: String
-        /// "direct" | "relay"
+        /// `relayMode`; a stored profile with any other value is not loaded.
         let mode: String
-        let agentUrl: String?
         let relayServerUrl: String?
         let agentId: String?
         let pairingId: String?
@@ -28,7 +29,6 @@ struct ConnectionStore: Sendable {
             id: String,
             label: String,
             mode: String,
-            agentUrl: String? = nil,
             relayServerUrl: String? = nil,
             agentId: String? = nil,
             pairingId: String? = nil,
@@ -40,7 +40,6 @@ struct ConnectionStore: Sendable {
             self.id = id
             self.label = label
             self.mode = mode
-            self.agentUrl = agentUrl
             self.relayServerUrl = relayServerUrl
             self.agentId = agentId
             self.pairingId = pairingId
@@ -62,7 +61,15 @@ struct ConnectionStore: Sendable {
         // keys and a missing createdAt fall back to defaults (see the custom
         // init(from:) below).
         guard let raw = keychain.data(forKey: Self.keyProfiles) else { return [] }
-        return (try? WireJSON.decoder().decode([ConnectionProfile].self, from: raw)) ?? []
+        let stored = (try? WireJSON.decoder().decode([ConnectionProfile].self, from: raw)) ?? []
+        let profiles = stored.filter { $0.mode == ConnectionProfile.relayMode }
+        if profiles.count != stored.count {
+            persist(profiles)
+            if let activeId = getActiveProfileId(), !profiles.contains(where: { $0.id == activeId }) {
+                keychain.removeValue(forKey: Self.keyActiveId)
+            }
+        }
+        return profiles
     }
 
     func getActiveProfileId() -> String? {
@@ -102,8 +109,7 @@ struct ConnectionStore: Sendable {
         let profile = ConnectionProfile(
             id: UUID().uuidString,
             label: label,
-            mode: tokenStore.getConnectionMode() == .relay ? "relay" : "direct",
-            agentUrl: tokenStore.getAgentUrl(),
+            mode: ConnectionProfile.relayMode,
             relayServerUrl: tokenStore.getRelayServerUrl(),
             agentId: tokenStore.getAgentId(),
             pairingId: tokenStore.getPairingId(),
@@ -117,40 +123,29 @@ struct ConnectionStore: Sendable {
     }
 
     /// Load a saved profile's credentials into `TokenStore`, making it the
-    /// active connection. Profiles with incomplete credentials for their
-    /// mode are left inactive (Android parity: early return before
-    /// `setActiveProfileId`).
+    /// active connection. Profiles with incomplete credentials are left
+    /// inactive (Android parity: early return before `setActiveProfileId`).
     func activateProfile(id: String, tokenStore: TokenStore) {
         guard let profile = listProfiles().first(where: { $0.id == id }) else { return }
 
         tokenStore.clear()
 
-        if profile.mode == "relay" {
-            guard
-                let serverUrl = profile.relayServerUrl,
-                let agentId = profile.agentId,
-                let pairingId = profile.pairingId,
-                let deviceId = profile.deviceId,
-                let accessToken = profile.accessToken,
-                let refreshToken = profile.refreshToken
-            else { return }
-            tokenStore.saveRelayCredentials(
-                serverUrl: serverUrl,
-                agentId: agentId,
-                pairingId: pairingId,
-                deviceId: deviceId,
-                accessToken: accessToken,
-                refreshToken: refreshToken
-            )
-        } else {
-            guard
-                let agentUrl = profile.agentUrl,
-                let accessToken = profile.accessToken,
-                let refreshToken = profile.refreshToken
-            else { return }
-            tokenStore.saveAgentUrl(agentUrl)
-            tokenStore.saveTokens(accessToken: accessToken, refreshToken: refreshToken)
-        }
+        guard
+            let serverUrl = profile.relayServerUrl,
+            let agentId = profile.agentId,
+            let pairingId = profile.pairingId,
+            let deviceId = profile.deviceId,
+            let accessToken = profile.accessToken,
+            let refreshToken = profile.refreshToken
+        else { return }
+        tokenStore.saveRelayCredentials(
+            serverUrl: serverUrl,
+            agentId: agentId,
+            pairingId: pairingId,
+            deviceId: deviceId,
+            accessToken: accessToken,
+            refreshToken: refreshToken
+        )
 
         setActiveProfileId(id)
     }
@@ -167,7 +162,6 @@ extension ConnectionStore.ConnectionProfile {
         id = try container.decode(String.self, forKey: .id)
         label = try container.decode(String.self, forKey: .label)
         mode = try container.decode(String.self, forKey: .mode)
-        agentUrl = try container.decodeIfPresent(String.self, forKey: .agentUrl)
         relayServerUrl = try container.decodeIfPresent(String.self, forKey: .relayServerUrl)
         agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
         pairingId = try container.decodeIfPresent(String.self, forKey: .pairingId)

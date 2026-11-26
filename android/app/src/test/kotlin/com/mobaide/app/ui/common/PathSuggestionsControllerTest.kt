@@ -31,7 +31,6 @@ class PathSuggestionsControllerTest {
     private val restApi = mockk<RestApi>()
     private val tokenStore = mockk<TokenStore>().also {
         every { it.getAgentId() } returns "agent-1"
-        every { it.getAgentUrl() } returns null
     }
 
     private fun version(fs: String?) = VersionInfoResponse(

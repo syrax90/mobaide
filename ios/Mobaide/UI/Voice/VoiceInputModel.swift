@@ -82,9 +82,8 @@ final class VoiceInputModel {
     /// Stored on the agent, so every client of it shares the choice.
     var cleanUp: Bool { status?.cleanup_enabled == true }
 
-    /// The account's cloud voice input. Nil without an agent id (direct
-    /// connection), where no engine choice can be stored: voice then works as
-    /// it did before cloud existed.
+    /// The account's cloud voice input. Nil without an agent id, where no
+    /// engine choice can be stored.
     var cloud: CloudVoiceStatus? { agentId == nil ? nil : cloudRepository.status }
 
     var cloudOffered: Bool { cloud?.isOffered == true }

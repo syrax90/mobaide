@@ -269,7 +269,7 @@ final class AuthRepositoryTests: XCTestCase {
         XCTAssertEqual(session.userIdentityStore.getUserId(), "u2")
         XCTAssertEqual(session.userIdentityStore.getUserAccessToken(), "jwt-b")
         XCTAssertNil(session.tokenStore.getAccessToken(), "the previous account's agent tokens are gone")
-        XCTAssertNil(session.tokenStore.getAgentUrl())
+        XCTAssertNil(session.tokenStore.getRelayServerUrl())
         XCTAssertTrue(session.connectionStore.listProfiles().isEmpty, "the previous account's saved profiles are gone")
         let state = await session.sessionManager.currentAuthState
         XCTAssertEqual(state, .userOnly)
@@ -326,30 +326,6 @@ final class AuthRepositoryTests: XCTestCase {
         XCTAssertEqual(idempotent, .notScheduled)
     }
 
-    func testConnectAgentPersistsThenFlipsAndCapturesProfile() async throws {
-        StubURLProtocol.enqueue(status: 200, body: """
-        {"access_token":"agent-at","refresh_token":"agent-rt","token_type":"bearer"}
-        """)
-
-        try await repository.connectAgent(
-            agentUrl: "https://agent.example.com",
-            username: "admin",
-            password: "pw"
-        )
-
-        XCTAssertEqual(harness.tokenStore.getAgentUrl(), "https://agent.example.com")
-        XCTAssertEqual(harness.tokenStore.getAccessToken(), "agent-at")
-        XCTAssertEqual(harness.tokenStore.getConnectionMode(), .direct)
-        let state = await harness.sessionManager.currentAuthState
-        XCTAssertEqual(state, .fullyConnected)
-
-        let profiles = connectionStore.listProfiles()
-        XCTAssertEqual(profiles.count, 1)
-        XCTAssertEqual(profiles.first?.label, "Direct: https://agent.example.com")
-        XCTAssertEqual(profiles.first?.accessToken, "agent-at")
-        XCTAssertEqual(connectionStore.getActiveProfileId(), profiles.first?.id)
-    }
-
     func testConnectAgentViaRelayUpdatesExistingProfileInPlace() async throws {
         let harness = RepositoryHarness(session: SessionHarness(userLoggedIn: true))
         let existing = ConnectionStore.ConnectionProfile(
@@ -372,7 +348,7 @@ final class AuthRepositoryTests: XCTestCase {
             agentId: "a1", friendlyName: "New Name", deviceId: "dev-1", deviceName: "iPhone"
         )
 
-        XCTAssertEqual(harness.session.tokenStore.getConnectionMode(), .relay)
+        XCTAssertEqual(harness.session.tokenStore.getAgentId(), "a1")
         XCTAssertEqual(harness.session.tokenStore.getAccessToken(), "fresh-at")
         let state = await harness.session.sessionManager.currentAuthState
         XCTAssertEqual(state, .fullyConnected)

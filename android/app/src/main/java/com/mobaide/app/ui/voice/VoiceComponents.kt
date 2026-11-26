@@ -470,9 +470,8 @@ fun VoicePanel(
                 if (lowResources) LowResourcesWarning(status.host.reasons)
                 Text(
                     text = "$agentName transcribes what you say. The audio goes to it through the " +
-                        "Mobaide relay, or straight to it in direct-connection mode, and is never " +
-                        "stored. The text lands in the command field for you to review and is never " +
-                        "sent on its own.",
+                        "Mobaide relay and is never stored. The text lands in the command field for " +
+                        "you to review and is never sent on its own.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

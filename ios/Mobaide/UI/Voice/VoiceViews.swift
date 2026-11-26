@@ -311,9 +311,9 @@ struct VoicePanel: View {
             )
             if lowResources { lowResourcesWarning(status.host.reasons) }
             Text(
-                "\(voice.agentName) transcribes what you say. The audio goes to it through the Mobaide relay, or "
-                    + "straight to it in direct-connection mode, and is never stored. The text lands in the command "
-                    + "field for you to review and is never sent on its own."
+                "\(voice.agentName) transcribes what you say. The audio goes to it through the Mobaide relay "
+                    + "and is never stored. The text lands in the command field for you to review and is never "
+                    + "sent on its own."
             )
             .font(.caption)
             .foregroundStyle(colors.textMuted)

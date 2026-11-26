@@ -96,53 +96,6 @@ class RestApiTest {
         verify(exactly = 1) { tokenStore.getEffectiveBaseUrl() }
     }
 
-    // ---- login: URL, body, response decode ----------------------------------
-
-    @Test
-    fun login_trimsTrailingSlash_onServerUrlArgument_andPostsCredentialJson() = runTest {
-        val (api, client) = newApi(agentUrl = null) // login does not use baseUrl()
-        val captured = stubCall(client) { req ->
-            responseFor(
-                req,
-                200,
-                bodyJson = """{"access_token":"acc","refresh_token":"ref","token_type":"bearer"}""",
-            )
-        }
-
-        val resp = api.login(
-            agentUrl = "https://login.example.com/",
-            username = "alice",
-            password = "s3cret",
-        )
-
-        // URL: trailing slash on agentUrl must be trimmed before path concat.
-        assertEquals(
-            "https://login.example.com/api/auth/token",
-            captured.captured.url.toString(),
-        )
-        assertEquals("POST", captured.captured.method)
-
-        // Body: serialised TokenRequest.
-        val body = captured.captured.body
-        assertNotNull("login must attach a JSON request body", body)
-        val buffer = okio.Buffer()
-        body!!.writeTo(buffer)
-        val serialised = buffer.readUtf8()
-        assertTrue(
-            "login body must contain the username — was: $serialised",
-            serialised.contains("\"username\":\"alice\""),
-        )
-        assertTrue(
-            "login body must contain the password — was: $serialised",
-            serialised.contains("\"password\":\"s3cret\""),
-        )
-
-        // Response decode.
-        assertEquals("acc", resp.access_token)
-        assertEquals("ref", resp.refresh_token)
-        assertEquals("bearer", resp.token_type)
-    }
-
     // Note: there is no RestApi.refreshToken test because RestApi no
     // longer exposes a refresh endpoint — that method used to bypass
     // SessionManager's single-flight coordination and was deleted as

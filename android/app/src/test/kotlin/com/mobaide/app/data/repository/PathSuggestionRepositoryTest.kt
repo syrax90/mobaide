@@ -35,7 +35,6 @@ class PathSuggestionRepositoryTest {
     private val restApi = mockk<RestApi>()
     private val tokenStore = mockk<TokenStore>().also {
         every { it.getAgentId() } answers { agentId }
-        every { it.getAgentUrl() } returns null
     }
     private val repo = PathSuggestionRepository(restApi, tokenStore) { now }
 

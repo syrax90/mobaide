@@ -23,14 +23,17 @@ final class ConnectionsModelTests: XCTestCase {
         )
     }
 
-    private func seedProfiles() -> (direct: ConnectionStore.ConnectionProfile, relay: ConnectionStore.ConnectionProfile) {
-        let direct = ConnectionStore.ConnectionProfile(
-            id: "p-direct",
+    private func seedProfiles() -> (home: ConnectionStore.ConnectionProfile, relay: ConnectionStore.ConnectionProfile) {
+        let home = ConnectionStore.ConnectionProfile(
+            id: "p-home",
             label: "Home agent",
-            mode: "direct",
-            agentUrl: "https://agent.example.com",
-            accessToken: "direct-access",
-            refreshToken: "direct-refresh"
+            mode: "relay",
+            relayServerUrl: "https://relay.example.com",
+            agentId: "agent-1",
+            pairingId: "pair-1",
+            deviceId: "device-1",
+            accessToken: "home-access",
+            refreshToken: "home-refresh"
         )
         let relay = ConnectionStore.ConnectionProfile(
             id: "p-relay",
@@ -43,10 +46,10 @@ final class ConnectionsModelTests: XCTestCase {
             accessToken: "relay-access",
             refreshToken: "relay-refresh"
         )
-        connectionStore.saveProfile(direct)
+        connectionStore.saveProfile(home)
         connectionStore.saveProfile(relay)
-        connectionStore.setActiveProfileId(direct.id)
-        return (direct, relay)
+        connectionStore.setActiveProfileId(home.id)
+        return (home, relay)
     }
 
     func testSwitchProfileSwapsCredentialsAndReconnects() async throws {
@@ -66,11 +69,10 @@ final class ConnectionsModelTests: XCTestCase {
         XCTAssertEqual(harness.tokenStore.getRelayServerUrl(), "https://relay.example.com")
         XCTAssertEqual(harness.tokenStore.getAgentId(), "agent-9")
         XCTAssertEqual(harness.tokenStore.getAccessToken(), "relay-access")
-        XCTAssertEqual(harness.tokenStore.getConnectionMode(), .relay)
     }
 
     func testSwitchToIncompleteProfileStaysDisconnected() async {
-        let (direct, _) = seedProfiles()
+        let (home, _) = seedProfiles()
         let incomplete = ConnectionStore.ConnectionProfile(
             id: "p-broken",
             label: "Broken",
@@ -84,21 +86,21 @@ final class ConnectionsModelTests: XCTestCase {
 
         // activateProfile bails before marking active; the agent stays
         // disconnected instead of being "connected" with an empty TokenStore.
-        XCTAssertEqual(model.activeProfileId, direct.id)
+        XCTAssertEqual(model.activeProfileId, home.id)
         XCTAssertNil(harness.tokenStore.getAccessToken())
         let state = await harness.sessionManager.currentAuthState
         XCTAssertEqual(state, .userOnly)
     }
 
     func testRemoveProfileDropsItAndClearsActiveId() {
-        let (direct, relay) = seedProfiles()
+        let (home, relay) = seedProfiles()
         let model = makeModel()
 
         model.removeProfile(id: relay.id)
-        XCTAssertEqual(model.profiles.map(\.id), [direct.id])
-        XCTAssertEqual(model.activeProfileId, direct.id)
+        XCTAssertEqual(model.profiles.map(\.id), [home.id])
+        XCTAssertEqual(model.activeProfileId, home.id)
 
-        model.removeProfile(id: direct.id)
+        model.removeProfile(id: home.id)
         XCTAssertTrue(model.profiles.isEmpty)
         XCTAssertNil(model.activeProfileId)
     }

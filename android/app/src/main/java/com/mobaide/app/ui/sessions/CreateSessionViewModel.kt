@@ -3243,9 +3243,8 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /**
-     * True when an error body carries the `codex_auth_required` marker. The
-     * marker is top-level on the relay path and nested under `detail` on direct
-     * REST, so both shapes are checked; tolerant of any non-JSON body.
+     * True when an error body carries the `codex_auth_required` marker,
+     * top-level or nested under `detail`; tolerant of any non-JSON body.
      */
     private fun isCodexAuthRequired(body: String): Boolean = runCatching {
         val obj = Json.parseToJsonElement(body).jsonObject
@@ -3255,7 +3254,7 @@ class CreateSessionViewModel @Inject constructor(
     private fun JsonObject.hasCodexAuthMarker(): Boolean =
         this["codex_auth_required"]?.jsonPrimitive?.booleanOrNull == true
 
-    /** The `chat_unavailable` 503: flat through the relay, nested under `detail` on direct REST. */
+    /** The `chat_unavailable` 503 body, flat or nested under `detail`. */
     private fun chatUnavailableBody(body: String): JsonObject? = runCatching {
         val obj = Json.parseToJsonElement(body).jsonObject
         when {
@@ -3292,7 +3291,7 @@ class CreateSessionViewModel @Inject constructor(
         Json.parseToJsonElement(body).jsonObject["detail"]?.jsonPrimitive?.contentOrNull
     }.getOrNull()
 
-    private fun agentScopeKey(): String? = tokenStore.getAgentId() ?: tokenStore.getAgentUrl()
+    private fun agentScopeKey(): String? = tokenStore.getAgentId()
 
     private fun validateCustomPath(input: String): String? {
         // Judge the same string that gets launched, not the raw draft: the

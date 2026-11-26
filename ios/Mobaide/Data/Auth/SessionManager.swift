@@ -268,19 +268,10 @@ actor SessionManager {
             return terminalAgentOnly(generation: generation)
         }
 
-        let refreshUrl: String
-        switch tokenStore.getConnectionMode() {
-        case .direct:
-            guard let agentUrl = tokenStore.getAgentUrl() else {
-                return terminalAgentOnly(generation: generation)
-            }
-            refreshUrl = "\(agentUrl)/api/auth/refresh"
-        case .relay:
-            guard let serverUrl = tokenStore.getRelayServerUrl() else {
-                return terminalAgentOnly(generation: generation)
-            }
-            refreshUrl = "\(serverUrl)/api/mobile/refresh"
+        guard let serverUrl = tokenStore.getRelayServerUrl() else {
+            return terminalAgentOnly(generation: generation)
         }
+        let refreshUrl = "\(serverUrl)/api/mobile/refresh"
 
         guard
             let url = URL(string: refreshUrl),

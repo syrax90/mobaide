@@ -68,14 +68,13 @@ class SessionManagerTest {
     private fun stubTokenStore(
         refresh: String? = "refresh-initial",
         access: String? = "access-initial",
-        agentUrl: String? = "https://example.com",
+        relayServerUrl: String? = "https://example.com",
     ): TokenStore {
         val store = mockk<TokenStore>(relaxUnitFun = true)
         every { store.getRefreshToken() } returns refresh
         every { store.getAccessToken() } returns access
-        every { store.getAgentUrl() } returns agentUrl
-        every { store.isLoggedIn() } returns (access != null && refresh != null && agentUrl != null)
-        every { store.getConnectionMode() } returns TokenStore.ConnectionMode.DIRECT
+        every { store.getRelayServerUrl() } returns relayServerUrl
+        every { store.isLoggedIn() } returns (access != null && refresh != null && relayServerUrl != null)
         return store
     }
 
@@ -109,7 +108,7 @@ class SessionManagerTest {
 
     @Test
     fun initialState_userOnly_whenOnlyUserStoreHasTokens() {
-        val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
+        val store = stubTokenStore(refresh = null, access = null, relayServerUrl = null)
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
         val sm = newSessionManager(store, userStore, client)
@@ -123,7 +122,7 @@ class SessionManagerTest {
 
     @Test
     fun tryMarkAgentConnected_whenSignedIn_runsPersist_andSetsFullyConnected() {
-        val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
+        val store = stubTokenStore(refresh = null, access = null, relayServerUrl = null)
         val userStore = stubUserIdentityStore(loggedIn = false)
         val sm = newSessionManager(store, userStore, mockk<OkHttpClient>())
         sm.markUserLoggedIn()
@@ -138,7 +137,7 @@ class SessionManagerTest {
 
     @Test
     fun tryMarkAgentConnected_whenSignedOut_skipsPersist_andStaysUnauthenticated() {
-        val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
+        val store = stubTokenStore(refresh = null, access = null, relayServerUrl = null)
         val userStore = stubUserIdentityStore(loggedIn = false)
         val sm = newSessionManager(store, userStore, mockk<OkHttpClient>())
         var persisted = 0
@@ -276,10 +275,10 @@ class SessionManagerTest {
 
     @Test
     fun refresh_onSuccess_savesRotatedTokens_andEmitsFullyConnected() = runTest {
-        val store = stubTokenStore(refresh = "r-1", access = "a-1", agentUrl = "https://example.com")
+        val store = stubTokenStore(refresh = "r-1", access = "a-1", relayServerUrl = "https://example.com")
         val userStore = stubUserIdentityStore(loggedIn = true)
         every { store.getRefreshToken() } returns "r-1"
-        every { store.getAgentUrl() } returns "https://example.com"
+        every { store.getRelayServerUrl() } returns "https://example.com"
 
         val client = mockk<OkHttpClient>()
         val reqSlot = slot<Request>()
@@ -300,7 +299,7 @@ class SessionManagerTest {
         assertEquals(SessionManager.RefreshResult.Success, result)
         verify(exactly = 1) { store.saveTokens("a-2", "r-2") }
         assertEquals(SessionManager.AuthState.FullyConnected, sm.authState.value)
-        assertEquals("https://example.com/api/auth/refresh", reqSlot.captured.url.toString())
+        assertEquals("https://example.com/api/mobile/refresh", reqSlot.captured.url.toString())
         assertEquals("POST", reqSlot.captured.method)
     }
 

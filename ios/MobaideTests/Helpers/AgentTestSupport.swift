@@ -36,16 +36,7 @@ struct AgentHarness {
         shortcutsRepository = ShortcutsRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
         customAgentTypesRepository = CustomAgentTypesRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
         deviceRepository = DeviceRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
-        let agentAPI = AgentAPI(
-            baseURL: { [tokenStore = session.tokenStore] in tokenStore.getEffectiveBaseUrl() },
-            tokens: SessionAgentTokenProvider(
-                tokenStore: session.tokenStore,
-                sessionManager: session.sessionManager
-            ),
-            client: client
-        )
         authRepository = AuthRepository(
-            agentAPI: agentAPI,
             centralAPI: centralAPI,
             tokenStore: session.tokenStore,
             userIdentityStore: session.userIdentityStore,

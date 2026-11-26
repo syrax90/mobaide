@@ -7,7 +7,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * Manages a list of saved connection profiles (direct + relay).
+ * Manages a list of saved connection profiles.
  *
  * One profile is "active" at a time — its credentials are loaded into
  * [TokenStore] for the rest of the app to use.
@@ -18,8 +18,7 @@ class ConnectionStore(context: Context) {
     data class ConnectionProfile(
         val id: String,
         val label: String,
-        val mode: String, // "direct" | "relay"
-        val agentUrl: String? = null,
+        val mode: String,
         val relayServerUrl: String? = null,
         val agentId: String? = null,
         val pairingId: String? = null,
@@ -35,11 +34,18 @@ class ConnectionStore(context: Context) {
 
     fun listProfiles(): List<ConnectionProfile> {
         val raw = prefs.getString(KEY_PROFILES, null) ?: return emptyList()
-        return try {
+        val stored = try {
             json.decodeFromString<List<ConnectionProfile>>(raw)
         } catch (_: Exception) {
-            emptyList()
+            return emptyList()
         }
+        val profiles = stored.filter { it.mode == MODE_RELAY }
+        if (profiles.size != stored.size) {
+            val editor = prefs.edit().putString(KEY_PROFILES, json.encodeToString(profiles))
+            if (profiles.none { it.id == getActiveProfileId() }) editor.remove(KEY_ACTIVE_ID)
+            editor.apply()
+        }
+        return profiles
     }
 
     fun getActiveProfileId(): String? = prefs.getString(KEY_ACTIVE_ID, null)
@@ -72,12 +78,10 @@ class ConnectionStore(context: Context) {
      */
     fun captureActiveProfile(tokenStore: TokenStore, label: String): ConnectionProfile {
         val id = java.util.UUID.randomUUID().toString()
-        val mode = tokenStore.getConnectionMode()
         val profile = ConnectionProfile(
             id = id,
             label = label,
-            mode = if (mode == TokenStore.ConnectionMode.RELAY) "relay" else "direct",
-            agentUrl = tokenStore.getAgentUrl(),
+            mode = MODE_RELAY,
             relayServerUrl = tokenStore.getRelayServerUrl(),
             agentId = tokenStore.getAgentId(),
             pairingId = tokenStore.getPairingId(),
@@ -99,25 +103,14 @@ class ConnectionStore(context: Context) {
 
         tokenStore.clear()
 
-        when (profile.mode) {
-            "relay" -> {
-                tokenStore.saveRelayCredentials(
-                    serverUrl = profile.relayServerUrl ?: return,
-                    agentId = profile.agentId ?: return,
-                    pairingId = profile.pairingId ?: return,
-                    deviceId = profile.deviceId ?: return,
-                    accessToken = profile.accessToken ?: return,
-                    refreshToken = profile.refreshToken ?: return,
-                )
-            }
-            else -> {
-                val agentUrl = profile.agentUrl ?: return
-                val accessToken = profile.accessToken ?: return
-                val refreshToken = profile.refreshToken ?: return
-                tokenStore.saveAgentUrl(agentUrl)
-                tokenStore.saveTokens(accessToken, refreshToken)
-            }
-        }
+        tokenStore.saveRelayCredentials(
+            serverUrl = profile.relayServerUrl ?: return,
+            agentId = profile.agentId ?: return,
+            pairingId = profile.pairingId ?: return,
+            deviceId = profile.deviceId ?: return,
+            accessToken = profile.accessToken ?: return,
+            refreshToken = profile.refreshToken ?: return,
+        )
 
         setActiveProfileId(id)
     }
@@ -125,5 +118,6 @@ class ConnectionStore(context: Context) {
     companion object {
         private const val KEY_PROFILES = "profiles"
         private const val KEY_ACTIVE_ID = "active_profile_id"
+        private const val MODE_RELAY = "relay"
     }
 }

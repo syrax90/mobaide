@@ -5,16 +5,25 @@ The install path is stubbed via the injected ``venv_builder`` (pre-swap) and
 verification, idle deferral, the atomic swap of ``current_version``, and the
 ``.installed`` completion sentinel. The manifest body itself is passed in
 directly (no HTTP fetch in the relay-driven update path).
+
+Two groups run the real install path instead: the forward-only checks (an
+older signed manifest is refused) and the dependency-lock checks, which drive
+a real ``pip`` against local wheel files only (no index, no network).
 """
 from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import json
 import logging
 import os
+import subprocess
 import sys
 import tarfile
+import threading
 import time
+import zipfile
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -23,51 +32,85 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from mobaide.agent.install_paths import RELEASE_SENTINEL, is_release_complete
+from mobaide.agent.trust_store import ManifestTrust, load_manifest_trust
 from mobaide.agent.updater import (
     _STALE_SCRATCH_SECONDS,
+    DEPENDENCY_LOCK_NAME,
     InstallLayout,
     StagedBinaryUpdater,
     _assert_safe_version,
     _build_venv_without_pip,
     _finalize_wheel_install,
     _is_version_newer,
+    _release_venv_python,
     _version_tuple,
     _wheel_basename_from_url,
 )
 from mobaide.manifest_signing import canonical_json
 
+# Stands in for the hash-pinned lock at the tarball root. The stubbed
+# finalizer never gives it to pip, so the pinned name and hash are not real.
+_LOCK_TEXT = "example-dependency==1.0 --hash=sha256:" + "0" * 64 + "\n"
 
-def _signed_manifest(temp_files_dir: Path):
-    private_key = Ed25519PrivateKey.generate()
-    public_bytes = private_key.public_key().public_bytes_raw()
-    public_key_b64 = base64.b64encode(public_bytes).decode()
+
+def _public_key_b64(private_key: Ed25519PrivateKey) -> str:
+    return base64.b64encode(private_key.public_key().public_bytes_raw()).decode()
+
+
+def _sign(private_key: Ed25519PrivateKey, body: dict) -> str:
+    return base64.b64encode(private_key.sign(canonical_json(body))).decode()
+
+
+def _write_tarball(path: Path, members: dict[str, bytes]) -> None:
+    buf = BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tar.addfile(info, BytesIO(data))
+    path.write_bytes(buf.getvalue())
+
+
+def _signed_manifest(
+    temp_files_dir: Path,
+    *,
+    version: str = "0.2.0",
+    private_key: Ed25519PrivateKey | None = None,
+    lock_text: str | None = _LOCK_TEXT,
+    wheel_bytes: bytes = b"PK\x03\x04 fake wheel",
+    extra: dict | None = None,
+):
+    """A signed manifest plus the tarball and wheel it names.
+
+    ``lock_text`` is the dependency lock placed at the tarball root (``None``
+    leaves it out of the tarball). ``extra`` is merged into the body before
+    signing, so a test can override or add a signed field.
+    """
+    private_key = private_key or Ed25519PrivateKey.generate()
 
     tarball_path = temp_files_dir / "agent.tar.gz"
     wheel_path = temp_files_dir / "mobaide_agent-0.2.0-py3-none-any.whl"
     tarball_path.parent.mkdir(parents=True, exist_ok=True)
 
-    buf = BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        info = tarfile.TarInfo(name="manifest.txt")
-        data = b"hello"
-        info.size = len(data)
-        tar.addfile(info, BytesIO(data))
-    tarball_path.write_bytes(buf.getvalue())
-    wheel_path.write_bytes(b"PK\x03\x04 fake wheel")
-
-    import hashlib
+    members = {"manifest.txt": b"hello"}
+    if lock_text is not None:
+        members[DEPENDENCY_LOCK_NAME] = lock_text.encode("utf-8")
+    _write_tarball(tarball_path, members)
+    wheel_path.write_bytes(wheel_bytes)
 
     body = {
-        "version": "0.2.0",
+        "version": version,
         "tarball_url": f"file://{tarball_path}",
         "tarball_sha256": hashlib.sha256(tarball_path.read_bytes()).hexdigest(),
         "wheel_url": f"file://{wheel_path}",
         "wheel_sha256": hashlib.sha256(wheel_path.read_bytes()).hexdigest(),
+        "dependency_lock_sha256": hashlib.sha256(
+            (lock_text or "").encode("utf-8")
+        ).hexdigest(),
         "released_at": "2026-04-26T00:00:00+00:00",
     }
-    signature = private_key.sign(canonical_json(body))
-    signature_b64 = base64.b64encode(signature).decode()
-    return public_key_b64, body, signature_b64
+    body.update(extra or {})
+    return _public_key_b64(private_key), body, _sign(private_key, body)
 
 
 @pytest.fixture
@@ -94,7 +137,7 @@ def _fake_venv_builder(venv_dir: Path) -> None:
     python.write_text("#!/bin/sh\nexec /bin/true\n", encoding="utf-8")
 
 
-def _fake_finalizer(python: Path, wheel_path: Path) -> None:
+def _fake_finalizer(python: Path, requirements_path: Path) -> None:
     """Stub the post-swap pip + wheel install: create the agent console script
     that a real ``pip install`` writes (so the release reads as complete via the
     legacy fallback in ``is_release_complete``). ``python`` is the FINAL-path
@@ -324,30 +367,144 @@ async def test_queued_caller_does_not_restage_the_same_release(layout) -> None:
     assert exits == [75]
 
 
-async def test_forward_only_skips_older_version_without_force(layout) -> None:
-    """Auto/poll updates are forward-only: a manifest OLDER than the running
-    version is a no_change, never a (destructive) re-stage. This is the guard
-    against the dev-run clobber (a newer source build vs an older manifest)."""
+@pytest.mark.parametrize(
+    "current_version, force",
+    [
+        # A relay push or the hourly poll.
+        ("0.3.0", False),
+        # "Install now" and the recovery check after a 4002 close.
+        ("0.3.0", True),
+        # The running version itself: "Install now" does not stage it again.
+        ("0.2.0", True),
+    ],
+)
+async def test_signed_manifest_that_is_not_newer_is_refused(
+    layout, current_version: str, force: bool
+) -> None:
+    """The updater is forward-only on every path the relay can start: a
+    correctly signed manifest whose version is not higher than the running
+    one is a no_change. Nothing is built, the version pointer stays, and no
+    restart is requested."""
     public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
     installer_calls: list = []
+    exits: list[int] = []
     updater = StagedBinaryUpdater(
         layout=layout,
         public_key_b64=public_key_b64,
         session_manager=None,
-        current_version="0.3.0",  # newer than the manifest's 0.2.0
+        current_version=current_version,
         venv_builder=lambda venv: installer_calls.append(venv),
-        finalizer=lambda python, wheel: None,
+        finalizer=lambda python, requirements: installer_calls.append(python),
+        exit_func=exits.append,
     )
-    outcome = await updater.consider_manifest(body, signature_b64, body["version"])
+    if force:
+        outcome = await updater.force_update_now(
+            body, signature_b64, body["version"]
+        )
+    else:
+        outcome = await updater.consider_manifest(
+            body, signature_b64, body["version"]
+        )
     assert outcome == "no_change"
     assert installer_calls == []
+    assert exits == []
+    assert not (layout.releases_dir / "0.2.0").exists()
+    assert not layout.current_version_file.exists()
+
+
+async def test_allow_downgrade_stages_an_older_signed_manifest(layout) -> None:
+    """Only the command at the computer (``update --allow-downgrade``) may
+    move the agent to a version that is not higher than the running one."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    exits: list[int] = []
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.3.0",
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
+        exit_func=exits.append,
+    )
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"], force=True, allow_downgrade=True,
+    )
+    assert outcome == "staged"
+    assert layout.current_version_file.read_text().strip() == "0.2.0"
+    assert exits == [75]
+
+
+@pytest.mark.parametrize(
+    "current_version, claimed_latest, expected_outcome, expected_releases",
+    [
+        # The signed body is older; a higher unsigned claim changes nothing.
+        ("0.3.0", "9.9.9", "no_change", []),
+        # The signed body is newer; a lower unsigned claim does not hide it.
+        ("0.1.0", "0.1.0", "staged", ["0.2.0"]),
+    ],
+)
+async def test_version_decision_uses_the_signed_body_only(
+    layout,
+    current_version: str,
+    claimed_latest: str,
+    expected_outcome: str,
+    expected_releases: list[str],
+) -> None:
+    """``latest_version`` arrives next to the manifest without a signature,
+    so it selects nothing: the version inside the signed body decides."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version=current_version,
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
+        exit_func=lambda code: None,
+    )
+    outcome = await updater.consider_manifest(
+        body, signature_b64, claimed_latest, force=True,
+    )
+    assert outcome == expected_outcome
+    assert sorted(p.name for p in layout.releases_dir.iterdir()) == expected_releases
+
+
+@pytest.mark.parametrize(
+    "current_version, busy",
+    [
+        # Same version as the running one: the signature is still checked.
+        ("0.2.0", False),
+        # A busy agent reports the bad signature, it does not defer it.
+        ("0.1.0", True),
+    ],
+)
+async def test_bad_signature_is_reported_before_any_other_decision(
+    layout, current_version: str, busy: bool
+) -> None:
+    _, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    other_key_b64 = _public_key_b64(Ed25519PrivateKey.generate())
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=other_key_b64,
+        session_manager=None,
+        current_version=current_version,
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
+        exit_func=lambda code: None,
+        busy_probe=lambda: busy,
+    )
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+    )
+    assert outcome == "signature_failed"
     assert not (layout.releases_dir / "0.2.0").exists()
 
 
 async def test_failed_force_restage_preserves_running_release(layout) -> None:
-    """The original brick: a force re-stage of the CURRENT version whose build
-    FAILS must NOT destroy the running release (no rmtree-before-build) and
-    must leave no scratch dirs behind."""
+    """The original brick: a re-stage of the CURRENT version whose build FAILS
+    must NOT destroy the running release (no rmtree-before-build) and must
+    leave no scratch dirs behind. Only ``allow_downgrade`` stages the running
+    version again."""
     public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
     live = layout.releases_dir / "0.2.0"
     (live / "venv" / "bin").mkdir(parents=True)
@@ -365,8 +522,9 @@ async def test_failed_force_restage_preserves_running_release(layout) -> None:
         finalizer=_fake_finalizer,
         exit_func=lambda code: None,
     )
-    outcome = await updater.force_update_now(
-        body, signature_b64, body["version"], exit_after_stage=False,
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+        force=True, exit_after_stage=False, allow_downgrade=True,
     )
     assert outcome == "signature_failed"
     # Running release intact — never rmtree'd before the new build succeeded.
@@ -376,8 +534,9 @@ async def test_failed_force_restage_preserves_running_release(layout) -> None:
 
 
 async def test_force_restage_existing_version_swaps_in_new_build(layout) -> None:
-    """A force re-stage of an existing version that SUCCEEDS atomically swaps in
-    the freshly-built release (old contents replaced) and cleans the backup."""
+    """A re-stage of the running version (``allow_downgrade``) that SUCCEEDS
+    atomically swaps in the freshly-built release (old contents replaced) and
+    cleans the backup."""
     public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
     live = layout.releases_dir / "0.2.0"
     (live / "venv" / "bin").mkdir(parents=True)
@@ -393,8 +552,9 @@ async def test_force_restage_existing_version_swaps_in_new_build(layout) -> None
         finalizer=_fake_finalizer,
         exit_func=lambda code: None,
     )
-    outcome = await updater.force_update_now(
-        body, signature_b64, body["version"], exit_after_stage=False,
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+        force=True, exit_after_stage=False, allow_downgrade=True,
     )
     assert outcome == "staged"
     # New build swapped in: the old-only marker is gone, the venv exists, and
@@ -592,10 +752,8 @@ def test_assert_safe_version_allows_real_versions(ok: str) -> None:
 async def test_force_stage_rejects_path_escaping_version(layout) -> None:
     """A signed-but-malicious version must be rejected before it becomes a
     releases/<v> path component — defense-in-depth at the manifest->fs boundary.
-    Force bypasses the forward-only gate, so this reaches _stage_release where
-    the guard fires."""
-    import hashlib
-
+    Such a version never parses as higher than the running one, so only
+    ``allow_downgrade`` reaches _stage_release, where the guard fires."""
     private_key = Ed25519PrivateKey.generate()
     public_key_b64 = base64.b64encode(
         private_key.public_key().public_bytes_raw()
@@ -629,8 +787,9 @@ async def test_force_stage_rejects_path_escaping_version(layout) -> None:
         finalizer=_fake_finalizer,
         exit_func=lambda code: None,
     )
-    outcome = await updater.force_update_now(
-        body, sig, body["version"], exit_after_stage=False,
+    outcome = await updater.consider_manifest(
+        body, sig, body["version"],
+        force=True, exit_after_stage=False, allow_downgrade=True,
     )
     assert outcome == "signature_failed"
     # No directory created outside releases/.
@@ -720,7 +879,6 @@ async def test_staging_rejects_non_pep427_wheel_url(layout) -> None:
     temp_files_dir.mkdir(parents=True, exist_ok=True)
     tarball_path = temp_files_dir / "agent.tar.gz"
     wheel_path = temp_files_dir / "agent.whl"
-    import hashlib
 
     buf = BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
@@ -1002,13 +1160,12 @@ class TestVenvBuildAndFinalizeHideWindow:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path,
     ) -> None:
-        # _build_venv_without_pip + _finalize_wheel_install make four
+        # _build_venv_without_pip + _finalize_wheel_install make three
         # subprocess.run calls total:
         #   1. python -m venv --without-pip <venv_dir>
         #   2. <python> -m ensurepip --default-pip
-        #   3. <python> -m pip install --upgrade pip
-        #   4. <python> -m pip install <wheel>
-        # All four MUST pass ``creationflags=_WINDOWS_NO_WINDOW``. Without any
+        #   3. <python> -m pip install --require-hashes ... -r <requirements>
+        # All three MUST pass ``creationflags=_WINDOWS_NO_WINDOW``. Without any
         # one, that subprocess pops a console window on Windows on every
         # auto-update cycle.
         calls = self._capture_run(monkeypatch)
@@ -1016,16 +1173,29 @@ class TestVenvBuildAndFinalizeHideWindow:
 
         venv_dir = tmp_path / "venv"
         final_python = venv_dir / "bin" / "python"
-        wheel_path = tmp_path / "mobaide_agent-0.2.0-py3-none-any.whl"
-        wheel_path.write_bytes(b"PK\x03\x04 fake")
+        requirements_path = tmp_path / "requirements.txt"
+        requirements_path.write_text(_LOCK_TEXT, encoding="utf-8")
 
         _build_venv_without_pip(venv_dir)
-        _finalize_wheel_install(final_python, wheel_path)
+        _finalize_wheel_install(final_python, requirements_path)
 
-        assert len(calls) == 4, (
-            f"expected exactly 4 subprocess.run calls (venv --without-pip, "
-            f"ensurepip, pip upgrade, wheel install); got {len(calls)}"
+        assert len(calls) == 3, (
+            f"expected exactly 3 subprocess.run calls (venv --without-pip, "
+            f"ensurepip, hash-pinned install); got {len(calls)}"
         )
+        # The only install is the hash-pinned one: every file must match a
+        # listed hash, nothing is built from source, and no step fetches a
+        # package that the requirements file does not pin (the bundled pip is
+        # used as it is).
+        install = calls[2]["cmd"]
+        assert install[1:4] == ["-m", "pip", "install"]
+        assert "--require-hashes" in install
+        assert install[install.index("--only-binary") + 1] == ":all:"
+        assert install[install.index("-r") + 1] == str(requirements_path)
+        assert "--upgrade" not in install
+        assert [arg for arg in install[4:] if not arg.startswith("-")] == [
+            ":all:", str(requirements_path),
+        ]
         # The pip-less build is what avoids baking a staging shebang; finalize
         # invokes pip as ``python -m pip`` (never the bin/pip script) so it never
         # depends on a shebang. Pin both invariants.
@@ -1049,6 +1219,32 @@ class TestVenvBuildAndFinalizeHideWindow:
                 f"the call would pop a console window for the "
                 f"subprocess (pip / venv / python.exe child)"
             )
+
+    def test_every_child_runs_with_python_safe_path(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        # The venv, ensurepip and pip children start in the directory the
+        # agent or the CLI was started in. PYTHONSAFEPATH keeps that
+        # directory off their module search path.
+        monkeypatch.delenv("PYTHONSAFEPATH", raising=False)
+        monkeypatch.setenv("MOBAIDE_TEST_INHERITED_VALUE", "kept")
+        calls = self._capture_run(monkeypatch)
+        venv_dir = tmp_path / "venv"
+        requirements_path = tmp_path / "requirements.txt"
+        requirements_path.write_text(_LOCK_TEXT, encoding="utf-8")
+
+        _build_venv_without_pip(venv_dir)
+        _finalize_wheel_install(venv_dir / "bin" / "python", requirements_path)
+
+        assert len(calls) == 3
+        for call in calls:
+            env = call["kwargs"].get("env") or {}
+            assert env.get("PYTHONSAFEPATH") == "1", call["cmd"]
+            # The rest of the environment (PATH, proxy settings) still
+            # reaches the child.
+            assert env.get("MOBAIDE_TEST_INHERITED_VALUE") == "kept", call["cmd"]
 
 
 @pytest.mark.parametrize(
@@ -1099,16 +1295,16 @@ def test_is_version_newer_is_strict_and_conservative(
     assert _is_version_newer(candidate, current) is expected
 
 
-async def test_forward_only_skips_unparseable_version_without_force(
-    layout, caplog
+@pytest.mark.parametrize("force", [False, True])
+async def test_forward_only_skips_unparseable_signed_version(
+    layout, force: bool
 ) -> None:
-    """An unparseable manifest version on the non-forced path is a no_change
-    (conservative ``_is_version_newer`` -> False), never a stage, and it emits
-    the ``updater.forward_only_skipped`` INFO breadcrumb so operators can see
-    why a poll/auto update did nothing. The gate fires on the ``latest_version``
-    argument before signature verification, so the signed body is irrelevant
-    here -- a malformed version string can never reach the destructive stage."""
-    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    """A signed version that does not parse is never "higher" (conservative
+    ``_is_version_newer`` -> False), so it is a no_change on the automatic and
+    the forced path: a malformed version string never reaches the stage."""
+    public_key_b64, body, signature_b64 = _signed_manifest(
+        layout.prefix / "tmp", version="garbage",
+    )
     installer_calls: list = []
     updater = StagedBinaryUpdater(
         layout=layout,
@@ -1119,20 +1315,13 @@ async def test_forward_only_skips_unparseable_version_without_force(
         finalizer=lambda python, wheel: None,
     )
 
-    with caplog.at_level(logging.INFO, logger="mobaide.agent.updater"):
-        outcome = await updater.consider_manifest(body, signature_b64, "garbage")
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"], force=force,
+    )
 
     assert outcome == "no_change"
     assert installer_calls == []
     assert not (layout.releases_dir / "garbage").exists()
-    skip_logs = [
-        r.getMessage()
-        for r in caplog.records
-        if r.name == "mobaide.agent.updater" and r.levelno == logging.INFO
-    ]
-    assert any("updater.forward_only_skipped" in m for m in skip_logs), (
-        f"expected a forward_only_skipped INFO breadcrumb; got {skip_logs!r}"
-    )
 
 
 def test_swap_into_place_restores_backup_when_forward_replace_fails(
@@ -1217,3 +1406,480 @@ async def test_stage_sweeps_stale_scratch_dirs_before_building(layout) -> None:
     assert not stale_old.exists()
     assert not list(layout.releases_dir.glob(".staging-*"))
     assert not list(layout.releases_dir.glob(".old-*"))
+
+
+def _refusing_updater(
+    layout, public_key_b64: str, installer_calls: list
+) -> StagedBinaryUpdater:
+    """An updater on 0.1.0 that records every install step it reaches."""
+    return StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=lambda venv: installer_calls.append(venv),
+        finalizer=lambda python, requirements: installer_calls.append(python),
+        exit_func=lambda code: None,
+    )
+
+
+def _assert_nothing_installed(layout, installer_calls: list) -> None:
+    assert installer_calls == []
+    assert list(layout.releases_dir.iterdir()) == []
+    assert not layout.current_version_file.exists()
+
+
+@pytest.mark.parametrize("lock_sha", [None, "not-a-hash", "a" * 63])
+async def test_manifest_without_a_dependency_lock_hash_is_refused(
+    layout, lock_sha: str | None
+) -> None:
+    """A signed manifest must name the SHA-256 of the dependency lock. One
+    that does not (a release made before the lock existed, or a malformed
+    value) is refused before any download."""
+    private_key = Ed25519PrivateKey.generate()
+    public_key_b64, body, _ = _signed_manifest(
+        layout.prefix / "tmp", private_key=private_key,
+    )
+    if lock_sha is None:
+        del body["dependency_lock_sha256"]
+    else:
+        body["dependency_lock_sha256"] = lock_sha
+    signature_b64 = _sign(private_key, body)
+    installer_calls: list = []
+    updater = _refusing_updater(layout, public_key_b64, installer_calls)
+
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+    )
+
+    assert outcome == "signature_failed"
+    _assert_nothing_installed(layout, installer_calls)
+
+
+@pytest.mark.parametrize(
+    "lock_in_tarball, signed_lock_text",
+    [
+        # The lock in the tarball is not the one that was signed.
+        ("example-dependency==2.0 --hash=sha256:" + "1" * 64 + "\n", _LOCK_TEXT),
+        # The tarball carries no lock at all.
+        (None, _LOCK_TEXT),
+    ],
+)
+async def test_lock_file_that_differs_from_the_signed_hash_is_refused(
+    layout, lock_in_tarball: str | None, signed_lock_text: str
+) -> None:
+    """The lock at the tarball root must hash to the signed
+    ``dependency_lock_sha256``; otherwise no venv is built and pip never runs."""
+    public_key_b64, body, signature_b64 = _signed_manifest(
+        layout.prefix / "tmp",
+        lock_text=lock_in_tarball,
+        extra={
+            "dependency_lock_sha256": hashlib.sha256(
+                signed_lock_text.encode("utf-8")
+            ).hexdigest(),
+        },
+    )
+    installer_calls: list = []
+    updater = _refusing_updater(layout, public_key_b64, installer_calls)
+
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+    )
+
+    assert outcome == "signature_failed"
+    _assert_nothing_installed(layout, installer_calls)
+
+
+def _write_wheel(
+    directory: Path,
+    name: str,
+    version: str,
+    *,
+    requires: tuple[str, ...] = (),
+    module_source: bytes = b"",
+) -> Path:
+    """Write a minimal pure-Python wheel by hand (no build tool, no network)."""
+    module = name.replace("-", "_")
+    dist_info = f"{module}-{version}.dist-info"
+    metadata = f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n" + "".join(
+        f"Requires-Dist: {requirement}\n" for requirement in requires
+    )
+    files = {
+        f"{module}.py": module_source,
+        f"{dist_info}/METADATA": metadata.encode("utf-8"),
+        f"{dist_info}/WHEEL": (
+            b"Wheel-Version: 1.0\nGenerator: mobaide-tests\n"
+            b"Root-Is-Purelib: true\nTag: py3-none-any\n"
+        ),
+    }
+    record = "".join(
+        "{},sha256={},{}\n".format(
+            path,
+            base64.urlsafe_b64encode(hashlib.sha256(data).digest())
+            .rstrip(b"=")
+            .decode(),
+            len(data),
+        )
+        for path, data in files.items()
+    ) + f"{dist_info}/RECORD,,\n"
+    directory.mkdir(parents=True, exist_ok=True)
+    wheel_path = directory / f"{module}-{version}-py3-none-any.whl"
+    with zipfile.ZipFile(wheel_path, "w") as archive:
+        for path, data in files.items():
+            archive.writestr(path, data)
+        archive.writestr(f"{dist_info}/RECORD", record)
+    return wheel_path
+
+
+@pytest.fixture
+def local_wheels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Limit the real pip of the finalizer to one local directory of wheels:
+    no package index, no network, no user configuration."""
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    monkeypatch.setenv("PIP_NO_INDEX", "1")
+    monkeypatch.setenv("PIP_FIND_LINKS", str(wheels))
+    monkeypatch.setenv("PIP_CONFIG_FILE", os.devnull)
+    return wheels
+
+
+def _release_with_one_dependency(layout, lock_text: str):
+    """A signed 0.2.0 release whose wheel requires ``mobaide-test-dep==1.0``."""
+    agent_wheel = _write_wheel(
+        layout.prefix / "build",
+        "mobaide-agent",
+        "0.2.0",
+        requires=("mobaide-test-dep==1.0",),
+    )
+    return _signed_manifest(
+        layout.prefix / "tmp",
+        lock_text=lock_text,
+        wheel_bytes=agent_wheel.read_bytes(),
+    )
+
+
+def _real_install_updater(layout, public_key_b64: str) -> StagedBinaryUpdater:
+    """An updater with the real venv build and the real pip finalizer."""
+    return StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        exit_func=lambda code: None,
+    )
+
+
+async def test_real_install_takes_the_dependency_that_the_lock_pins(
+    layout, local_wheels: Path
+) -> None:
+    """End to end with the real pip: the wheel and its dependency install
+    from the combined, hash-pinned requirements file."""
+    dependency = _write_wheel(local_wheels, "mobaide-test-dep", "1.0")
+    dependency_sha = hashlib.sha256(dependency.read_bytes()).hexdigest()
+    public_key_b64, body, signature_b64 = _release_with_one_dependency(
+        layout, f"mobaide-test-dep==1.0 --hash=sha256:{dependency_sha}\n",
+    )
+    updater = _real_install_updater(layout, public_key_b64)
+
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+    )
+
+    assert outcome == "staged"
+    assert layout.current_version_file.read_text().strip() == "0.2.0"
+    release_python = _release_venv_python(layout.releases_dir / "0.2.0")
+    subprocess.run(
+        [str(release_python), "-c", "import mobaide_agent, mobaide_test_dep"],
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.mark.parametrize("case", ["file_differs_from_lock", "dependency_not_in_lock"])
+async def test_real_install_refuses_a_dependency_that_the_lock_does_not_match(
+    layout, local_wheels: Path, case: str
+) -> None:
+    """End to end with the real pip: a dependency file whose SHA-256 is not the
+    one in the signed lock, or a dependency the lock does not list, stops the
+    install. The release is removed and the agent stays on its version."""
+    dependency = _write_wheel(local_wheels, "mobaide-test-dep", "1.0")
+    dependency_sha = hashlib.sha256(dependency.read_bytes()).hexdigest()
+    if case == "file_differs_from_lock":
+        lock_text = f"mobaide-test-dep==1.0 --hash=sha256:{dependency_sha}\n"
+        # Same name and version, other content than the lock was made from.
+        _write_wheel(
+            local_wheels, "mobaide-test-dep", "1.0", module_source=b"CHANGED = True\n",
+        )
+        assert hashlib.sha256(dependency.read_bytes()).hexdigest() != dependency_sha
+    else:
+        lock_text = "# no dependencies\n"
+    public_key_b64, body, signature_b64 = _release_with_one_dependency(
+        layout, lock_text,
+    )
+    updater = _real_install_updater(layout, public_key_b64)
+
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+    )
+
+    assert outcome == "signature_failed"
+    assert updater.current_version == "0.1.0"
+    assert not layout.current_version_file.exists()
+    assert list(layout.releases_dir.iterdir()) == []
+
+
+async def test_release_key_added_by_a_signed_manifest_can_sign_the_next_one(
+    layout,
+) -> None:
+    """A manifest signed with the pinned key can add a second release key.
+    Before that, a manifest signed with the second key is refused; after it,
+    the same manifest is accepted."""
+    pinned_key = Ed25519PrivateKey.generate()
+    second_key = Ed25519PrivateKey.generate()
+    _, next_body, next_signature = _signed_manifest(
+        layout.prefix / "tmp-next", version="0.3.0", private_key=second_key,
+    )
+    _, adding_body, adding_signature = _signed_manifest(
+        layout.prefix / "tmp",
+        private_key=pinned_key,
+        extra={"trust": {"release_public_keys": [_public_key_b64(second_key)]}},
+    )
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=_public_key_b64(pinned_key),
+        session_manager=None,
+        current_version="0.2.0",
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
+        exit_func=lambda code: None,
+    )
+
+    before = await updater.consider_manifest(next_body, next_signature, "0.3.0")
+    adding = await updater.consider_manifest(adding_body, adding_signature, "0.2.0")
+    after = await updater.consider_manifest(next_body, next_signature, "0.3.0")
+
+    assert (before, adding, after) == ("signature_failed", "no_change", "staged")
+    assert layout.current_version_file.read_text().strip() == "0.3.0"
+
+
+@pytest.mark.parametrize(
+    "case, expected_outcome",
+    [("older_version", "no_change"), ("untrusted_signer", "signature_failed")],
+)
+async def test_trust_data_of_a_refused_manifest_is_not_recorded(
+    layout, case: str, expected_outcome: str
+) -> None:
+    """Trust data is taken only from a manifest that verifies and is not older
+    than the running version, so a replayed older manifest and a manifest from
+    an unknown signer change no trusted key."""
+    pinned_key = Ed25519PrivateKey.generate()
+    signer = pinned_key if case == "older_version" else Ed25519PrivateKey.generate()
+    offered_key = _public_key_b64(Ed25519PrivateKey.generate())
+    _, body, signature_b64 = _signed_manifest(
+        layout.prefix / "tmp",
+        private_key=signer,
+        extra={
+            "trust": {
+                "release_public_keys": [offered_key],
+                "relay_pairing_public_keys": [offered_key],
+            },
+        },
+    )
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=_public_key_b64(pinned_key),
+        session_manager=None,
+        current_version="0.3.0",
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
+        exit_func=lambda code: None,
+    )
+
+    outcome = await updater.consider_manifest(body, signature_b64, body["version"])
+
+    assert outcome == expected_outcome
+    assert load_manifest_trust(layout) == ManifestTrust()
+
+
+async def test_trust_data_is_recorded_once_per_manifest_on_the_event_loop(
+    layout, monkeypatch
+) -> None:
+    """The relay sends the same signed manifest at every tunnel sign-in. Its
+    trust data is recorded once, on the event loop thread. A manifest with
+    other signed content is still recorded."""
+    import mobaide.agent.updater as _updater_mod
+
+    pinned_key = Ed25519PrivateKey.generate()
+    first_pairing_key = _public_key_b64(Ed25519PrivateKey.generate())
+    next_pairing_key = _public_key_b64(Ed25519PrivateKey.generate())
+    _, body, signature_b64 = _signed_manifest(
+        layout.prefix / "tmp",
+        private_key=pinned_key,
+        extra={"trust": {"relay_pairing_public_keys": [first_pairing_key]}},
+    )
+    _, next_body, next_signature_b64 = _signed_manifest(
+        layout.prefix / "tmp-next",
+        private_key=pinned_key,
+        extra={
+            "released_at": "2026-05-26T00:00:00+00:00",
+            "trust": {"relay_pairing_public_keys": [next_pairing_key]},
+        },
+    )
+    recorded_on: list[threading.Thread] = []
+    real_record = _updater_mod.record_manifest_trust
+
+    def _recording(record_layout, manifest_body):
+        recorded_on.append(threading.current_thread())
+        return real_record(record_layout, manifest_body)
+
+    monkeypatch.setattr(_updater_mod, "record_manifest_trust", _recording)
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=_public_key_b64(pinned_key),
+        session_manager=None,
+        current_version="0.2.0",
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
+        exit_func=lambda code: None,
+    )
+
+    for _ in range(3):
+        outcome = await updater.consider_manifest(body, signature_b64, "0.2.0")
+        assert outcome == "no_change"
+
+    assert recorded_on == [threading.current_thread()]
+    assert load_manifest_trust(layout).relay_pairing_public_keys == (
+        first_pairing_key,
+    )
+
+    await updater.consider_manifest(next_body, next_signature_b64, "0.2.0")
+
+    assert recorded_on == [threading.current_thread()] * 2
+    assert load_manifest_trust(layout).relay_pairing_public_keys == (
+        next_pairing_key,
+    )
+
+
+@pytest.mark.parametrize(
+    "flags, staged_version",
+    [([], None), (["--allow-downgrade"], "0.2.0")],
+)
+def test_update_command_goes_to_an_older_version_only_with_allow_downgrade(
+    layout, monkeypatch, flags: list[str], staged_version: str | None
+) -> None:
+    """``mobaide-agent update`` on 0.3.0 with a signed 0.2.0 manifest: the
+    plain command changes nothing; ``--allow-downgrade`` stages it and asks
+    for the restart."""
+    import mobaide.__main__ as _main
+    import mobaide.agent.updater as _updater_mod
+
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    layout.trust_public_key.write_text(public_key_b64 + "\n", encoding="utf-8")
+    manifest_file = layout.prefix / "tmp" / "manifest.json"
+    manifest_file.write_text(
+        json.dumps({"body": body, "signature_b64": signature_b64}),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+    monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(layout.prefix))
+    monkeypatch.setenv("MOBAIDE_AGENT_MANIFEST_URL", manifest_file.as_uri())
+    monkeypatch.setattr(_main, "__version__", "0.3.0")
+    monkeypatch.setattr(_updater_mod, "_build_venv_without_pip", _fake_venv_builder)
+    monkeypatch.setattr(_updater_mod, "_finalize_wheel_install", _fake_finalizer)
+
+    parser = _main._build_parser()
+    args = parser.parse_args(["update", *flags])
+
+    if staged_version is None:
+        assert _main._dispatch(parser, "update", args) == 0
+        assert not layout.current_version_file.exists()
+        assert list(layout.releases_dir.iterdir()) == []
+    else:
+        assert _main._dispatch(parser, "update", args) == 75
+        assert layout.current_version_file.read_text().strip() == staged_version
+
+
+def _update_command(
+    layout, monkeypatch, *, installed: str, flags: list[str], pinned_key_signed: bool = True
+):
+    """``mobaide-agent update`` on version ``installed`` with a published,
+    signed 0.2.0 manifest. Returns a function that runs the command."""
+    import mobaide.__main__ as _main
+    import mobaide.agent.updater as _updater_mod
+
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    if not pinned_key_signed:
+        public_key_b64 = _public_key_b64(Ed25519PrivateKey.generate())
+    layout.trust_public_key.write_text(public_key_b64 + "\n", encoding="utf-8")
+    manifest_file = layout.prefix / "tmp" / "manifest.json"
+    manifest_file.write_text(
+        json.dumps({"body": body, "signature_b64": signature_b64}),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+    monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(layout.prefix))
+    monkeypatch.setenv("MOBAIDE_AGENT_MANIFEST_URL", manifest_file.as_uri())
+    monkeypatch.setattr(_main, "__version__", installed)
+    monkeypatch.setattr(_updater_mod, "_build_venv_without_pip", _fake_venv_builder)
+    monkeypatch.setattr(_updater_mod, "_finalize_wheel_install", _fake_finalizer)
+
+    parser = _main._build_parser()
+    args = parser.parse_args(["update", *flags])
+    return lambda: _main._dispatch(parser, "update", args)
+
+
+def _operator_lines(stdout: str) -> list[str]:
+    return [
+        line for line in stdout.splitlines() if line.startswith("[mobaide-agent]")
+    ]
+
+
+@pytest.mark.parametrize(
+    "installed, pinned_key_signed, exit_code, versions_named, offers_downgrade",
+    [
+        pytest.param("0.3.0", True, 0, ["0.2.0", "0.3.0"], True, id="older"),
+        pytest.param("0.2.0", True, 0, ["0.2.0"], False, id="same"),
+        pytest.param("0.3.0", False, 2, [], False, id="older-not-verified"),
+    ],
+)
+def test_update_command_says_why_nothing_was_installed(
+    layout,
+    monkeypatch,
+    capsys,
+    installed: str,
+    pinned_key_signed: bool,
+    exit_code: int,
+    versions_named: list[str],
+    offers_downgrade: bool,
+) -> None:
+    """The exit code is 0 both for "already installed" and for a refused older
+    version, so the one line on stdout is all the operator has. Only a
+    verified, older version points to ``--allow-downgrade``: a manifest that
+    did not pass the signature check must not."""
+    run = _update_command(
+        layout, monkeypatch,
+        installed=installed, flags=[], pinned_key_signed=pinned_key_signed,
+    )
+
+    assert run() == exit_code
+
+    (line,) = _operator_lines(capsys.readouterr().out)
+    for version in versions_named:
+        assert version in line
+    assert ("--allow-downgrade" in line) is offers_downgrade
+    assert not layout.current_version_file.exists()
+
+
+def test_update_command_with_allow_downgrade_prints_no_refusal(
+    layout, monkeypatch, capsys
+) -> None:
+    run = _update_command(
+        layout, monkeypatch, installed="0.3.0", flags=["--allow-downgrade"],
+    )
+
+    assert run() == 75
+
+    assert layout.current_version_file.read_text().strip() == "0.2.0"
+    output = capsys.readouterr()
+    assert "--allow-downgrade" not in output.out + output.err
+    assert "Nothing was installed" not in output.out + output.err

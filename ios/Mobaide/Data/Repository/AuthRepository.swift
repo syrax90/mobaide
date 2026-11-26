@@ -14,7 +14,6 @@ struct AuthRepository: Sendable {
     /// The relay's default lockout window, for a 429 without a body.
     static let defaultLoginLockoutSeconds = 900
 
-    let agentAPI: AgentAPI
     let centralAPI: CentralAPI
     let tokenStore: TokenStore
     let userIdentityStore: UserIdentityStore
@@ -127,18 +126,6 @@ struct AuthRepository: Sendable {
 
     // MARK: - Agent connection
 
-    func connectAgent(agentUrl: String, username: String, password: String) async throws {
-        let response = try await agentAPI.login(agentUrl: agentUrl, username: username, password: password)
-        // Clear any relay-mode keys from a previous session so that
-        // getConnectionMode() returns DIRECT after a direct login.
-        tokenStore.clear()
-        tokenStore.saveAgentUrl(agentUrl)
-        tokenStore.saveTokens(accessToken: response.access_token, refreshToken: response.refresh_token)
-        await sessionManager.markAgentConnected()
-
-        connectionStore.captureActiveProfile(tokenStore: tokenStore, label: "Direct: \(agentUrl)")
-    }
-
     func disconnectAgent() async {
         await sessionManager.agentDisconnect()
     }
@@ -147,8 +134,7 @@ struct AuthRepository: Sendable {
     /// agent is deleted so its profile is not left orphaned (and marked active)
     /// in the Connections switcher with no way to remove it.
     func removeRelayProfile(agentId: String) {
-        for profile in connectionStore.listProfiles()
-        where profile.mode == "relay" && profile.agentId == agentId {
+        for profile in connectionStore.listProfiles() where profile.agentId == agentId {
             connectionStore.removeProfile(id: profile.id)
         }
     }
@@ -192,14 +178,12 @@ struct AuthRepository: Sendable {
                 accessToken: tokens.access_token,
                 refreshToken: tokens.refresh_token
             )
-            if let existing = connectionStore.listProfiles()
-                .first(where: { $0.mode == "relay" && $0.agentId == agentId }) {
+            if let existing = connectionStore.listProfiles().first(where: { $0.agentId == agentId }) {
                 connectionStore.saveProfile(
                     ConnectionStore.ConnectionProfile(
                         id: existing.id,
                         label: existing.label,
                         mode: existing.mode,
-                        agentUrl: existing.agentUrl,
                         relayServerUrl: existing.relayServerUrl,
                         agentId: existing.agentId,
                         pairingId: existing.pairingId,
@@ -230,8 +214,6 @@ struct AuthRepository: Sendable {
     func logout() async { await sessionManager.forceLogout() }
 
     func getUserEmail() -> String? { userIdentityStore.getUserEmail() }
-
-    func getAgentUrl() -> String? { tokenStore.getAgentUrl() }
 
     func getScheduledDeletionAt() -> String? { userIdentityStore.getScheduledDeletionAt() }
 

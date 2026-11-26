@@ -28,12 +28,23 @@ delivery channel. It is invoked on three triggers:
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import logging
 import urllib.error
 
 import mobaide._http as _http
-from mobaide.agent.updater import StagedBinaryUpdater
+from mobaide import __version__
+from mobaide.agent.install_paths import (
+    manifest_url_from_relay_server_url,
+    read_trust_public_key,
+)
+from mobaide.agent.trust_store import (
+    record_manifest_trust,
+    release_verification_keys,
+)
+from mobaide.agent.updater import StagedBinaryUpdater, version_at_least
+from mobaide.manifest_signing import ManifestSignatureError, verify_signature_any
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +76,9 @@ async def fetch_signed_manifest(
 
     try:
         raw = await asyncio.to_thread(_fetch)
-    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+    except (
+        urllib.error.URLError, OSError, TimeoutError, http.client.HTTPException,
+    ) as exc:
         raise UpdateCheckError(f"cannot reach {url}: {exc}") from exc
 
     try:
@@ -125,6 +138,42 @@ async def run_https_update_check(
         manifest_url, latest_version, outcome, force,
     )
     return outcome
+
+
+async def refresh_manifest_trust(
+    layout,
+    relay_server_url: str,
+    *,
+    current_version: str = __version__,
+    timeout: float = 10.0,
+) -> bool | None:
+    """Fetch the signed manifest and store the trust data it carries.
+
+    An unpaired agent has no updater, so this is how it learns the relay
+    pairing keys. Returns True when the stored trust data changed, False when
+    a verified manifest changed nothing, and None when no manifest could be
+    fetched and verified (retry soon). It never raises for a network or
+    signature failure.
+    """
+    pinned = read_trust_public_key(layout)
+    if pinned is None:
+        return None
+    try:
+        url = manifest_url_from_relay_server_url(relay_server_url)
+        body, signature_b64, version = await fetch_signed_manifest(url, timeout=timeout)
+    except (UpdateCheckError, ValueError) as exc:
+        logger.info("update_check.trust_refresh_skipped: %s", exc)
+        return None
+    try:
+        verify_signature_any(
+            body, signature_b64, release_verification_keys(layout, pinned)
+        )
+    except ManifestSignatureError as exc:
+        logger.warning("update_check.trust_refresh_signature_failed: %s", exc)
+        return None
+    if not version_at_least(version, current_version):
+        return False
+    return record_manifest_trust(layout, body)
 
 
 async def run_periodic_check_loop(

@@ -5,7 +5,8 @@ Subcommands:
 * ``run``              — start the FastAPI app (default; what ``python -m
                          mobaide`` has always done).
 * ``update``           — force an immediate manifest check and apply if a new
-                         version is rolled out.
+                         version is rolled out. ``--allow-downgrade`` also
+                         applies the same or an older signed version.
 * ``pair-qr``          — initiate a QR pairing nonce, render the QR to the
                          terminal, and (with ``--wait``) block until the
                          mobile app claims it. Replaces the legacy
@@ -23,12 +24,6 @@ Subcommands:
                          ``.env``, and start a fresh ``pair-qr`` cycle.
                          Used when re-pairing to a different mobile account
                          or rotating an agent's relay credentials.
-* ``fetch-trust-key``  — fetch the manifest-signing public key from
-                         ``central_server`` and pin it at
-                         ``<prefix>/trust/central_server.pub`` so the
-                         auto-updater is configured. Bootstrap path for
-                         existing installs that were set up before
-                         install.sh learned to fetch the key automatically.
 * ``voice``            — ``status | install | remove | benchmark`` for the
                          opt-in on-PC speech-to-text (see ``mobaide.voice.cli``).
 * ``--version``        — print ``__version__`` and exit.
@@ -52,10 +47,6 @@ from pathlib import Path
 import uvicorn
 
 from mobaide import __version__
-from mobaide.agent.install_paths import (
-    TRUST_KEY_ENDPOINT_PATH as _TRUST_KEY_ENDPOINT_PATH,
-    trust_key_url_from_relay_server_url as _trust_key_url_from_relay_server_url,
-)
 
 
 _AGENT_RESTART_TIMEOUT_S = 15
@@ -66,6 +57,9 @@ _LOCAL_HEALTH_TIMEOUT_S = 3.0
 # Matches install.ps1 / install.sh's wait for the service's pending file.
 _SERVICE_PENDING_TIMEOUT_S = 60.0
 _SERVICE_PENDING_POLL_S = 0.5
+
+# The install scripts carry the release public key and write it on every run.
+_TRUST_KEY_REPAIR_HINT = "Run the Mobaide installer again to restore it."
 
 # Set ``creationflags=_WINDOWS_NO_WINDOW`` on every subprocess invocation
 # on Windows. The agent runs under ``pythonw.exe`` via the Scheduled Task
@@ -86,35 +80,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("run", help="Start the agent (default).")
-    sub.add_parser("update", help="Check for an update and apply if available.")
-
-    fetch_key = sub.add_parser(
-        "fetch-trust-key",
-        help=(
-            "Fetch the manifest-signing public key from central_server "
-            "and pin it locally so the auto-updater can verify rollouts."
-        ),
+    update = sub.add_parser(
+        "update", help="Check for an update and apply if available."
     )
-    fetch_key.add_argument(
-        "--from-url",
-        help=(
-            "Override URL to fetch the trust key from. Default: derive "
-            "https://<host>/api/v1/agent/trust_key from RELAY_SERVER_URL "
-            "in <prefix>/mobaide_agent/.env."
-        ),
-    )
-    fetch_key.add_argument(
-        "--prefix",
-        help="Override install prefix (default: install_paths.default_prefix()).",
-    )
-    fetch_key.add_argument(
-        "--no-restart",
+    update.add_argument(
+        "--allow-downgrade",
         action="store_true",
         help=(
-            "Skip the best-effort service restart. The trust key is "
-            "written, but the running agent will NOT pick it up — and "
-            "the auto-updater will stay disabled — until the next "
-            "supervisor restart."
+            "Also apply a signed manifest whose version is the same as, or "
+            "older than, the installed version. Without it the agent only "
+            "moves to a higher version."
         ),
     )
 
@@ -312,8 +287,7 @@ def main(argv: list[str] | None = None) -> None:
         #
         # The global policy installed here flows to every entry point that
         # creates its loop via ``asyncio.run`` / ``asyncio.get_event_loop``
-        # — the CLI verbs (``pair-qr --wait``, ``fetch-trust-key``,
-        # ``re-pair``, ``update``). It does NOT flow to uvicorn's
+        # — the CLI verbs (``pair-qr --wait``, ``re-pair``, ``update``). It does NOT flow to uvicorn's
         # single-process ``run`` path: uvicorn 0.36+ constructs its loop
         # via ``asyncio.Runner(loop_factory=Config.get_loop_factory())``,
         # bypassing the policy entirely. The ``run`` subcommand handles
@@ -350,7 +324,7 @@ def _dispatch(
     parser: argparse.ArgumentParser, command: str, args: argparse.Namespace
 ) -> int:
     if command == "update":
-        return _run_update()
+        return _run_update(allow_downgrade=args.allow_downgrade)
     if command == "pair-qr":
         return _run_pair_qr(args)
     if command == "pair":
@@ -361,8 +335,6 @@ def _dispatch(
         return _run_show_qr(args)
     if command == "re-pair":
         return _run_re_pair(args)
-    if command == "fetch-trust-key":
-        return _run_fetch_trust_key(args)
     if command == "voice":
         from mobaide.voice.cli import run as run_voice
 
@@ -486,11 +458,13 @@ def _serve(server: uvicorn.Server) -> None:
         pass
 
 
-def _run_update() -> int:
+def _run_update(*, allow_downgrade: bool = False) -> int:
     """Synchronous wrapper that drives the staged-binary updater once.
 
     Returns:
-        0   manifest applied or no change.
+        0   no change: already installed, or the published version is not
+            higher than the installed one.
+        75  a release was installed; it runs after the agent restarts.
         2   manifest signature failed (fail-closed).
         3   no manifest pointer / cannot reach central_server.
         4   active sessions; deferred (use ``--force`` to override).
@@ -506,9 +480,7 @@ def _run_update() -> int:
     if public_key_b64 is None:
         sys.stderr.write(
             f"mobaide-agent update: missing public key at {layout.trust_public_key}.\n"
-            f"Run 'mobaide-agent fetch-trust-key' on this host to bootstrap it "
-            f"from central_server, or set MOBAIDE_AGENT_TRUST_KEY_B64=<base64-ed25519> "
-            f"for an airgap install.\n"
+            f"{_TRUST_KEY_REPAIR_HINT}\n"
         )
         return 3
 
@@ -521,11 +493,17 @@ def _run_update() -> int:
         return 3
 
     return asyncio.run(
-        _drive_update(layout, public_key_b64, manifest_url, force=True)
+        _drive_update(
+            layout, public_key_b64, manifest_url,
+            force=True, allow_downgrade=allow_downgrade,
+        )
     )
 
 
-async def _drive_update(layout, public_key_b64, manifest_url, *, force) -> int:
+async def _drive_update(
+    layout, public_key_b64, manifest_url, *, force, allow_downgrade=False,
+) -> int:
+    import http.client
     import json
 
     import mobaide._http as _http
@@ -535,11 +513,24 @@ async def _drive_update(layout, public_key_b64, manifest_url, *, force) -> int:
         with _http.urlopen(manifest_url, timeout=30) as resp:
             return resp.read().decode("utf-8")
 
-    raw = await asyncio.to_thread(_fetch)
-    record = json.loads(raw)
+    try:
+        raw = await asyncio.to_thread(_fetch)
+        record = json.loads(raw)
+        if not isinstance(record, dict):
+            raise ValueError("the answer is not a JSON object")
+    except (urllib_error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
+        sys.stderr.write(
+            f"mobaide-agent update: cannot read the manifest at {manifest_url}: {exc}\n"
+        )
+        return 3
     body = record.get("body", record)
     signature_b64 = record.get("signature_b64", "")
     latest_version = body.get("version", "")
+    if not isinstance(latest_version, str) or not latest_version:
+        sys.stdout.write(
+            "[mobaide-agent] Nothing was installed: the manifest has no version.\n"
+        )
+        return _outcome_exit_code("signature_failed")
 
     # The explicit ``mobaide-agent update`` CLI verb builds its own updater
     # here, deliberately bypassing app._build_updater's dev-run guard
@@ -554,151 +545,51 @@ async def _drive_update(layout, public_key_b64, manifest_url, *, force) -> int:
         current_version=__version__,
     )
     outcome = await updater.consider_manifest(
-        body, signature_b64, latest_version, force=force,
+        body, signature_b64, latest_version,
+        force=force, allow_downgrade=allow_downgrade, exit_after_stage=False,
     )
+    sys.stdout.write(_update_outcome_message(outcome, latest_version) + "\n")
     return _outcome_exit_code(outcome)
 
 
+def _update_outcome_message(outcome: str, published: str) -> str:
+    if outcome == "staged":
+        return (
+            f"[mobaide-agent] Installed version {published}. "
+            "It starts at the next restart of the agent."
+        )
+    if outcome == "no_change" and published == __version__:
+        return f"[mobaide-agent] Version {__version__} is already installed."
+    if outcome == "no_change":
+        return (
+            f"[mobaide-agent] Nothing was installed: the published version "
+            f"{published} is not higher than the installed version "
+            f"{__version__}. An older version can lack later security fixes. "
+            "Use --allow-downgrade only when you intend to go back to that "
+            "version."
+        )
+    if outcome == "signature_failed":
+        return (
+            "[mobaide-agent] Nothing was installed: the release did not pass "
+            "the signature, hash or install checks. See the log lines above."
+        )
+    if outcome == "deferred":
+        return "[mobaide-agent] Nothing was installed: sessions are running."
+    return f"[mobaide-agent] Update result: {outcome}."
+
+
 def _outcome_exit_code(outcome: str) -> int:
-    if outcome in ("no_change", "staged"):
+    if outcome == "staged":
+        from mobaide.agent.updater import EXIT_RESTART_REQUESTED
+
+        return EXIT_RESTART_REQUESTED
+    if outcome == "no_change":
         return 0
     if outcome == "signature_failed":
         return 2
     if outcome == "deferred":
         return 4
     return 1
-
-
-def _run_fetch_trust_key(args: argparse.Namespace) -> int:
-    """Fetch the manifest-signing public key and pin it locally.
-
-    Returns:
-        0   key written successfully (and supervisor restarted, unless
-            ``--no-restart``).
-        2   ``RELAY_SERVER_URL`` could not be resolved (no env file or no
-            value), and ``--from-url`` was not supplied.
-        3   the trust-key endpoint could not be reached or returned a
-            non-JSON / malformed response.
-        4   the fetched value did not validate as a base64-Ed25519 public
-            key.
-    """
-    import base64
-    import json
-    import urllib.error
-
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-        Ed25519PublicKey,
-    )
-
-    import mobaide._http as _http
-    from mobaide.agent._env_writer import (
-        atomic_write,
-        env_path_for_prefix,
-        parse_env_file,
-    )
-    from mobaide.agent.install_paths import default_prefix
-    from mobaide.agent.updater import InstallLayout
-
-    prefix = Path(args.prefix) if args.prefix else default_prefix()
-    layout = InstallLayout(prefix=prefix)
-
-    url = getattr(args, "from_url", None)
-    if not url:
-        env_file = env_path_for_prefix(prefix)
-        if not env_file.exists():
-            sys.stderr.write(
-                f"mobaide-agent fetch-trust-key: {env_file} does not exist.\n"
-                f"Pass --from-url <central_server_base>{_TRUST_KEY_ENDPOINT_PATH} "
-                f"or run: python -m mobaide.agent.config init-env\n"
-            )
-            return 2
-        relay_server_url = parse_env_file(env_file).get("RELAY_SERVER_URL", "").strip()
-        if not relay_server_url:
-            sys.stderr.write(
-                f"mobaide-agent fetch-trust-key: RELAY_SERVER_URL is empty in "
-                f"{env_file}.\n"
-                f"Pair the agent first, or pass --from-url explicitly.\n"
-            )
-            return 2
-        try:
-            url = _trust_key_url_from_relay_server_url(relay_server_url)
-        except ValueError as exc:
-            sys.stderr.write(f"mobaide-agent fetch-trust-key: {exc}\n")
-            return 2
-
-    sys.stdout.write(f"[mobaide-agent] Fetching trust key from {url}\n")
-    try:
-        with _http.urlopen(url, timeout=30) as resp:
-            raw = resp.read().decode("utf-8")
-    except (urllib.error.URLError, OSError) as exc:
-        sys.stderr.write(
-            f"mobaide-agent fetch-trust-key: cannot reach {url}: {exc}\n"
-        )
-        return 3
-    try:
-        record = json.loads(raw)
-        public_key_b64 = record["public_key_b64"]
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        sys.stderr.write(
-            f"mobaide-agent fetch-trust-key: malformed response from {url}: "
-            f"{exc}\n"
-        )
-        return 3
-    if not isinstance(public_key_b64, str) or not public_key_b64.strip():
-        sys.stderr.write(
-            f"mobaide-agent fetch-trust-key: response from {url} carried an "
-            f"empty public_key_b64.\n"
-        )
-        return 3
-
-    public_key_b64 = public_key_b64.strip()
-    try:
-        key_bytes = base64.b64decode(public_key_b64, validate=True)
-        Ed25519PublicKey.from_public_bytes(key_bytes)
-    except (ValueError, TypeError) as exc:
-        sys.stderr.write(
-            f"mobaide-agent fetch-trust-key: fetched value is not a valid "
-            f"base64 Ed25519 public key: {exc}\n"
-        )
-        return 4
-
-    # Trust file is a public key — keep default 0o644 perms so a service
-    # running as a non-root user (the typical systemd setup, where the
-    # install was done with sudo) can still read the file written by
-    # root. ``atomic_write`` uses ``mkstemp`` which creates the file
-    # 0o600 by default; explicitly chmod back to umask-respecting
-    # behaviour after the rename. POSIX-only — Windows ACLs are
-    # inherited from the parent ``trust/`` dir, which is fine here.
-    target = layout.trust_public_key
-    atomic_write(target, public_key_b64 + "\n")
-    if sys.platform != "win32":
-        try:
-            os.chmod(target, 0o644)
-        except OSError:
-            pass
-    sys.stdout.write(
-        f"[mobaide-agent] Wrote trust key to {target}.\n"
-    )
-
-    if args.no_restart:
-        sys.stdout.write(
-            "[mobaide-agent] Skipping restart (--no-restart). The auto-updater "
-            "stays disabled until the agent restarts; restart manually:\n"
-        )
-        if sys.platform.startswith("linux"):
-            sys.stdout.write("    sudo systemctl restart mobaide-agent\n")
-        elif sys.platform == "darwin":
-            sys.stdout.write(
-                "    launchctl kickstart -k gui/$(id -u)/com.mobaide.agent\n",
-            )
-        elif sys.platform == "win32":
-            sys.stdout.write(
-                "    Stop-ScheduledTask  -TaskName MobaideAgent\n"
-                "    Start-ScheduledTask -TaskName MobaideAgent\n"
-            )
-        return 0
-
-    return _try_restart_service(prefix)
 
 
 def _run_pair_qr(args: argparse.Namespace) -> int:
@@ -709,7 +600,7 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
         2   ``.env`` missing or RELAY_SERVER_URL unset — operator must run
             ``init-env`` first and configure the relay URL.
         3   network error talking to the central server.
-        4   trust key not pinned (run ``mobaide-agent fetch-trust-key``).
+        4   trust key not pinned (run the installer again).
         5   trust-key fingerprint mismatch with the relay's current key.
         6   pairing WebSocket failed (signature, transport, TTL).
     """
@@ -763,10 +654,14 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
         sys.stderr.write(
             f"mobaide-agent pair-qr: trust key not pinned at "
             f"{layout.trust_public_key}.\n"
-            f"Run: mobaide-agent fetch-trust-key\n"
+            f"{_TRUST_KEY_REPAIR_HINT}\n"
         )
         return 4
     pinned_fp = compute_trust_key_fp(pinned_pub_key)
+    # Before the QR is shown: the wait must start as soon as it is on screen.
+    pairing_keys = (
+        _pairing_keys(layout, relay_server_url, pinned_pub_key) if args.wait else ()
+    )
 
     pending = load_pending_pairing(layout)
     if pending is None or pending.trust_key_fp != pinned_fp:
@@ -830,7 +725,7 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
             PairingWsClient().wait_for_claim(
                 ws_url=pending.ws_url,
                 timeout_s=timeout_s,
-                trust_pub_key_b64=pinned_pub_key,
+                trust_pub_keys_b64=pairing_keys,
                 expected_relay_url=pending.relay_url,
             )
         )
@@ -848,6 +743,15 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
     if args.no_restart:
         return 0
     return _try_restart_service(prefix)
+
+
+def _pairing_keys(layout, relay_server_url: str, pinned_pub_key: str) -> tuple[str, ...]:
+    """Keys that may sign the credential push, after a refresh from the signed manifest."""
+    from mobaide.agent.trust_store import pairing_verification_keys
+    from mobaide.agent.update_check import refresh_manifest_trust
+
+    asyncio.run(refresh_manifest_trust(layout, relay_server_url))
+    return pairing_verification_keys(layout, pinned_pub_key)
 
 
 def _confirm_device_pairing(account_hint: str, hostname: str) -> bool:
@@ -883,7 +787,7 @@ def _run_pair(args: argparse.Namespace) -> int:
         0   paired.
         2   ``.env`` missing or RELAY_SERVER_URL unset.
         3   network error talking to the central server.
-        4   trust key not pinned (run ``mobaide-agent fetch-trust-key``).
+        4   trust key not pinned (run the installer again).
         5   trust-key fingerprint mismatch with the relay's current key.
         6   pairing WebSocket failed (signature, transport, TTL); the
             redemption stays on file so a re-run can reconnect to it.
@@ -965,10 +869,11 @@ def _run_pair(args: argparse.Namespace) -> int:
         sys.stderr.write(
             f"mobaide-agent pair: trust key not pinned at "
             f"{layout.trust_public_key}.\n"
-            f"Run: mobaide-agent fetch-trust-key\n"
+            f"{_TRUST_KEY_REPAIR_HINT}\n"
         )
         return 4
     pinned_fp = compute_trust_key_fp(pinned_pub_key)
+    pairing_keys = _pairing_keys(layout, relay_server_url, pinned_pub_key)
 
     # Resume a redemption this host already won: the relay hands the nonce
     # out exactly once, so a run interrupted between redeem and claim can
@@ -1092,7 +997,7 @@ def _run_pair(args: argparse.Namespace) -> int:
             PairingWsClient().wait_for_claim(
                 ws_url=pending.ws_url,
                 timeout_s=timeout_s,
-                trust_pub_key_b64=pinned_pub_key,
+                trust_pub_keys_b64=pairing_keys,
                 expected_relay_url=pending.relay_url,
             )
         )
@@ -1128,7 +1033,7 @@ def _run_show_trust_fp(args: argparse.Namespace) -> int:
 
     Returns:
         0   fingerprint printed.
-        4   trust key not pinned (run ``mobaide-agent fetch-trust-key``).
+        4   trust key not pinned (run the installer again).
     """
     from mobaide.agent.install_paths import default_prefix
     from mobaide.agent.pairing_qr import read_pinned_trust_key_fp
@@ -1141,7 +1046,7 @@ def _run_show_trust_fp(args: argparse.Namespace) -> int:
         sys.stderr.write(
             f"mobaide-agent show-trust-fp: no usable trust key at "
             f"{layout.trust_public_key}.\n"
-            f"Run: mobaide-agent fetch-trust-key\n"
+            f"{_TRUST_KEY_REPAIR_HINT}\n"
         )
         return 4
     sys.stdout.write(f"{fingerprint}\n")

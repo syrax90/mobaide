@@ -186,17 +186,10 @@ extension AutoScanWsClient {
                 if await sessionManager.refresh() == .terminal { return nil }
             }
             guard let token = tokenStore.getAccessToken() else { return nil }
-            let mode = tokenStore.getConnectionMode()
-            let base: String?
-            switch mode {
-            case .direct: base = tokenStore.getAgentUrl()
-            case .relay: base = tokenStore.getRelayServerUrl()
-            }
-            guard let base else { return nil }
-            return RelayRouting.webSocketURLString(
-                baseURL: base,
+            guard let base = tokenStore.getRelayServerUrl() else { return nil }
+            return RelayRouting.agentWebSocketURLString(
+                relayServerURL: base,
                 path: "ws/autoscan",
-                mode: mode,
                 agentId: tokenStore.getAgentId(),
                 token: token
             )

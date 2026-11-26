@@ -1,13 +1,10 @@
 package com.mobaide.app.data.repository
 
-import com.mobaide.app.data.auth.ConnectionStore
 import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.auth.SessionManager
-import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.CentralApi
-import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.DeleteAccountReauthErrorBody
 import com.mobaide.app.data.network.dto.DeleteAccountRequest
 import com.mobaide.app.data.network.dto.ResendRateLimitedErrorBody
@@ -113,12 +110,9 @@ sealed interface CancelDeletionResult {
 }
 
 class AuthRepository(
-    private val restApi: RestApi,
     private val centralApi: CentralApi,
-    private val tokenStore: TokenStore,
     private val userIdentityStore: UserIdentityStore,
     private val sessionManager: SessionManager,
-    private val connectionStore: ConnectionStore,
     private val deviceIdentityStore: DeviceIdentityStore,
 ) {
 
@@ -328,24 +322,6 @@ class AuthRepository(
         sessionManager.userLogout()
     }
 
-    suspend fun connectAgent(agentUrl: String, username: String, password: String) {
-        val response = restApi.login(agentUrl, username, password)
-        // Clear any relay-mode keys from a previous session so that
-        // getConnectionMode() returns DIRECT after a direct login.
-        tokenStore.clear()
-        // Persist first, then flip the observable state. Ordering matters
-        // so that any observer that races on FullyConnected can read the
-        // tokens it needs without seeing a half-initialised session.
-        tokenStore.saveAgentUrl(agentUrl)
-        tokenStore.saveTokens(response.access_token, response.refresh_token)
-        sessionManager.markAgentConnected()
-
-        connectionStore.captureActiveProfile(
-            tokenStore,
-            label = "Direct: $agentUrl",
-        )
-    }
-
     /**
      * Disconnect from the current agent but keep the user identity.
      * Transitions FullyConnected → UserOnly.
@@ -363,8 +339,6 @@ class AuthRepository(
     }
 
     fun isLoggedIn(): Boolean = sessionManager.isLoggedIn()
-
-    fun getAgentUrl(): String? = tokenStore.getAgentUrl()
 
     /**
      * Request account deletion using a current password as re-auth proof.

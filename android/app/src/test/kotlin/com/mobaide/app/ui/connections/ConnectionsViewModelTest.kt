@@ -28,11 +28,14 @@ class ConnectionsViewModelTest {
 
     // ---- Helpers ------------------------------------------------------------
 
-    private val directProfile = ConnectionProfile(
+    private val firstProfile = ConnectionProfile(
         id = "prof-1",
-        label = "Direct: https://agent.local",
-        mode = "direct",
-        agentUrl = "https://agent.local",
+        label = "Relay: agent-first",
+        mode = "relay",
+        relayServerUrl = "https://relay.example.com",
+        agentId = "agent-first",
+        pairingId = "pair-0",
+        deviceId = "dev-1",
         accessToken = "at-1",
         refreshToken = "rt-1",
     )
@@ -50,7 +53,7 @@ class ConnectionsViewModelTest {
     )
 
     private fun buildDeps(
-        profiles: List<ConnectionProfile> = listOf(directProfile, relayProfile),
+        profiles: List<ConnectionProfile> = listOf(firstProfile, relayProfile),
         activeId: String? = "prof-1",
     ): Deps {
         val connectionStore = mockk<ConnectionStore>(relaxUnitFun = true)
@@ -116,7 +119,7 @@ class ConnectionsViewModelTest {
     fun removeProfile_refreshesUiState() = runTest {
         val deps = buildDeps()
         // After removal, only the relay profile remains
-        var currentProfiles = listOf(directProfile, relayProfile)
+        var currentProfiles = listOf(firstProfile, relayProfile)
         every { deps.connectionStore.listProfiles() } answers { currentProfiles }
         every { deps.connectionStore.removeProfile(any()) } answers {
             currentProfiles = currentProfiles.filter { it.id != firstArg<String>() }
