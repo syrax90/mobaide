@@ -54,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -611,6 +612,7 @@ private fun ChatDockArea(
         }
     }
     val requests = ui.state.requests
+    val composerFocus = remember { FocusRequester() }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -673,6 +675,32 @@ private fun ChatDockArea(
                     onOpenSettings = onOpenSettings,
                 )
             }
+            val promptSuggestion = ui.promptSuggestion
+            // Spent once the user used it or typed over it: it does not come back
+            // when the composer is empty again.
+            var spentSuggestion by rememberSaveable { mutableStateOf<String?>(null) }
+            val composerEmpty = composer.text.isEmpty()
+            val drafting = !composerEmpty || ui.images.isNotEmpty() || ui.imagesLoading
+            val latestSuggestion = ui.state.promptSuggestions.firstOrNull()
+            // A withdrawn list (a new turn) resets it: the next turn may offer the same text.
+            LaunchedEffect(drafting, latestSuggestion) {
+                if (latestSuggestion == null) {
+                    spentSuggestion = null
+                } else if (drafting) {
+                    spentSuggestion = latestSuggestion
+                }
+            }
+            if (promptSuggestion != null && promptSuggestion != spentSuggestion && composerEmpty && suggestions == null) {
+                PromptSuggestionChip(
+                    text = promptSuggestion,
+                    onClick = {
+                        // Fills only: the user reads or edits it, then taps Send.
+                        spentSuggestion = promptSuggestion
+                        onComposerChange(TextFieldValue(promptSuggestion, TextRange(promptSuggestion.length)))
+                        runCatching { composerFocus.requestFocus() }
+                    },
+                )
+            }
             ChatComposer(
                 value = composer,
                 onValueChange = onComposerChange,
@@ -693,6 +721,7 @@ private fun ChatDockArea(
                 micButton = micButton,
                 dictationBar = dictationBar,
                 onExpand = onExpand,
+                focusRequester = composerFocus,
             )
         }
     }

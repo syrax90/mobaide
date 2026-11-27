@@ -346,6 +346,9 @@ const limitWaitSchema = z
   .catch(null);
 export type ChatLimitWait = NonNullable<z.infer<typeof limitWaitSchema>>;
 
+/** A prompt the agent predicts the user sends next. */
+const promptSuggestionSchema = z.object({ text: z.string().refine((text) => text.trim() !== '') });
+
 const agentInfoSchema = z
   .object({ name: text, title: text, version: text })
   .nullable()
@@ -372,6 +375,8 @@ const STATE_FIELDS = {
   limit_wait: limitWaitSchema,
   /** The agent takes `new_conversation`; an older one leaves it out. */
   new_conversation: flag,
+  /** Most likely first; `[]` when the agent predicts nothing. */
+  prompt_suggestions: lenientArray(promptSuggestionSchema),
 };
 
 type StateFields = typeof STATE_FIELDS;
@@ -397,6 +402,7 @@ export const INITIAL_CHAT_STATE: ChatState = {
   background: null,
   limit_wait: null,
   new_conversation: false,
+  prompt_suggestions: [],
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

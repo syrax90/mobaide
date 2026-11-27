@@ -190,6 +190,16 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
     !restarting &&
     !startingNew &&
     (state.status === 'ready' || state.status === 'running' || state.status === 'error');
+  const suggestion =
+    live &&
+    !closed &&
+    !restarting &&
+    !startingNew &&
+    state.status === 'ready' &&
+    state.requests.length === 0 &&
+    state.queue.length === 0
+      ? (state.prompt_suggestions[0]?.text ?? null)
+      : null;
   const focusView = useChatPrefsStore((prefs) => prefs.focusView);
   const setFocusView = useChatPrefsStore((prefs) => prefs.setFocusView);
   const fullscreen = useFullscreen();
@@ -412,6 +422,8 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
               cancelling={state.cancelling}
               acceptsImages={state.prompt_caps.image}
               commands={state.commands}
+              suggestion={suggestion}
+              latestSuggestion={state.prompt_suggestions[0]?.text ?? null}
               handleRef={composerRef}
             />
           </div>

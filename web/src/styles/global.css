@@ -6342,6 +6342,22 @@ body:has(dialog[open]) {
   gap: 0.4rem;
 }
 
+.chat-prompt-suggestion-row {
+  display: flex;
+  min-width: 0;
+}
+
+.chat-chip.chat-prompt-suggestion {
+  max-width: 100%;
+  min-height: 32px;
+  color: var(--text);
+}
+
+.chat-prompt-suggestion .chat-icon {
+  flex: none;
+  color: var(--accent);
+}
+
 .chat-composer-row {
   display: flex;
   align-items: flex-end;

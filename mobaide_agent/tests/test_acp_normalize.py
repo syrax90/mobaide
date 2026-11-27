@@ -1052,6 +1052,54 @@ class TestPlanEntries:
         ]
 
 
+class TestPromptSuggestions:
+    @staticmethod
+    def _text(text: str) -> dict[str, str]:
+        return {"type": "text", "text": text}
+
+    def test_text_blocks_are_joined_and_trimmed_most_likely_first(self):
+        suggestions = nz.prompt_suggestions(
+            [
+                {"prompt": [self._text("  Run the tests"), self._text(" and fix what breaks \n")]},
+                {"prompt": [self._text("Commit it")]},
+            ]
+        )
+
+        assert suggestions == [{"text": "Run the tests and fix what breaks"}, {"text": "Commit it"}]
+
+    def test_a_suggestion_with_a_non_text_block_or_blank_text_is_skipped(self):
+        image = {"type": "image", "mimeType": "image/png", "data": "iVBORw0KGgo="}
+
+        suggestions = nz.prompt_suggestions(
+            [
+                {"prompt": [self._text("Look at this"), image]},
+                {"prompt": [self._text("  \n ")]},
+                {"prompt": []},
+                {"prompt": "Run it"},
+                "Run it",
+                {"prompt": [self._text("Open a PR")]},
+            ]
+        )
+
+        assert suggestions == [{"text": "Open a PR"}]
+
+    def test_at_most_three_suggestions_each_capped(self):
+        long = "x" * (nz.PROMPT_SUGGESTION_TEXT_MAX + 50)
+
+        suggestions = nz.prompt_suggestions(
+            [{"prompt": [self._text(long)]}] + [{"prompt": [self._text(f"Next {i}")]} for i in range(4)]
+        )
+
+        assert len(suggestions) == nz.PROMPT_SUGGESTIONS_MAX
+        assert suggestions[0] == {"text": "x" * nz.PROMPT_SUGGESTION_TEXT_MAX}
+        assert suggestions[1:] == [{"text": "Next 0"}, {"text": "Next 1"}]
+
+    def test_an_empty_list_withdraws_and_a_malformed_one_is_none(self):
+        assert nz.prompt_suggestions([]) == []
+        assert nz.prompt_suggestions(None) is None
+        assert nz.prompt_suggestions({"prompt": [self._text("Run it")]}) is None
+
+
 class TestUsage:
     def test_reads_used_size_and_cost(self):
         assert nz.usage({"used": 10, "size": 100, "cost": {"amount": 1, "currency": "USD"}}) == {

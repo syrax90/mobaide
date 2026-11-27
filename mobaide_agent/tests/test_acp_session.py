@@ -6302,3 +6302,121 @@ class TestSubagents:
         assert self._card(m, self.BACKGROUND)["can_cancel"] is False
         gone = await m.command("cancel_subagent", subagent_id=card["subagent_id"])
         assert gone["error"] == "Unknown subagent"
+
+
+_SUGGESTED = "Run the tests and fix what breaks"
+
+
+def _suggestion_update(*texts: str) -> dict[str, Any]:
+    return {
+        "sessionUpdate": "prompt_suggestions_update",
+        "suggestions": [{"prompt": [{"type": "text", "text": text}]} for text in texts],
+    }
+
+
+def _suggestion_patches(m: TimelineMirror) -> list[Any]:
+    """Each ``prompt_suggestions`` value the session sent, in order."""
+    return [
+        ev["patch"]["prompt_suggestions"]
+        for f in m.frames
+        if f["t"] == "events"
+        for ev in f["events"]
+        if ev["type"] == "state" and "prompt_suggestions" in ev["patch"]
+    ]
+
+
+class TestPromptSuggestions:
+    """Claude Code's predicted next prompt (``prompt_suggestions_update``) as
+    the ``prompt_suggestions`` state key: shown after a turn, withdrawn when
+    the user moves on."""
+
+    async def test_a_suggestion_after_a_turn_stays_until_the_next_prompt_is_dispatched(self, open_chat):
+        m = await open_chat()
+        assert m.state["prompt_suggestions"] == []
+
+        await m.command("prompt", text="suggest something")
+        await m.until(lambda: m.state.get("prompt_suggestions") == [{"text": _SUGGESTED}])
+
+        assert m.status == "ready"
+        assert not any(_SUGGESTED in (item.get("text") or "") for item in m.items.values())
+        seen = len(m.frames)
+
+        await m.command("prompt", text="hello")
+        await m.until(_turn_done(m, "You said: hello"))
+
+        assert m.state["prompt_suggestions"] == []
+        running = next(
+            ev["patch"]
+            for f in m.frames[seen:]
+            if f["t"] == "events"
+            for ev in f["events"]
+            if ev["type"] == "state" and ev["patch"].get("status") == "running"
+        )
+        assert running["prompt_suggestions"] == []
+
+    @pytest.mark.parametrize("op", ["new_conversation", "clear"])
+    async def test_a_new_conversation_clears_the_suggestion(self, open_chat, op):
+        m = await open_chat()
+        await m.command("prompt", text="suggest something")
+        await m.until(lambda: m.state.get("prompt_suggestions") == [{"text": _SUGGESTED}])
+
+        if op == "clear":
+            assert (await m.command("prompt", text="/clear"))["ok"] is True
+        else:
+            assert (await m.command("new_conversation"))["ok"] is True
+        await m.until(lambda: m.status == "ready" and m.state.get("prompt_suggestions") == [])
+
+        assert _suggestion_patches(m)[-1] == []
+
+    async def test_a_steer_clears_the_suggestion(self, open_chat):
+        m = await open_chat()
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running" and bool(m.of_type("agent")))
+        _agent_sends_to(m, _suggestion_update("Also check the docs"))
+        await m.until(lambda: m.state.get("prompt_suggestions") == [{"text": "Also check the docs"}])
+        queued = await m.command("prompt", text="also check the README")
+
+        await m.command("steer", queue_id=queued["data"]["queue_id"])
+
+        await m.until(lambda: m.state["queue"] == [] and m.state.get("prompt_suggestions") == [])
+        await m.command("cancel")
+        await m.until(lambda: m.status == "ready")
+
+    async def test_a_malformed_update_is_ignored_and_an_empty_one_withdraws(self, open_chat):
+        m = await open_chat(argv=MINI_AGENT_ARGV)
+        items_before = dict(m.items)
+
+        seen = len(_suggestion_patches(m))
+
+        _agent_sends(m, _suggestion_update("Commit it"))
+        await m.until(lambda: m.state.get("prompt_suggestions") == [{"text": "Commit it"}])
+        _agent_sends(m, {"sessionUpdate": "prompt_suggestions_update", "suggestions": "Push it"})
+        _agent_sends(m, {"sessionUpdate": "prompt_suggestions_update"})
+        _agent_sends(m, _suggestion_update("  "))
+        await m.until(lambda: m.state.get("prompt_suggestions") == [])
+
+        assert _suggestion_patches(m)[seen:] == [[{"text": "Commit it"}], []]
+        assert m.items == items_before
+        assert m.status == "ready"
+        assert m.session.to_info().attention is None
+
+    async def test_an_agent_exit_clears_the_suggestion_and_a_late_one_is_ignored(self, open_chat):
+        m = await open_chat(argv=MINI_AGENT_ARGV)
+        _agent_sends(m, _suggestion_update("Commit it"))
+        await m.until(lambda: m.state.get("prompt_suggestions") == [{"text": "Commit it"}])
+
+        psutil.Process(m.session.pid).kill()
+        await m.until(lambda: m.status == "error")
+
+        assert m.state["prompt_suggestions"] == []
+        _agent_sends(m, _suggestion_update("Push it"))
+        await m.session.handle_command(b'{"op": "sync"}')
+        await m.until(lambda: m.frames[-1]["t"] == "snapshot")
+        assert m.state["prompt_suggestions"] == []
+
+
+def _agent_sends_to(m: TimelineMirror, update: dict[str, Any]) -> None:
+    """Apply one ``session/update`` as if the agent of the chat's session sent it."""
+    m.session._on_notification(
+        "session/update", {"sessionId": m.state["acp_session_id"], "update": update}
+    )

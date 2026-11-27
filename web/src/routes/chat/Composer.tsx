@@ -30,7 +30,7 @@ import { useSaveTemplate } from '../templates/useSaveTemplate';
 import { TemplatesPicker } from '../terminal/TemplatesPicker';
 import { ComposerVoiceDialogs } from '../terminal/voice/ComposerVoiceDialogs';
 import { VoiceButton } from '../terminal/voice/VoiceButton';
-import { CrossIcon, ImageIcon, SendIcon, StopIcon, TemplateIcon } from './ChatIcons';
+import { BulbIcon, CrossIcon, ImageIcon, SendIcon, StopIcon, TemplateIcon } from './ChatIcons';
 
 const MAX_SUGGESTIONS = 50;
 const IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
@@ -56,6 +56,13 @@ interface ComposerProps {
   cancelling: boolean;
   acceptsImages: boolean;
   commands: readonly ChatCommandInfo[];
+  /**
+   * The agent's predicted next prompt, offered while the composer is empty;
+   * null when the chat cannot take one now (not ready, a request shows…).
+   */
+  suggestion?: string | null;
+  /** The agent's latest suggestion whatever the gate says; null once it withdraws it. */
+  latestSuggestion?: string | null;
   handleRef?: Ref<ComposerHandle>;
 }
 
@@ -86,6 +93,8 @@ export function Composer({
   cancelling,
   acceptsImages,
   commands,
+  suggestion = null,
+  latestSuggestion = null,
   handleRef,
 }: ComposerProps) {
   const [text, setTextState] = useState(() => model.draft);
@@ -97,6 +106,9 @@ export function Composer({
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   const [hint, setHint] = useState<{ text: string; hint: string } | null>(null);
   const [panel, setPanel] = useState<TemplatePanel>({ kind: 'none' });
+  // The suggestion the user used or typed over: it does not come back when
+  // the composer is empty again.
+  const [spentSuggestion, setSpentSuggestion] = useState<string | null>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const caretRef = useRef<number | null>(null);
@@ -198,6 +210,24 @@ export function Composer({
   );
 
   const hasContent = text.trim() !== '' || images.length > 0;
+  const empty = text === '' && images.length === 0 && preparing === 0;
+  const offered =
+    suggestion !== null && suggestion !== spentSuggestion && empty && !closed ? suggestion : null;
+  // Spent once the composer gets content; a withdrawn list (a new turn) resets
+  // it, so the next turn may offer the same text again.
+  useEffect(() => {
+    if (latestSuggestion === null) setSpentSuggestion(null);
+    else if (!empty) setSpentSuggestion(latestSuggestion);
+  }, [empty, latestSuggestion]);
+
+  const fillSuggestion = (value: string) => {
+    // Fills only: the user reads or edits it, then sends it themselves.
+    setSpentSuggestion(value);
+    caretRef.current = value.length;
+    setText(value);
+    setActive(0);
+    setHint(null);
+  };
   const canSend = live && !closed && !halted && hasContent && preparing === 0;
   const showStop = running && !hasContent;
 
@@ -340,6 +370,22 @@ export function Composer({
 
   return (
     <div className="chat-composer">
+      {offered !== null && (
+        <div className="chat-prompt-suggestion-row">
+          <button
+            type="button"
+            className="chat-chip chat-prompt-suggestion"
+            aria-label={`Suggested prompt: ${offered}`}
+            title={offered}
+            onClick={() => {
+              fillSuggestion(offered);
+            }}
+          >
+            <BulbIcon />
+            <span className="chat-chip-text">{offered}</span>
+          </button>
+        </div>
+      )}
       {open && (
         <ul className="chat-suggestions" id={listId} role="listbox" aria-label="Commands">
           {suggestions.map((command, index) => (

@@ -125,6 +125,20 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-27: suggested next prompt in chat
+
+Additive delta within proto-v7 (2026-11-27): **one chat state key. No version bump; `central_server` is untouched.**
+
+| Where | Change |
+|-------|--------|
+| State key `prompt_suggestions` | `[{text}]`, most likely first, at most 3, each `text` at most 2 000 characters. `[]` when there is none. |
+
+* ACP: the agent advertises `clientCapabilities.session.promptSuggestions: {}` to every chat agent (unstable ACP "Prompt suggestions"). The stored-session catalog still sends `{}`. An agent that adopts it sends `session/update` `prompt_suggestions_update` with `suggestions: [{prompt: ContentBlock[]}]`; each update replaces the list. `claude-agent-acp` 0.109.0 or later sends one suggestion after a turn (not after the first turn of a session, not in plan mode, not after an API error).
+* The agent keeps a suggestion only when all its blocks are text; it joins and trims them and skips a blank one. A malformed update is ignored. A non-empty list that comes while the chat starts or loads is ignored. No timeline item, no attention, no self turn (`wake.py` `CONTENT_UPDATES` does not list it), and `status` does not change.
+* The agent clears the key when it dispatches a prompt, when a steer is injected, when a turn from another app or the agent's own wake starts, when the agent process starts (`restart`, the restart after a sign-in, `new_conversation`, `/clear`, `session/load`) and on an agent exit.
+* The user's off switch on the PC wins: Claude Code ANDs the adapter's SDK option with `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION` or the `promptSuggestionEnabled` setting.
+* Clients show the first suggestion as one chip above the composer, only while the composer has no text and no images, `status` is `ready`, no request card shows, the session is live and slash suggestions are not open. A tap fills the composer with the full text and focuses it. **It never sends**: a suggestion is model output and can carry injected text. The chip does not come back for the same text after the user typed or cleared the composer. Older clients ignore the key.
+
 ### Delta 2026-11-27: Send now in Antigravity chats
 
 Behaviour delta within proto-v7 (2026-11-27): **no wire change, no version bump; `central_server` and the clients are untouched.**
@@ -852,7 +866,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `events` | `epoch`, `seq`, `events[]` with own `seq` | Apply in order: `item` (upsert by `id`), `append` (add `text` to an item), `remove` (drop the item with that `id`; an unknown `id` is a no-op), `state` (shallow-merge `patch`). Skip an unknown event type but count its `seq`. On a gap or another epoch, send `sync`. |
 | `result` | `id`, `ok`, `data?`, `error?` | Resolve the command with that `id`; ignore others. |
 
-* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`, `steering` (Delta 2026-11-08), `background` (Delta 2026-11-16), `new_conversation` (Delta 2026-11-18), `limit_wait` (Delta 2026-11-21).
+* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`, `steering` (Delta 2026-11-08), `background` (Delta 2026-11-16), `new_conversation` (Delta 2026-11-18), `limit_wait` (Delta 2026-11-21), `prompt_suggestions` (Delta 2026-11-27).
 * Item types: `user`, `agent`, `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`, `subagent` (Delta 2026-11-25). Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
 * Bounds: text parts 32 KB, message texts 256 KB, diffs 48 KB / 1 200 lines, a snapshot ~2 MB (`truncated` marks dropped older items).
 * Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`). A Claude chat raises `turn_finished` from Claude Code hooks (Delta 2026-11-15). An RPC error on the user's own prompt raises `turn_failed` (not after Stop, not on process death, not when a queued prompt starts next, not when a usage-limit wait is armed (Delta 2026-11-21)).

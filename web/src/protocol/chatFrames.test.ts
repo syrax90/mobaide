@@ -13,6 +13,7 @@ import {
   type ChatFrame,
   type EventsFrame,
   type SnapshotFrame,
+  normalizeStatePatch,
 } from '../chat/chatWire';
 import { INITIAL_CHAT_TIMELINE, applyEvents, applySnapshot, chatOpened } from '../chat/chatTimeline';
 import { subagentTree } from '../chat/focusView';
@@ -356,6 +357,40 @@ describe('chat frame golden fixtures', () => {
       can_cancel: false,
       plan: [],
     });
+  });
+
+  it('decodes a suggested next prompt and the turn start that withdraws it', () => {
+    let timeline = applySnapshot(INITIAL_CHAT_TIMELINE, decodeServer('snapshot_full') as SnapshotFrame).timeline;
+    for (const name of [
+      'events_batch',
+      'events_remove',
+      'events_sign_in',
+      'events_background_cleared',
+      'events_limit_wait',
+      'events_limit_wait_cleared',
+      'events_subagent_running',
+      'events_subagent_done',
+    ]) {
+      timeline = applyEvents(timeline, decodeServer(name) as EventsFrame).timeline;
+    }
+    const frame = decodeServer('events_prompt_suggestions') as EventsFrame;
+
+    expect(frame.events[0]).toEqual({
+      type: 'state',
+      seq: 59,
+      patch: { prompt_suggestions: [{ text: 'Run the tests and fix what breaks' }] },
+    });
+    const { timeline: started, sync } = applyEvents(timeline, frame);
+    expect(sync).toBeUndefined();
+    expect(started.seq).toBe(60);
+    expect(started.state.status).toBe('running');
+    expect(started.state.prompt_suggestions).toEqual([]);
+  });
+
+  it('drops a blank suggested prompt', () => {
+    const patch = normalizeStatePatch({ prompt_suggestions: [{ text: '  ' }, { text: 'Commit it' }] });
+
+    expect(patch.prompt_suggestions).toEqual([{ text: 'Commit it' }]);
   });
 
   it('decodes results', () => {

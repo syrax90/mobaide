@@ -127,6 +127,7 @@ CLIENT_CAPABILITIES: dict[str, Any] = {
         "notices": {},
         "compaction": {},
         "configOptions": {"boolean": {}},
+        "promptSuggestions": {},
     },
     "elicitation": {"form": {}},
 }
@@ -673,7 +674,7 @@ class ChatSession:
         assert conn is not None
         tl = self._timeline
         self._drop_start_error()
-        tl.patch_state(status="starting", error=None, urgent=True)
+        tl.patch_state(status="starting", error=None, prompt_suggestions=[], urgent=True)
         self._todos.clear()
         self._stored_plans.clear()
         self._scripts.clear()
@@ -1185,7 +1186,11 @@ class ChatSession:
         self._alert_held = False
         self._foreground_idle = False
         self._timeline.patch_state(
-            status="running", turn_started_at=_now_iso(), cancelling=False, urgent=True
+            status="running",
+            turn_started_at=_now_iso(),
+            cancelling=False,
+            prompt_suggestions=[],
+            urgent=True,
         )
         self._prompt_dispatched = False
         self._cancel_before_dispatch = False
@@ -1707,6 +1712,7 @@ class ChatSession:
             if queued in self._queue:
                 self._queue.remove(queued)
                 self._publish_queue()
+            self._timeline.patch_state(prompt_suggestions=[])
             self._close_streaming_items()
             self._show_user_message(queued.text, queued.images)
             return {"steered": True}
@@ -2010,6 +2016,7 @@ class ChatSession:
             turn_started_at=None,
             cancelling=False,
             background=None,
+            prompt_suggestions=[],
             urgent=True,
         )
         # A message sent while the old process closed waits for the new conversation.
@@ -2253,6 +2260,14 @@ class ChatSession:
             self._apply_subagent_lifecycle(self._acp_session_id, update)
         elif kind == sa.SESSION_MESSAGE:
             self._apply_session_message(update)
+        elif kind == "prompt_suggestions_update":
+            suggestions = nz.prompt_suggestions(update.get("suggestions"))
+            if suggestions is None:
+                return
+            if suggestions and tl.state.get("status") in ("starting", "loading", "error", "stopped"):
+                # Not a prediction for the conversation the user sees now.
+                return
+            tl.patch_state(prompt_suggestions=suggestions)
         elif kind == "compaction_update":
             self._apply_compaction(update)
         elif kind == "compaction_summary_chunk":
@@ -2291,7 +2306,13 @@ class ChatSession:
                         "text": "",
                     }
                 )
-            tl.patch_state(status="running", turn_started_at=_now_iso(), cancelling=False, urgent=True)
+            tl.patch_state(
+                status="running",
+                turn_started_at=_now_iso(),
+                cancelling=False,
+                prompt_suggestions=[],
+                urgent=True,
+            )
         elif not busy and self._external_turn:
             self._external_turn = False
             self._disarm_cancel_watchdog()
@@ -3196,7 +3217,7 @@ class ChatSession:
                 # The agent died while it started: a failed start like any
                 # other. A crash in a running chat stays as its history.
                 self._start_error_item = item_id
-        self._timeline.patch_state(status="error", error=message, urgent=True)
+        self._timeline.patch_state(status="error", error=message, prompt_suggestions=[], urgent=True)
         if not self._cancel_forced:
             self._set_attention("ended", exit_reason="process_exited")
 

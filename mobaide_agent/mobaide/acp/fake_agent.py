@@ -63,6 +63,10 @@ prompt text picks the scenario:
   ``MOBAIDE_FAKE_ACP_LIMIT_RESET`` seconds (default 5), with the
   ``rateLimit`` error data of claude-agent-acp ≥ 0.107; ``weeklylimit`` does
   the same for a limit that resets in 7 days;
+* ``suggest`` — the Claude flavor, when the client declares
+  ``clientCapabilities.session.promptSuggestions``, sends a predicted next
+  prompt (``prompt_suggestions_update``) a moment after the reply. The next
+  prompt withdraws it (an empty list) before its turn starts;
 * ``crash`` — the process exits;
 * anything else — a short echo with a thought.
 
@@ -107,6 +111,8 @@ MODELS = [
     {"value": "smart", "name": "Smart model", "description": "Best quality"},
 ]
 EFFORTS = [{"value": v, "name": v.capitalize()} for v in ("low", "medium", "high", "max")]
+# The prompt the ``suggest`` scenario predicts.
+SUGGESTED_PROMPT = "Run the tests and fix what breaks"
 
 CODEX_MODES = [
     {"value": "read-only", "name": "Read-only", "description": "Requires approval to edit files and access the internet."},
@@ -263,6 +269,10 @@ class FakeAgent:
         self.client_meta: dict[str, Any] = {}
         # The client declared ``clientCapabilities.subagents``.
         self.subagents = False
+        # The client declared ``clientCapabilities.session.promptSuggestions``.
+        self.prompt_suggestions = False
+        # Sessions whose client holds a suggestion from this process.
+        self.suggested: set[str] = set()
 
     def send(self, message: dict[str, Any]) -> None:
         data = (json.dumps(message) + "\n").encode("utf-8")
@@ -509,6 +519,10 @@ class FakeAgent:
             meta = caps.get("_meta") if isinstance(caps, dict) else None
             self.client_meta = meta if isinstance(meta, dict) else {}
             self.subagents = isinstance(caps, dict) and isinstance(caps.get("subagents"), dict)
+            session_caps = caps.get("session") if isinstance(caps, dict) else None
+            self.prompt_suggestions = isinstance(session_caps, dict) and isinstance(
+                session_caps.get("promptSuggestions"), dict
+            )
             if self.agy:
                 return {
                     "protocolVersion": 1,
@@ -667,11 +681,15 @@ class FakeAgent:
             if self.agy and running is not None and not running.done():
                 return await self.agy_steer(sid, running, params.get("prompt") or [])
             self.cancelled.discard(sid)
-            task = asyncio.ensure_future(self.prompt_turn(sid, params.get("prompt") or []))
+            prompt = params.get("prompt") or []
+            self.withdraw_suggestion(sid)
+            task = asyncio.ensure_future(self.prompt_turn(sid, prompt))
             self.turns[sid] = task
             if self.agy:
                 return await self.agy_answer(sid, task)
-            return await task
+            result = await task
+            self.suggest_later(sid, prompt, result)
+            return result
         if method == "session/cancel":
             self.cancelled.add(str(params.get("sessionId")))
             return None
@@ -744,6 +762,30 @@ class FakeAgent:
         if not self.copilot:
             # Copilot replays a stored session without its title.
             self.update(sid, {"sessionUpdate": "session_info_update", "title": "Earlier session"})
+
+    def suggest_later(self, sid: str, prompt: list[dict[str, Any]], result: Any) -> None:
+        """Claude Code's predicted next prompt, as claude-agent-acp sends it:
+        a moment after the reply, only to a client that declared the
+        capability, and only after a turn that ended normally."""
+        if not self.prompt_suggestions or self.codex or self.agy or self.opencode or self.copilot \
+                or self.cursor or self.junie or self.pi:
+            return
+        text = " ".join(b.get("text", "") for b in prompt if b.get("type") == "text").lower()
+        if "suggest" not in text or not isinstance(result, dict) or result.get("stopReason") != "end_turn":
+            return
+
+        def send() -> None:
+            if sid in self.sessions and not (sid in self.turns and not self.turns[sid].done()):
+                self.suggested.add(sid)
+                self.update(sid, {"sessionUpdate": "prompt_suggestions_update",
+                                  "suggestions": [{"prompt": [{"type": "text", "text": SUGGESTED_PROMPT}]}]})
+        self.loop.call_later(0.05, send)
+
+    def withdraw_suggestion(self, sid: str) -> None:
+        """A prompt spends the suggestion: the adapter withdraws its list."""
+        if sid in self.suggested:
+            self.suggested.discard(sid)
+            self.update(sid, {"sessionUpdate": "prompt_suggestions_update", "suggestions": []})
 
     def stopped(self, sid: str) -> bool:
         return sid in self.cancelled

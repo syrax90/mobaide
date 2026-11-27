@@ -90,6 +90,8 @@ def default_state() -> dict[str, Any]:
         "limit_wait": None,
         # The agent takes the ``new_conversation`` command.
         "new_conversation": True,
+        # The prompts the agent predicts the user sends next (``[{text}]``).
+        "prompt_suggestions": [],
     }
 
 

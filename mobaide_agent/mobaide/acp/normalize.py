@@ -33,6 +33,8 @@ TOOL_PARTS_MAX = 8
 COMMANDS_MAX = 500
 COMMAND_DESC_MAX = 300
 PLAN_MAX = 100
+PROMPT_SUGGESTIONS_MAX = 3
+PROMPT_SUGGESTION_TEXT_MAX = 2000
 CONFIG_OPTIONS_MAX = 40
 CONFIG_VALUES_MAX = 200
 FORM_FIELDS_MAX = 20
@@ -741,6 +743,32 @@ def plan_entries(raw: Any) -> list[dict[str, Any]]:
                 "priority": priority if priority in PLAN_PRIORITIES else "medium",
             }
         )
+    return out
+
+
+def prompt_suggestions(raw: Any) -> list[dict[str, str]] | None:
+    """ACP ``prompt_suggestions_update.suggestions`` as ``[{text}]``, most
+    likely first; ``None`` for a malformed update.
+
+    A suggestion with a block that is not text is skipped as a whole (the
+    RFD), and so is one whose text is blank."""
+    if not isinstance(raw, list):
+        return None
+    out: list[dict[str, str]] = []
+    for suggestion in raw:
+        if len(out) >= PROMPT_SUGGESTIONS_MAX:
+            break
+        blocks = suggestion.get("prompt") if isinstance(suggestion, Mapping) else None
+        if not isinstance(blocks, list) or not blocks:
+            continue
+        if not all(
+            isinstance(b, Mapping) and b.get("type") == "text" and isinstance(b.get("text"), str)
+            for b in blocks
+        ):
+            continue
+        text = "".join(b["text"] for b in blocks).strip()
+        if text:
+            out.append({"text": text[:PROMPT_SUGGESTION_TEXT_MAX].rstrip()})
     return out
 
 

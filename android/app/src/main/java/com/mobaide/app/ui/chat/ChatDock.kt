@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.IndeterminateCheckBox
+import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Shield
@@ -59,6 +60,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
@@ -108,6 +111,7 @@ import com.mobaide.app.ui.theme.pixel
 const val CHAT_COMPOSER_FIELD_TAG = "chat_composer_field"
 const val CHAT_SEND_BUTTON_TAG = "chat_send_button"
 const val CHAT_CONFIG_CHIPS_TAG = "chat_config_chips"
+const val CHAT_PROMPT_SUGGESTION_TAG = "chat_prompt_suggestion"
 const val CHAT_EXPAND_COMPOSER_TAG = "chat_expand_composer"
 
 @Composable
@@ -395,6 +399,47 @@ private fun ConfigChip(
     }
 }
 
+/** The agent's predicted next prompt: a tap fills the composer with it and never sends. */
+@Composable
+fun PromptSuggestionChip(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tone = MaterialTheme.colorScheme.onSurface
+    Box(
+        modifier = modifier
+            .testTag(CHAT_PROMPT_SUGGESTION_TAG)
+            .minimumInteractiveComponentSize()
+            .semantics(mergeDescendants = true) { contentDescription = "Suggested prompt: $text" }
+            .clickable(role = Role.Button, onClickLabel = "Put in message field", onClick = onClick),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Row(
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                .pixelFrame(MaterialTheme.pixel.surface2)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.Lightbulb,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = tone,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
 @Composable
 fun SlashSuggestions(
     suggestions: List<ChatSlashCommand>,
@@ -481,6 +526,7 @@ fun ChatComposer(
     dictationBar: (@Composable () -> Unit)?,
     modifier: Modifier = Modifier,
     onExpand: (() -> Unit)? = null,
+    focusRequester: FocusRequester? = null,
 ) {
     val hasContent = value.text.isNotBlank() || images.isNotEmpty()
     val showStop = running && !hasContent
@@ -513,6 +559,7 @@ fun ChatComposer(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag(CHAT_COMPOSER_FIELD_TAG)
+                .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                 .onPreviewKeyEvent { event ->
                     val stopKey = event.key == Key.Escape || (event.isCtrlPressed && event.key == Key.C && value.selection.collapsed)
                     if (event.type == KeyEventType.KeyDown && running && stopKey) {
