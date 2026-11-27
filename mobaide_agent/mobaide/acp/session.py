@@ -308,6 +308,13 @@ class ChatSession:
         }
         self._initial_prompt: str | None = plan.initial_prompt
         self._steering = False
+        # Send now goes out as a second ``session/prompt`` (ChatLaunchPlan.steer_by_prompt).
+        self._steer_by_prompt = False
+        # Turns whose prompt a steering prompt took over: their prompt's
+        # answer ends nothing, as the turn goes on under the new prompt.
+        self._superseded_turns: set[asyncio.Task[None]] = set()
+        # A steering prompt waits for the agent to take it.
+        self._handover = False
         # A turn this session did not start: another client of a shared host
         # sent it (see thread_busy), or the agent started it by itself.
         self._external_turn = False
@@ -499,7 +506,12 @@ class ChatSession:
         self._cancel_wake_timer()
         if self._plan.shared_host:
             await self._stop_own_turn()
-        for task in (self._bootstrap_task, self._turn_task, *self._command_tasks):
+        for task in (
+            self._bootstrap_task,
+            self._turn_task,
+            *self._command_tasks,
+            *self._superseded_turns,
+        ):
             if task is not None and not task.done():
                 task.cancel()
         self._sign_in.close()
@@ -692,7 +704,10 @@ class ChatSession:
             prompt_caps: dict[str, Any] = raw_prompt_caps if isinstance(raw_prompt_caps, dict) else {}
             raw_meta = init.get("_meta")
             steering = raw_meta.get("steering") if isinstance(raw_meta, dict) else None
-            self._steering = isinstance(steering, dict) and steering.get("supported") is True
+            advertised = isinstance(steering, dict) and steering.get("supported") is True
+            # An agent that starts to advertise steering gets ``_session/steering``.
+            self._steer_by_prompt = self._plan.steer_by_prompt and not advertised
+            self._steering = advertised or self._steer_by_prompt
             tl.patch_state(
                 agent={
                     "name": str(info.get("name") or ""),
@@ -1120,7 +1135,7 @@ class ChatSession:
         return key
 
     def _own_turn_running(self) -> bool:
-        return self._turn_task is not None and not self._turn_task.done()
+        return self._handover or (self._turn_task is not None and not self._turn_task.done())
 
     def _start_queue_if_idle(self) -> None:
         alive = self._conn is not None and self._conn.alive
@@ -1156,19 +1171,9 @@ class ChatSession:
         mode: str | None = None,
         auto: bool = False,
     ) -> None:
-        if not auto:
-            # A message from the user, by any path: no continue may follow it.
-            self._cancel_limit_wait()
-        self._auto_continues = self._auto_continues + 1 if auto else 0
+        self._note_prompt_source(auto)
         self._close_streaming_items()
-        user_item = {
-            "id": self._next_id("u"),
-            "type": "user",
-            "text": text,
-            "attachments": [{"kind": "image", "mime": img["mime"]} for img in images],
-            "at": _now_iso(),
-        }
-        self._timeline.upsert(user_item)
+        self._show_user_message(text, images)
         blocks = _prompt_blocks(text, images)
         self._clear_attention()
         if self._gate is not None:
@@ -1195,6 +1200,23 @@ class ChatSession:
             self._run_turn(blocks, text, images, mode), name=f"chat-turn-{self.session_id}"
         )
 
+    def _note_prompt_source(self, auto: bool) -> None:
+        if not auto:
+            # A message from the user, by any path: no continue may follow it.
+            self._cancel_limit_wait()
+        self._auto_continues = self._auto_continues + 1 if auto else 0
+
+    def _show_user_message(self, text: str, images: list[dict[str, str]]) -> None:
+        self._timeline.upsert(
+            {
+                "id": self._next_id("u"),
+                "type": "user",
+                "text": text,
+                "attachments": [{"kind": "image", "mime": img["mime"]} for img in images],
+                "at": _now_iso(),
+            }
+        )
+
     async def _switch_mode(self, mode: str) -> None:
         """Put the agent in ``mode`` for the message about to be sent."""
         option = self._match_config(ConfigIntent(mode, category="mode"))
@@ -1214,7 +1236,10 @@ class ChatSession:
         text: str,
         images: list[dict[str, str]],
         mode: str | None = None,
+        *,
+        request: asyncio.Future[Any] | None = None,
     ) -> None:
+        """``request``: the steering prompt's answer, already on its way."""
         tl = self._timeline
         stop_reason: str | None = None
         reload = False
@@ -1226,7 +1251,7 @@ class ChatSession:
         limit: tuple[float, str | None] | None = None
         try:
             conn = self._require_conn()
-            if self._presence_hold is None and self._plan.presence is not None:
+            if request is None and self._presence_hold is None and self._plan.presence is not None:
                 conflict = self._presence_conflict
                 await self._hold_presence()
                 if conflict and self._presence_hold is not None:
@@ -1235,7 +1260,12 @@ class ChatSession:
             # lock was taken: the message must neither go out nor be queued.
             replaced = not self._ready.is_set()
             # Sending from the stale copy would overwrite the other app's turns.
-            reload = self._presence_stale and not self._cancel_before_dispatch and not replaced
+            reload = (
+                request is None
+                and self._presence_stale
+                and not self._cancel_before_dispatch
+                and not replaced
+            )
             if reload:
                 pass
             elif self._cancel_before_dispatch or replaced:
@@ -1249,9 +1279,20 @@ class ChatSession:
                     stop_reason = "cancelled"
                 else:
                     self._prompt_dispatched = True
-                    result = await conn.request(
-                        "session/prompt", {"sessionId": self._acp_session_id, "prompt": blocks}
-                    )
+                    try:
+                        result = await (
+                            request
+                            if request is not None
+                            else conn.request(
+                                "session/prompt",
+                                {"sessionId": self._acp_session_id, "prompt": blocks},
+                            )
+                        )
+                    except (AcpRpcError, AcpProcessError):
+                        if not self._superseded():
+                            raise
+                        # The steering prompt reports how the turn ends.
+                        result = None
                     if isinstance(result, dict) and isinstance(result.get("stopReason"), str):
                         stop_reason = result["stopReason"]
                     else:
@@ -1279,11 +1320,18 @@ class ChatSession:
             if tl.state.get("status") != "error":
                 tl.upsert({"id": self._next_id("err"), "type": "error", "text": str(exc)})
         finally:
-            self._disarm_cancel_watchdog()
-            self._close_streaming_items()
-            self._resolve_all_requests_cancelled(keep_running_subagents=True)
-            self._foreground_idle = False
-            self._wake_grace_until = time.monotonic() + WAKE_GRACE_SECONDS
+            superseded = self._superseded()
+            if not superseded:
+                self._disarm_cancel_watchdog()
+                self._close_streaming_items()
+                self._resolve_all_requests_cancelled(keep_running_subagents=True)
+                self._foreground_idle = False
+                self._wake_grace_until = time.monotonic() + WAKE_GRACE_SECONDS
+        if superseded:
+            # The same turn goes on under the steering prompt: its reply keeps
+            # streaming, its requests stay open, and its end alerts once.
+            self._has_turns = True
+            return
         if reload:
             # Not ready until the reload: a prompt meanwhile must only queue,
             # never start on the process that is closing.
@@ -1384,6 +1432,9 @@ class ChatSession:
                 self._gate.stop_lost()
         finally:
             tl.flush()
+
+    def _superseded(self) -> bool:
+        return asyncio.current_task() in self._superseded_turns
 
     async def _reload_conversation(self) -> None:
         """Open the conversation again in a new agent process (``session/load``)."""
@@ -1628,7 +1679,9 @@ class ChatSession:
             self._publish_queue()
             self._start_prompt(queued.text, queued.images, mode=queued.mode, auto=queued.auto)
             return {"steered": True}
-        if not self._steering:
+        if self._steer_by_prompt and self._own_turn_running():
+            return await self._steer_with_prompt(queued)
+        if not self._steering or self._steer_by_prompt:
             raise ChatCommandError("This agent cannot take a message during a turn")
         conn = self._require_conn()
         queued.steering = True
@@ -1661,21 +1714,96 @@ class ChatSession:
                 self._publish_queue()
             self._timeline.patch_state(prompt_suggestions=[])
             self._close_streaming_items()
-            self._timeline.upsert(
-                {
-                    "id": self._next_id("u"),
-                    "type": "user",
-                    "text": queued.text,
-                    "attachments": [{"kind": "image", "mime": img["mime"]} for img in queued.images],
-                    "at": _now_iso(),
-                }
-            )
+            self._show_user_message(queued.text, queued.images)
             return {"steered": True}
         # The turn ended meanwhile: the message stays first in the queue.
         self._start_queue_if_idle()
         if outcome == "promptRequired":
             return {"steered": False}
         raise ChatCommandError("The agent could not take the message now")
+
+    async def _steer_with_prompt(self, queued: _QueuedPrompt) -> dict[str, Any]:
+        """Send now as a second ``session/prompt`` (``agy acp``).
+
+        agy refuses it while the turn waits for a permission or a question.
+        Otherwise the running turn ends quietly and the same turn (reply, open
+        requests, timer, end alert) goes on as the new prompt's."""
+        turn = self._turn_task
+        if (
+            turn is None
+            or self._handover
+            or not self._prompt_dispatched
+            or self._timeline.state.get("cancelling")
+        ):
+            # The prompt is not out yet, another message is being handed
+            # over, or the user stopped the turn: this one runs next from the queue.
+            return {"steered": False}
+        if self._requests:
+            raise ChatCommandError("Answer the open request first, then send the message")
+        conn = self._require_conn()
+        queued.steering = True
+        self._superseded_turns.add(turn)
+        request = asyncio.ensure_future(
+            conn.request(
+                "session/prompt",
+                {"sessionId": self._acp_session_id, "prompt": _prompt_blocks(queued.text, queued.images)},
+            )
+        )
+        # Until the new prompt owns the turn, the session still reads as busy:
+        # the old turn may already be over, and nothing else may start one.
+        self._handover = True
+        try:
+            await asyncio.wait({request, turn}, timeout=STEER_TIMEOUT, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            self._superseded_turns.discard(turn)
+            request.cancel()
+            raise
+        finally:
+            queued.steering = False
+            self._handover = False
+        if not self._ready.is_set() or self._stopping or self._restarting:
+            # A restart or a new conversation took over meanwhile.
+            request.cancel()
+            return {"steered": False}
+        # Neither prompt answered in time: the new prompt is out, and the agent
+        # takes prompts in order, so the turn goes on as the new prompt's.
+        # Stop still ends it (the cancel watchdog closes an agent that hangs).
+        refused = request.done() and not request.cancelled() and request.exception() is not None
+        if refused and not turn.done():
+            # The running turn goes on and the message stays in the queue.
+            self._superseded_turns.discard(turn)
+            exc = request.exception()
+            if isinstance(exc, AcpRpcError):
+                raise ChatCommandError(self._describe_rpc_error(exc))
+            raise ChatCommandError("The agent could not take the message now")
+        if refused:
+            if self._conn is not conn or not conn.alive:
+                # The agent exited: the message waits in the queue for Restart.
+                return {"steered": False}
+            # The turn ended as the agent refused the message: its end went
+            # unreported, and the queue sends the message as the next prompt.
+            if not self._start_next_prompt():
+                self._timeline.patch_state(
+                    status="ready", turn_started_at=None, cancelling=False, urgent=True
+                )
+            return {"steered": False}
+        turn.add_done_callback(self._superseded_turns.discard)
+        if queued in self._queue:
+            self._queue.remove(queued)
+            self._publish_queue()
+        self._note_prompt_source(queued.auto)
+        self._close_streaming_items()
+        self._show_user_message(queued.text, queued.images)
+        self._turn_task = asyncio.create_task(
+            self._run_turn([], queued.text, queued.images, request=request),
+            name=f"chat-turn-{self.session_id}",
+        )
+        if self._cancel_watchdog is not None:
+            # Stop came during the handover: the watchdog follows the new turn.
+            self._disarm_cancel_watchdog()
+            self._arm_cancel_watchdog(conn)
+        return {"steered": True}
+
 
     async def _cmd_restart(self) -> dict[str, Any]:
         if self._stopping:

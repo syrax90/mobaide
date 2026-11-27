@@ -139,6 +139,17 @@ Additive delta within proto-v7 (2026-11-27): **one chat state key. No version bu
 * The user's off switch on the PC wins: Claude Code ANDs the adapter's SDK option with `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION` or the `promptSuggestionEnabled` setting.
 * Clients show the first suggestion as one chip above the composer, only while the composer has no text and no images, `status` is `ready`, no request card shows, the session is live and slash suggestions are not open. A tap fills the composer with the full text and focuses it. **It never sends**: a suggestion is model output and can carry injected text. The chip does not come back for the same text after the user typed or cleared the composer. Older clients ignore the key.
 
+### Delta 2026-11-27: Send now in Antigravity chats
+
+Behaviour delta within proto-v7 (2026-11-27): **no wire change, no version bump; `central_server` and the clients are untouched.**
+
+The state key `steering` (Delta 2026-11-08) is now also `true` for an agent that steers a running turn by a second `session/prompt`, though its `initialize` has no `_meta.steering`. Only Antigravity (`agy acp`) does so. An agent that advertises `_meta.steering` keeps `_session/steering`.
+
+* `steer` during an Antigravity turn sends the queued message as a second `session/prompt`. `agy` answers the running prompt `end_turn` at once and goes on with the same reply under the new prompt. The PC agent ignores that first answer: the reply item stays open, open requests stay open, `status` stays `running`, `turn_started_at` stays, and `turn_finished` fires once, at the real end. `data: {steered: true}`; the message leaves the queue and shows as a `user` item.
+* `agy` refuses the prompt while the turn waits for a permission or a question answer. `steer` then fails with "Answer the open request first, then send the message" (or the agent's error), and the message stays in the queue. The turn goes on.
+* `{steered: false}` when the turn's prompt is not sent yet, after Stop, or while another message is being handed over: the message runs next from the queue.
+* `cancel` after a handover sends `session/cancel` as usual; the new prompt answers `cancelled`.
+
 ### Delta 2026-11-25: subagent cards in chat
 
 Additive delta within proto-v7 (2026-11-25): **one chat item type, one optional tool item field, one chat command. No version bump; `central_server` is untouched.**
@@ -716,7 +727,7 @@ Antigravity sessions open in the chat view too (`ui: "chat"` with `cli: "antigra
 * Folder trust: `agy acp` skips the "Do you trust the contents of this project?" prompt of the `agy` TUI. The PC agent asks in the chat (as for Claude Code and Codex). The record is `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`; like `agy`, only the exact folder (real path) counts, never a parent or the repository root. `trust` appends the real path, and records nothing for the home folder, a folder above it or a root (that trust lasts for the session).
 * Conversation lock: every `agy` process that opens a conversation holds an exclusive `flock` on `~/.gemini/antigravity-cli/presence/<conversation id>.lock`, and a second `agy` warns that "sending messages from both may cause conflicts". `agy acp` takes no such lock, so the chat session takes it after `session/new` or `session/load` and keeps it until the chat closes or the agent exits; an `agy` in a terminal then shows its warning. When another app already holds it, the chat shows a `notice` item (severity `warning`) and tries again before each turn. Not on Windows.
 * Reload after the lock frees: the other app may have added turns this process never saw. The next message waits in the queue (status `starting`), the session reopens the conversation in a new `agy acp` process (`session/load`, new epoch, as for Restart), shows a `notice` "Loaded the latest messages", and then sends it.
-* Continuing a conversation is not live: a conversation still open in an `agy` terminal does not show that terminal's new messages, and the terminal does not show the chat's. `agy acp` has no `_session/steering`, so clients offer no **Send now**.
+* Continuing a conversation is not live: a conversation still open in an `agy` terminal does not show that terminal's new messages, and the terminal does not show the chat's. `agy acp` has no `_session/steering`; **Send now** goes out as a second `session/prompt` (Delta 2026-11-27).
 * Command output: `agy` reports a finished command as one text, `Command exited with code N.` followed by `Command output:` and the output, or by `No output from the command.`. The PC agent turns it into the same `console` part as other agents' command output (see Delta 2026-11-08, Command output).
 * The env file key `MOBAIDE_ACP_ANTIGRAVITY_COMMAND` overrides the command. Test mode runs the fake agent with `--flavor antigravity`.
 
