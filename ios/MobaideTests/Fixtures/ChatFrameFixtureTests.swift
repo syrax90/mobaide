@@ -389,6 +389,28 @@ final class ChatFrameFixtureTests: XCTestCase {
         XCTAssertTrue(done.plan.isEmpty)
     }
 
+    func testPromptSuggestionsDecodeAndTheTurnStartWithdrawsThem() throws {
+        var timeline = try loaded()
+        for name in [
+            "events_batch", "events_remove", "events_sign_in", "events_background_cleared",
+            "events_limit_wait", "events_limit_wait_cleared", "events_subagent_running", "events_subagent_done",
+        ] {
+            _ = timeline.apply(try server(name))
+        }
+        let frame = try server("events_prompt_suggestions")
+        guard case .events(let events) = frame, case .state(_, let offered) = events.events.first else {
+            return XCTFail("events_prompt_suggestions does not start with a state patch")
+        }
+        XCTAssertEqual(offered.promptSuggestions, ["Run the tests and fix what breaks"])
+
+        let result = timeline.apply(frame)
+
+        XCTAssertNil(result.sync)
+        XCTAssertEqual(timeline.seq, 60)
+        XCTAssertEqual(timeline.state.status, "running")
+        XCTAssertEqual(timeline.state.promptSuggestions, [])
+    }
+
     func testResultsDecode() throws {
         guard case .result(let ok) = try server("result_ok") else { return XCTFail("result_ok is not a result") }
         XCTAssertEqual(ok, ChatResultFrame(

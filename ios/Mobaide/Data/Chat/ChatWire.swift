@@ -631,6 +631,11 @@ enum ChatPendingRequest: Equatable, Sendable, Decodable, Identifiable {
     }
 }
 
+/// One `prompt_suggestions` entry.
+struct ChatPromptSuggestion: Sendable, Decodable {
+    let text: String
+}
+
 /// A shallow state patch: a nil field is absent; for nullable fields an inner
 /// nil is an explicit `null`.
 struct ChatStatePatch: Sendable, Decodable {
@@ -653,6 +658,7 @@ struct ChatStatePatch: Sendable, Decodable {
     var background: ChatBackgroundWork??
     var limitWait: ChatLimitWait??
     var newConversation: Bool?
+    var promptSuggestions: [String]?
 
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: ChatKey.self)
@@ -686,6 +692,11 @@ struct ChatStatePatch: Sendable, Decodable {
         }
         limitWait = nullable(ChatLimitWait.self, "limit_wait")
         if c.has("new_conversation") { newConversation = c.bool("new_conversation") ?? false }
+        if c.has("prompt_suggestions") {
+            promptSuggestions = c.list(ChatPromptSuggestion.self, "prompt_suggestions")
+                .map(\.text)
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
     }
 }
 
@@ -713,6 +724,8 @@ struct ChatState: Equatable, Sendable {
     var limitWait: ChatLimitWait?
     /// The agent takes `new_conversation`; an older one leaves the key out.
     var newConversation = false
+    /// The prompts the agent predicts the user sends next, most likely first.
+    var promptSuggestions: [String] = []
 
     mutating func apply(_ patch: ChatStatePatch) {
         if let value = patch.status { status = value }
@@ -734,6 +747,7 @@ struct ChatState: Equatable, Sendable {
         if let value = patch.background { background = value }
         if let value = patch.limitWait { limitWait = value }
         if let value = patch.newConversation { newConversation = value }
+        if let value = patch.promptSuggestions { promptSuggestions = value }
     }
 
     /// Unknown statuses read as `ready`.

@@ -350,6 +350,13 @@ struct ChatScreen: View {
                     ChatCappedScroll(maxHeight: planQueueCap) { planAndQueue }
                 }
                 configChips
+                if let suggestion = model.promptSuggestion {
+                    ChatPromptSuggestionChip(text: suggestion) {
+                        model.applyPromptSuggestion(suggestion)
+                        composerFocused = true
+                    }
+                    .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
+                }
                 ChatComposer(
                     model: model,
                     voice: voice,

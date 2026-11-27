@@ -395,6 +395,35 @@ class ChatFramesFixtureTest {
     }
 
     @Test
+    fun promptSuggestions_decode_andTheTurnStartWithdrawsThem() {
+        val reducer = loaded().apply {
+            apply(batch())
+            for (name in listOf(
+                "events_remove",
+                "events_sign_in",
+                "events_background_cleared",
+                "events_limit_wait",
+                "events_limit_wait_cleared",
+                "events_subagent_running",
+                "events_subagent_done",
+            )) {
+                apply(server(name) as ChatFrame.Events)
+            }
+        }
+        val frame = server("events_prompt_suggestions") as ChatFrame.Events
+
+        val offered = frame.events.first() as ChatEvent.StatePatch
+        assertEquals(listOf("Run the tests and fix what breaks"), ChatJson.state(offered.patch).promptSuggestions)
+        val reduction = reducer.apply(frame)
+
+        assertNull(reduction.sync)
+        val started = reducer.timeline!!
+        assertEquals(60L, started.seq)
+        assertEquals(ChatStatus.RUNNING, started.state.status)
+        assertEquals(emptyList<String>(), started.state.promptSuggestions)
+    }
+
+    @Test
     fun results_decode() {
         assertEquals(
             ChatFrame.Result(

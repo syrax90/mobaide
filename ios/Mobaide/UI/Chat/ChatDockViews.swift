@@ -318,6 +318,39 @@ struct ChatConfigChip: View {
     }
 }
 
+/// The agent's predicted next prompt: a tap fills the composer and never sends.
+struct ChatPromptSuggestionChip: View {
+    let text: String
+    let action: () -> Void
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "lightbulb")
+                    .font(.caption)
+                    .foregroundStyle(colors.accent)
+                Text(text)
+                    .font(.callout)
+                    .foregroundStyle(colors.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
+            .background(colors.surface)
+            .pixelRing(colors.surface2)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("Suggested prompt: \(text)")
+        .accessibilityHint("Puts the text in the message field")
+        .accessibilityIdentifier("chat-prompt-suggestion")
+    }
+}
+
 /// A select option's choices, grouped by `group`, the current one checked.
 struct ChatConfigPickerSheet: View {
     let option: ChatConfigOption

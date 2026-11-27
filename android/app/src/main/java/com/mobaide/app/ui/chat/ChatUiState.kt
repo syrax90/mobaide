@@ -81,6 +81,16 @@ data class ChatUiState(
         get() = offersNewConversation && live && !restarting && !startingNew &&
             state.status in NEW_CONVERSATION_STATUSES
 
+    /**
+     * The agent's predicted next prompt, while the chat can take it now: ready,
+     * live, with no request card, no queued message and no picked image.
+     */
+    val promptSuggestion: String?
+        get() = state.promptSuggestions.firstOrNull()?.takeIf {
+            live && !sessionClosed && state.status == ChatStatus.READY && state.requests.isEmpty() &&
+                state.queue.isEmpty() && images.isEmpty() && !imagesLoading
+        }
+
     /** Whether a draft of [text] (plus the picked images) can go out now. */
     fun canSend(text: String): Boolean = canAct && !imagesLoading && (text.isNotBlank() || images.isNotEmpty())
 

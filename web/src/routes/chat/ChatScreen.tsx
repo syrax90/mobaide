@@ -163,6 +163,14 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
   const kindLabel = session === undefined ? 'the agent' : sessionKindLabel(session, new Map());
   const title = state.title !== null && state.title !== '' ? state.title : headerLabel;
   const composerRef = useRef<ComposerHandle>(null);
+  const suggestion =
+    live &&
+    !closed &&
+    state.status === 'ready' &&
+    state.requests.length === 0 &&
+    state.queue.length === 0
+      ? (state.prompt_suggestions[0]?.text ?? null)
+      : null;
 
   const { handOff, toggle: sessionsToggle, rail: sessionsRail } = useSessionsPanelHost({
     agentId: model.agentId,
@@ -412,6 +420,8 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
               cancelling={state.cancelling}
               acceptsImages={state.prompt_caps.image}
               commands={state.commands}
+              suggestion={suggestion}
+              latestSuggestion={state.prompt_suggestions[0]?.text ?? null}
               handleRef={composerRef}
             />
           </div>

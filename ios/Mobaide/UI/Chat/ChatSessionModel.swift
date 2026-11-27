@@ -45,7 +45,10 @@ final class ChatSessionModel {
 
     private(set) var items: [ChatItem] = []
     private(set) var state = ChatState() {
-        didSet { syncReviewMeter() }
+        didSet {
+            syncReviewMeter()
+            spendSuggestionIfDrafting()
+        }
     }
     private(set) var hasSnapshot = false
     private(set) var truncated = false
@@ -62,12 +65,21 @@ final class ChatSessionModel {
         didSet { syncReviewMeter() }
     }
 
-    var composerText = ""
+    var composerText = "" {
+        didSet { spendSuggestionIfDrafting() }
+    }
+    /// The suggestion the user used or typed over: it does not come back when
+    /// the composer is empty again.
+    private(set) var spentPromptSuggestion: String?
     /// The composer's selection in character offsets (iOS 18+); nil inserts at the end.
     var composerSelection: Range<Int>?
     private(set) var composerCursorRequest = 0
-    private(set) var attachments: [ChatComposerImage] = []
-    private(set) var preparingImages = 0
+    private(set) var attachments: [ChatComposerImage] = [] {
+        didSet { spendSuggestionIfDrafting() }
+    }
+    private(set) var preparingImages = 0 {
+        didSet { spendSuggestionIfDrafting() }
+    }
     private var pendingImageLoads: Set<UUID> = []
     var message: ToastMessage?
 
@@ -179,6 +191,41 @@ final class ChatSessionModel {
     var canSend: Bool { canAct && hasDraft && preparingImages == 0 }
 
     var showsStop: Bool { isRunning && !hasDraft }
+
+    /// The agent's predicted next prompt, while the chat can take it now: an
+    /// empty composer, ready, live, with no request card and no queued message.
+    var promptSuggestion: String? {
+        guard let suggestion = state.promptSuggestions.first, suggestion != spentPromptSuggestion,
+              isLive, !sessionClosed, phase == .ready, state.requests.isEmpty, state.queue.isEmpty,
+              composerText.isEmpty, attachments.isEmpty, preparingImages == 0
+        else { return nil }
+        return suggestion
+    }
+
+    /// Fills the composer with `text`, the cursor at the end. It never sends:
+    /// the user reads or edits it, then taps Send.
+    func applyPromptSuggestion(_ text: String) {
+        spentPromptSuggestion = text
+        composerText = text
+        composerSelection = nil
+        if #available(iOS 18.0, *) {
+            composerSelection = composerText.count..<composerText.count
+            composerCursorRequest += 1
+        }
+    }
+
+    /// Spent once the composer gets content. A withdrawn list (a new turn)
+    /// resets it, so the next turn may offer the same text again.
+    private func spendSuggestionIfDrafting() {
+        guard let suggestion = state.promptSuggestions.first else {
+            if spentPromptSuggestion != nil { spentPromptSuggestion = nil }
+            return
+        }
+        guard suggestion != spentPromptSuggestion,
+              !composerText.isEmpty || !attachments.isEmpty || preparingImages > 0
+        else { return }
+        spentPromptSuggestion = suggestion
+    }
 
     var canAttachImages: Bool { state.promptImages && attachments.count + preparingImages < Self.maxImages }
 

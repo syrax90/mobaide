@@ -313,6 +313,8 @@ data class ChatState(
     val limitWait: ChatLimitWait? = null,
     // The agent takes `new_conversation`; an older one leaves the key out.
     val newConversation: Boolean = false,
+    // The prompts the agent predicts the user sends next, most likely first.
+    val promptSuggestions: List<String> = emptyList(),
 )
 
 /** Lenient decoding of the agent's JSON: a malformed field never drops its whole frame. */
@@ -361,6 +363,9 @@ internal object ChatJson {
             ChatLimitWait(queueId, wait.str("resets_at"), continuesAt, wait.str("limit_type"))
         },
         newConversation = obj.bool("new_conversation") == true,
+        promptSuggestions = obj.objects("prompt_suggestions").mapNotNull { suggestion ->
+            suggestion.str("text")?.takeIf { it.isNotBlank() }
+        },
     )
 
     private fun planEntry(entry: JsonObject): ChatPlanEntry? {
