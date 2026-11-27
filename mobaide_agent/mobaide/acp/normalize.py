@@ -14,6 +14,7 @@ import shlex
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from typing import Any
+from urllib.parse import unquote
 
 import orjson
 
@@ -297,6 +298,56 @@ def _without_file_lines(old_text: str | None, new_text: str) -> tuple[str | None
     old_rest = old_text[old_match.end():]
     new_file = not old_rest and old_match.group(0).startswith("-- /dev/null")
     return (None if new_file else old_rest), new_text[new_match.end():]
+
+
+# A ``resource_link`` that claude-agent-acp or codex-acp (``[@name](uri)``) or
+# GitHub Copilot (``[Resource link: uri]``) turned into text. The ``[@…]`` form is
+# cut at known positions, not by a regex that tries every ``](file://``: the
+# name may hold brackets (``[id].vue``).
+_LINK_URI = re.compile(r"file://[^)\s]+")
+_RESOURCE_LINK = re.compile(r"\[Resource link: (file://[^\]\s]+)\]")
+FILE_LINKS_MAX = 20
+
+
+def split_file_links(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """``text`` without the file links at its end (at most
+    ``FILE_LINKS_MAX``), and those links as ``(name, uri)`` in order. Text
+    without one comes back unchanged. Linear: each link is found from the
+    end, never by a search across the whole text."""
+    links: list[tuple[str, str]] = []
+    rest = text.rstrip()
+    while len(links) < FILE_LINKS_MAX:
+        link = _last_link(rest)
+        if link is None:
+            break
+        start, name, uri = link
+        links.append((name, uri))
+        rest = rest[:start].rstrip()
+    if not links:
+        return text, []
+    links.reverse()
+    return rest, links
+
+
+def _last_link(text: str) -> tuple[int, str, str] | None:
+    """``(start, name, uri)`` of the link that ends ``text``, or None."""
+    if text.endswith(")"):
+        target = text.rfind("](file://")
+        start = text.rfind("[@", 0, target) if target >= 0 else -1
+        if start < 0:
+            return None
+        name, uri = text[start + 2 : target], text[target + 2 : -1]
+        if "\n" in name or _LINK_URI.fullmatch(uri) is None:
+            return None
+        return start, name, uri
+    if text.endswith("]"):
+        start = text.rfind("[Resource link: file://")
+        match = _RESOURCE_LINK.fullmatch(text, start) if start >= 0 else None
+        if match is None:
+            return None
+        uri = match.group(1)
+        return start, unquote(uri.rstrip("/").rsplit("/", 1)[-1]) or uri, uri
+    return None
 
 
 def content_block_part(block: Any) -> dict[str, Any] | None:

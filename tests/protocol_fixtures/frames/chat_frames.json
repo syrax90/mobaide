@@ -8,6 +8,10 @@
       "name": "prompt_with_image",
       "command": { "id": "c-4", "op": "prompt", "text": "What is on this screen?", "images": [{ "mime": "image/png", "data": "iVBORw0KGgo=" }] }
     },
+    {
+      "name": "prompt_with_mentions",
+      "command": { "id": "c-19", "op": "prompt", "text": "Explain @src/app.py and @docs/", "mentions": ["src/app.py", "docs/"] }
+    },
     { "name": "cancel", "command": { "id": "c-5", "op": "cancel" } },
     { "name": "set_config_select", "command": { "id": "c-6", "op": "set_config", "config_id": "model", "value": "sonnet" } },
     { "name": "set_config_boolean", "command": { "id": "c-7", "op": "set_config", "config_id": "fast", "value": true } },
@@ -130,7 +134,7 @@
             }
           ],
           "queue": [{ "id": "q:14", "text": "Also update the README", "images": 0 }],
-          "prompt_caps": { "image": true },
+          "prompt_caps": { "image": true, "mentions": true },
           "turn_started_at": "2026-11-07T12:00:05+00:00",
           "cancelling": false,
           "steering": true,

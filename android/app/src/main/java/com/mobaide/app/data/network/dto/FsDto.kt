@@ -13,3 +13,20 @@ data class FsDirsResponse(
     val dirs: List<String>,
     val truncated: Boolean,
 )
+
+/** One file or folder of a session's folder: relative, `/` separators, folders without a trailing one. */
+@Serializable
+data class SessionFileEntry(
+    val path: String,
+    val dir: Boolean,
+)
+
+/**
+ * `GET /api/sessions/{id}/files`: the agent's best matches for an `@` mention,
+ * best first. `truncated` means a cap stopped the listing behind them.
+ */
+@Serializable
+data class SessionFilesResponse(
+    val entries: List<SessionFileEntry>,
+    val truncated: Boolean,
+)

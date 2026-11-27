@@ -421,6 +421,7 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
               running={running}
               cancelling={state.cancelling}
               acceptsImages={state.prompt_caps.image}
+              acceptsMentions={state.prompt_caps.mentions}
               commands={state.commands}
               suggestion={suggestion}
               latestSuggestion={state.prompt_suggestions[0]?.text ?? null}

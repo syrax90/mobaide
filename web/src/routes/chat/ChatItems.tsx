@@ -36,6 +36,7 @@ import {
 import { DiffView } from './DiffView';
 import { PlanList, toastFailure } from './DockPanels';
 import { Markdown } from './Markdown';
+import { MiddleEllipsis } from './MiddleEllipsis';
 
 const INLINE_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
@@ -268,8 +269,11 @@ function UserBubble({ item }: { item: UserItem }) {
         {item.attachments.length > 0 && (
           <ul className="chat-attachments" aria-label="Attachments">
             {item.attachments.map((attachment, index) => (
-              <li key={index} className="chat-badge">
-                {attachment.kind === 'image' ? 'Image' : (attachment.name ?? 'File')}
+              <li
+                key={index}
+                className={attachment.kind === 'image' ? 'chat-badge' : 'chat-badge chat-badge-file'}
+              >
+                {attachment.kind === 'image' ? 'Image' : <MiddleEllipsis text={attachment.name ?? 'File'} />}
               </li>
             ))}
           </ul>

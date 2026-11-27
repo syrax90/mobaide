@@ -11,6 +11,7 @@ import com.mobaide.app.data.chat.ChatConfigOption
 import com.mobaide.app.data.chat.ChatFrame
 import com.mobaide.app.data.chat.ChatImageEncoder
 import com.mobaide.app.data.chat.ChatItem
+import com.mobaide.app.data.chat.ChatMentions
 import com.mobaide.app.data.chat.ChatProtocol
 import com.mobaide.app.data.chat.ChatReduction
 import com.mobaide.app.data.chat.ChatRequest
@@ -23,6 +24,7 @@ import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.SessionFileEntry
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.TemplateDto
@@ -40,6 +42,7 @@ import com.mobaide.app.ui.common.insertAtCursor
 import com.mobaide.app.ui.sessions.sessionKindLabel
 import com.mobaide.app.ui.voice.withTranscript
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -119,7 +122,11 @@ class ChatViewModel @Inject constructor(
     private val reducerLock = Mutex()
 
     private sealed interface PendingCommand {
-        data class Prompt(val text: String, val images: List<ChatComposerImage>) : PendingCommand
+        data class Prompt(
+            val text: String,
+            val images: List<ChatComposerImage>,
+            val mentions: List<String> = emptyList(),
+        ) : PendingCommand
         data class Config(val configId: String) : PendingCommand
         data class Respond(val requestId: String) : PendingCommand
         data class Simple(val failure: String?) : PendingCommand
@@ -140,6 +147,18 @@ class ChatViewModel @Inject constructor(
 
     private val _composer = MutableStateFlow(TextFieldValue(""))
     val composer: StateFlow<TextFieldValue> = _composer.asStateFlow()
+
+    private val _mentionFiles = MutableStateFlow<List<SessionFileEntry>>(emptyList())
+
+    /** The agent's matches for the `@` token at the cursor; empty when none applies. */
+    val mentionFiles: StateFlow<List<SessionFileEntry>> = _mentionFiles.asStateFlow()
+
+    /** The `@` token (start, query) the last listing was asked for, so cursor moves do not ask again. */
+    private var mentionRequest: Pair<Int, String>? = null
+    private var mentionJob: Job? = null
+
+    /** Files picked from the `@` suggestions for the draft, as their tokens name them. */
+    private val pickedMentions = mutableListOf<String>()
 
     private val _messages = Channel<String>(Channel.BUFFERED)
     val messages: Flow<String> = _messages.receiveAsFlow()
@@ -449,7 +468,9 @@ class ChatViewModel @Inject constructor(
     private fun restoreDraft(prompt: PendingCommand.Prompt) {
         val current = _composer.value.text
         val restored = if (current.isBlank()) prompt.text else prompt.text + "\n" + current
-        _composer.value = TextFieldValue(restored, TextRange(restored.length))
+        pickedMentions.removeAll(prompt.mentions)
+        pickedMentions.addAll(0, prompt.mentions)
+        updateComposer(TextFieldValue(restored, TextRange(restored.length)))
         if (_ui.value.images.isEmpty() && prompt.images.isNotEmpty()) {
             _ui.update { it.copy(images = prompt.images) }
         }
@@ -474,10 +495,56 @@ class ChatViewModel @Inject constructor(
 
     fun updateComposer(value: TextFieldValue) {
         _composer.value = value
+        refreshMentions(value)
+    }
+
+    /** Asks the agent for matches when the cursor sits in an `@` token, after a short pause. */
+    private fun refreshMentions(value: TextFieldValue) {
+        val ui = _ui.value
+        val token = if (ui.state.promptMentions && ui.live && !ui.sessionClosed && value.selection.collapsed) {
+            ChatMentions.tokenAt(value.text, value.selection.end)
+        } else {
+            null
+        }
+        if (token == null) {
+            mentionJob?.cancel()
+            mentionJob = null
+            mentionRequest = null
+            _mentionFiles.value = emptyList()
+            return
+        }
+        val request = token.start to token.query
+        if (request == mentionRequest) return
+        // Another token: the list of the last one does not apply to it.
+        if (token.start != mentionRequest?.first) _mentionFiles.value = emptyList()
+        mentionRequest = request
+        mentionJob?.cancel()
+        mentionJob = viewModelScope.launch {
+            delay(ChatMentions.DEBOUNCE_MS)
+            _mentionFiles.value = try {
+                sessionRepository.listSessionFiles(sessionId, token.query)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // No suggestions is the whole failure mode: the user types the path.
+                emptyList()
+            }
+        }
+    }
+
+    /** Replaces the `@` token at the cursor with [entry]; a folder keeps the list open inside it. */
+    fun pickMention(entry: SessionFileEntry) {
+        val current = _composer.value
+        val token = ChatMentions.tokenAt(current.text, current.selection.end) ?: return
+        val value = ChatMentions.value(entry.path, entry.dir)
+        val (text, cursor) = ChatMentions.insert(current.text, token, value)
+        pickedMentions.remove(value)
+        pickedMentions.add(value)
+        updateComposer(TextFieldValue(text, TextRange(cursor)))
     }
 
     fun insertTranscript(transcript: String) {
-        _composer.value = _composer.value.withTranscript(transcript) ?: return
+        updateComposer(_composer.value.withTranscript(transcript) ?: return)
     }
 
     fun sendPrompt() {
@@ -493,12 +560,14 @@ class ChatViewModel @Inject constructor(
             return
         }
         val id = nextCommandId()
-        if (!send(ChatProtocol.prompt(id, text, images.map { it.payload }))) {
+        val mentions = ChatMentions.inText(text, pickedMentions)
+        if (!send(ChatProtocol.prompt(id, text, images.map { it.payload }, mentions))) {
             _messages.trySend("Not connected. Try again.")
             return
         }
-        pending[id] = PendingCommand.Prompt(text, images)
-        _composer.value = TextFieldValue("")
+        pending[id] = PendingCommand.Prompt(text, images, mentions)
+        pickedMentions.clear()
+        updateComposer(TextFieldValue(""))
         if (images.isNotEmpty()) _ui.update { it.copy(images = emptyList()) }
     }
 
@@ -725,7 +794,7 @@ class ChatViewModel @Inject constructor(
 
     /** The template body goes in at the cursor (replacing a selection); the rest of the draft stays. */
     fun applyTemplate(template: TemplateDto) {
-        _composer.value = _composer.value.insertAtCursor(template.body)
+        updateComposer(_composer.value.insertAtCursor(template.body))
         viewModelScope.launch { runCatching { templatesRepository.touchTemplate(template.template_id) } }
     }
 

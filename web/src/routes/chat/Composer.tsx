@@ -12,6 +12,9 @@ import {
   type Ref,
 } from 'react';
 import { useStore } from 'zustand';
+import { listSessionFiles, type SessionFileEntry } from '../../api/fsRepository';
+import { splitPath } from '../../chat/chatFormat';
+import { insertMention, mentionAt, mentionValue, mentionsInText } from '../../chat/chatMentions';
 import type { ChatSessionModel } from '../../chat/chatModel';
 import {
   MAX_CHAT_IMAGES,
@@ -31,8 +34,10 @@ import { TemplatesPicker } from '../terminal/TemplatesPicker';
 import { ComposerVoiceDialogs } from '../terminal/voice/ComposerVoiceDialogs';
 import { VoiceButton } from '../terminal/voice/VoiceButton';
 import { BulbIcon, CrossIcon, ImageIcon, SendIcon, StopIcon, TemplateIcon } from './ChatIcons';
+import { MiddleEllipsis } from './MiddleEllipsis';
 
 const MAX_SUGGESTIONS = 50;
+const MENTION_DEBOUNCE_MS = 150;
 const IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
 const IMAGES_TOO_LARGE = 'These images are too large to send together.';
 
@@ -55,6 +60,8 @@ interface ComposerProps {
   running: boolean;
   cancelling: boolean;
   acceptsImages: boolean;
+  /** The agent lists the session's files for `@` suggestions and takes `mentions`. */
+  acceptsMentions?: boolean;
   commands: readonly ChatCommandInfo[];
   /**
    * The agent's predicted next prompt, offered while the composer is empty;
@@ -92,6 +99,7 @@ export function Composer({
   running,
   cancelling,
   acceptsImages,
+  acceptsMentions = false,
   commands,
   suggestion = null,
   latestSuggestion = null,
@@ -109,6 +117,9 @@ export function Composer({
   // The suggestion the user used or typed over: it does not come back when
   // the composer is empty again.
   const [spentSuggestion, setSpentSuggestion] = useState<string | null>(null);
+  // Where the caret is, for the `@` token it sits in; null until the field reports it.
+  const [caret, setCaret] = useState<number | null>(null);
+  const [files, setFiles] = useState<{ start: number; entries: SessionFileEntry[] } | null>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const caretRef = useRef<number | null>(null);
@@ -140,8 +151,35 @@ export function Composer({
     () => (dismissedFor === text ? [] : matchCommands(text, commands)),
     [text, commands, dismissedFor],
   );
-  const open = suggestions.length > 0;
-  const activeIndex = Math.min(active, Math.max(0, suggestions.length - 1));
+  const mention = acceptsMentions && live && !closed ? mentionAt(text, caret ?? text.length) : null;
+  const mentionStart = mention?.start ?? null;
+  const mentionQuery = mention?.query ?? null;
+  useEffect(() => {
+    if (mentionStart === null || mentionQuery === null) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      listSessionFiles(model.agentId, model.sessionId, mentionQuery, controller.signal).then(
+        (entries) => {
+          setFiles({ start: mentionStart, entries });
+        },
+        () => {
+          // No suggestions is the whole failure mode: the user types the path.
+          if (!controller.signal.aborted) setFiles(null);
+        },
+      );
+    }, MENTION_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [mentionStart, mentionQuery, model]);
+  // The last answer stays up while the next query loads, but only for this token.
+  const fileEntries =
+    mention !== null && files?.start === mention.start && dismissedFor !== text ? files.entries : [];
+  const fileMode = fileEntries.length > 0;
+  const optionCount = fileMode ? fileEntries.length : suggestions.length;
+  const open = optionCount > 0;
+  const activeIndex = Math.min(active, Math.max(0, optionCount - 1));
 
   const insertAtCaret = useCallback(
     (insert: string) => {
@@ -152,6 +190,7 @@ export function Composer({
       const after = text.slice(end);
       const spliced = spliceTranscript({ before, after }, insert);
       caretRef.current = spliced.caret;
+      setCaret(spliced.caret);
       setText(spliced.text);
     },
     [text, setText],
@@ -224,6 +263,7 @@ export function Composer({
     // Fills only: the user reads or edits it, then sends it themselves.
     setSpentSuggestion(value);
     caretRef.current = value.length;
+    setCaret(value.length);
     setText(value);
     setActive(0);
     setHint(null);
@@ -239,13 +279,16 @@ export function Composer({
     }
     const body = text;
     const attached = images;
+    const mentions = mentionsInText(body, model.draftMentions);
     setText('');
     model.draftImages = [];
+    model.draftMentions = [];
     setHint(null);
     void model
       .prompt(
         body,
         attached.map(({ mime, data }) => ({ mime, data })),
+        mentions,
       )
       .then((result) => {
         if (result.ok) {
@@ -253,7 +296,7 @@ export function Composer({
           return;
         }
         // Through the model: the user may have left the session meanwhile.
-        model.restoreDraft(body, attached);
+        model.restoreDraft(body, attached, mentions);
         setTextState(model.draft);
         useToastStore
           .getState()
@@ -278,9 +321,21 @@ export function Composer({
   const pick = (command: ChatCommandInfo) => {
     const next = `/${command.name} `;
     caretRef.current = next.length;
+    setCaret(next.length);
     setText(next);
     setActive(0);
     setHint(command.hint !== null && command.hint !== '' ? { text: next, hint: command.hint } : null);
+  };
+
+  const pickFile = (entry: SessionFileEntry) => {
+    if (mention === null) return;
+    const value = mentionValue(entry.path, entry.dir);
+    const next = insertMention(text, mention, value);
+    model.draftMentions = [...model.draftMentions.filter((picked) => picked !== value), value];
+    caretRef.current = next.caret;
+    setCaret(next.caret);
+    setText(next.text);
+    setActive(0);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -289,11 +344,17 @@ export function Composer({
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         const step = event.key === 'ArrowDown' ? 1 : -1;
-        setActive((activeIndex + step + suggestions.length) % suggestions.length);
+        setActive((activeIndex + step + optionCount) % optionCount);
         return;
       }
       if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
-        const command = suggestions[activeIndex];
+        const entry = fileMode ? fileEntries[activeIndex] : undefined;
+        const command = fileMode ? undefined : suggestions[activeIndex];
+        if (entry !== undefined) {
+          event.preventDefault();
+          pickFile(entry);
+          return;
+        }
         if (command !== undefined) {
           event.preventDefault();
           pick(command);
@@ -386,7 +447,38 @@ export function Composer({
           </button>
         </div>
       )}
-      {open && (
+      {fileMode && (
+        <ul className="chat-suggestions" id={listId} role="listbox" aria-label="Files">
+          {fileEntries.map((entry, index) => {
+            const { dir, name } = splitPath(entry.path);
+            return (
+              <li
+                key={`${entry.dir ? 'd' : 'f'}:${entry.path}`}
+                id={`${listId}-${String(index)}`}
+                role="option"
+                aria-selected={index === activeIndex}
+                className={`chat-suggestion chat-suggestion-file${index === activeIndex ? ' chat-suggestion-active' : ''}`}
+                title={entry.path}
+                ref={(node) => {
+                  if (index === activeIndex) node?.scrollIntoView({ block: 'nearest' });
+                }}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                }}
+                onClick={() => {
+                  pickFile(entry);
+                }}
+              >
+                <span className="chat-suggestion-name">{mentionValue(name, entry.dir)}</span>
+                {dir !== '' && (
+                  <MiddleEllipsis className="chat-suggestion-description" text={dir.slice(0, -1)} />
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {open && !fileMode && (
         <ul className="chat-suggestions" id={listId} role="listbox" aria-label="Commands">
           {suggestions.map((command, index) => (
             <li
@@ -481,10 +573,14 @@ export function Composer({
             disabled={closed}
             onChange={(event) => {
               setText(event.target.value);
+              setCaret(event.target.selectionStart);
               setActive(0);
               if (dismissedFor !== null && event.target.value !== dismissedFor) setDismissedFor(null);
             }}
             onKeyDown={onKeyDown}
+            onSelect={(event) => {
+              setCaret(event.currentTarget.selectionStart);
+            }}
             onPaste={onPaste}
           />
           {hint !== null && hint.text === text && (
@@ -544,7 +640,9 @@ export function Composer({
         Enter to send · Shift+Enter for a new line
       </p>
       <p className="visually-hidden" role="status" aria-live="polite">
-        {open ? `${String(suggestions.length)} commands. Use the arrow keys to choose.` : ''}
+        {open
+          ? `${String(optionCount)} ${fileMode ? 'files' : 'commands'}. Use the arrow keys to choose.`
+          : ''}
       </p>
 
       {panel.kind === 'picker' && (
