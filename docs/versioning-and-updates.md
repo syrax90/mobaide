@@ -123,8 +123,11 @@ Shared helpers live in `deploy/prod/release_common.py`.
    normalised). Computes SHA-256 values.
 5. Takes the committed dependency lock `mobaide_agent/requirements.lock`.
    Checks that every line is a pinned version with `sha256` hash lines.
-   Re-resolves the lock against the public index and stops when a version,
-   marker or hash differs. Checks that the lock has a binary wheel for 8
+   Re-resolves the lock against the public index and stops when a version or
+   marker differs, or the lock lists a hash the index does not have. Files the
+   index added later to a pinned version (wheels for a new Python, for
+   example) only print a warning: pip installs only files whose hash the lock
+   lists, so the lock installs as before. Checks that the lock has a binary wheel for 8
    platforms (macOS, Windows, Linux glibc and musl, each x86_64 and arm64) and
    Python 3.12 to 3.15. macOS is checked for macOS 11 (`LOCK_MACOS_MINIMUM`),
    not for uv's default macOS 13. Python 3.15 on glibc Linux is checked for
@@ -812,6 +815,10 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
     stale or mismatched manifest can never downgrade an install.
   * Only `mobaide-agent update --allow-downgrade` accepts the same or an older
     version.
+  * To roll back a bad release, release the earlier code under a **higher**
+    version number. Publishing an older manifest again changes nothing:
+    agents refuse it, and `GET /api/version` does not offer it in
+    `latest_agent_version`.
 * **Pinned dependencies** — the signed manifest names the SHA-256 of
   `requirements.lock` (`dependency_lock_sha256`). The updater requires that
   file at the root of the extracted tarball and checks its hash. It writes one
@@ -988,6 +995,11 @@ the elevation re-launch re-fetches the installer from
    On Linux, Python 3.15 or later needs glibc 2.39 or newer. The installer
    stops with a message otherwise (musl is not affected).
 
+   The agent needs 64-bit Python on an x86-64 or ARM64 computer: the
+   dependency lock has binary packages for those only. `install.sh` and
+   `install.ps1` ask the Python they found and stop with a message
+   otherwise (a 32-bit Python, also on a 64-bit kernel, or another CPU).
+
    On macOS, the agent needs macOS 11 or newer: the dependency lock has no
    binary packages for older versions. `install.sh` checks this first and
    stops with a message.
@@ -1130,7 +1142,10 @@ The Android client has four distinct update paths that work together:
 * **Agent-outdated banner** — `AgentVersionMonitor` fetches `GET /api/version`
   from the authenticated agent (proxied through `central_server`) and compares
   `server_version` (running agent) with `latest_agent_version` (manifest
-  pointer the agent received over its relay). Mismatch → `SessionListScreen`
+  pointer the agent received over its relay). The agent reports
+  `latest_agent_version` only when it is higher than the running version
+  (`null` otherwise), because the updater installs only a higher version.
+  Mismatch → `SessionListScreen`
   renders `AgentOutdatedBanner`. Dismissing it only hides the prompt; the
   agent's staged-binary updater still installs silently once idle. The
   banner's "Install now" CTA hits `POST /api/agent/update/force_now` on the

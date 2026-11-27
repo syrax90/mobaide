@@ -126,6 +126,18 @@ check_python() {
         fail "Python 3.12+ is required (found $version)."
     fi
     info "Python $version detected."
+    # The agent installs binary packages only, and its dependency lock has them
+    # for 64-bit Python on x86-64 and ARM64. Keep in sync with
+    # LOCK_TARGET_PLATFORMS in deploy/prod/release_agent.py. A probe that does
+    # not answer lets the install go on.
+    local build
+    build="$(python3 -c 'import platform, struct; print(platform.machine(), struct.calcsize("P") * 8)' 2>/dev/null || true)"
+    case "$build" in
+        ''|'x86_64 64'|'amd64 64'|'aarch64 64'|'arm64 64') ;;
+        *)
+            fail "Python $version on this computer is a ${build##* }-bit build for ${build% *}. The Mobaide agent needs 64-bit Python on an x86-64 or ARM64 computer: it installs prebuilt packages, and they exist only for those."
+            ;;
+    esac
     # Python 3.15 and later on glibc Linux: one dependency has binary packages
     # only for glibc 2.39 or newer. Keep both numbers in sync with
     # LOCK_PLATFORM_FOR_PYTHON in deploy/prod/release_agent.py.

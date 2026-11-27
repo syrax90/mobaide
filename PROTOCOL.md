@@ -2034,7 +2034,7 @@ Mobile ↔ agent (text frame, after auth + before binary handshake): ``{type:"se
 
 #### Version REST route
 
-REST: ``GET /api/version`` returns ``{name, server_version, protocol_versions, min_client_version, capabilities, latest_agent_version}``. The manifest body / signature is intentionally NOT exposed here — agents receive it on the relay tunnel; install scripts fetch ``GET /api/v1/agent/manifest.json`` directly during bootstrap.
+REST: ``GET /api/version`` returns ``{name, server_version, protocol_versions, min_client_version, capabilities, latest_agent_version}``. ``latest_agent_version`` is the published version only when it is higher than ``server_version``, else ``null``: the updater installs only a higher version, so a lower one is not offered. The manifest body / signature is intentionally NOT exposed here — agents receive it on the relay tunnel; install scripts fetch ``GET /api/v1/agent/manifest.json`` directly during bootstrap.
 
 ## Application-level WebSocket close codes
 

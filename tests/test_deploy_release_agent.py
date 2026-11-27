@@ -499,18 +499,17 @@ class TestLoadDependencyLock:
         [
             (("a" * 64, "c" * 64), "sys_platform == 'win32'"),
             (("a" * 64, "b" * 64, "c" * 64), "sys_platform == 'win32'"),
-            (("a" * 64,), "sys_platform == 'win32'"),
             (("a" * 64, "b" * 64), "sys_platform == 'linux'"),
         ],
-        ids=["hash-changed", "hash-added", "hash-missing", "marker-changed"],
+        ids=["hash-changed", "hash-added", "marker-changed"],
     )
     def test_a_committed_lock_that_differs_from_the_index_stops_the_release(
         self, tmp_path, monkeypatch, example_hashes, other_marker
     ):
         """The versions are the ones the index resolves, but an entry is not
         what the index holds for them. pip installs any file whose hash the
-        lock lists, on every platform the marker selects, so the set of
-        hashes and the marker must be equal, not only overlap."""
+        lock lists, on every platform the marker selects, so the lock may
+        list only hashes the index has, and the marker must be equal."""
         self._uv_resolves(
             monkeypatch, self._two_entry_lock(self._INDEX_HASHES, self._INDEX_MARKER),
         )
@@ -522,6 +521,30 @@ class TestLoadDependencyLock:
             ra.load_dependency_lock(
                 self._agent_dir(tmp_path, committed.encode("utf-8")), out_dir, "3.12",
             )
+
+    def test_files_the_index_added_later_do_not_stop_the_release(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The index added a file to a version the lock pins (a wheel for a
+        new Python, say). pip installs only files whose hash the lock lists,
+        so the lock installs as before, and an urgent release must not wait
+        for a new lock. The release takes the committed lock and warns."""
+        self._uv_resolves(
+            monkeypatch, self._two_entry_lock(self._INDEX_HASHES, self._INDEX_MARKER),
+        )
+        committed = self._two_entry_lock(("a" * 64,), self._INDEX_MARKER)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        lock = ra.load_dependency_lock(
+            self._agent_dir(tmp_path, committed.encode("utf-8")), out_dir, "3.12",
+        )
+
+        assert lock.read_text(encoding="utf-8") == committed
+        output = capsys.readouterr()
+        assert "files the lock does not list for: example-dependency" in (
+            output.out + output.err
+        )
 
     @pytest.mark.parametrize(
         "before, after, number",

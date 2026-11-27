@@ -121,18 +121,23 @@ def _python3_failing_first_call(directory: Path) -> None:
     )
 
 
-def _python3_reporting(directory: Path, *, version: str, glibc: str) -> None:
+def _python3_reporting(
+    directory: Path, *, version: str, glibc: str, build: str | None = None
+) -> None:
     """``python3`` stub for ``check_python``: it reports the Python
-    ``version`` and the glibc version ``glibc`` (empty: another C library).
+    ``version``, the glibc version ``glibc`` (empty: another C library) and,
+    when given, the CPU and pointer size ``build`` (``"armv7l 32"``).
     Every other call goes to the real interpreter, so the version comparison
     of the script itself runs."""
+    build_case = f"    *calcsize*) echo '{build}' ;;\n" if build is not None else ""
     _stub(
         directory,
         "python3",
         'case "$2" in\n'
         f"    *version_info*) echo {version} ;;\n"
         f"    *libc_ver*) echo '{glibc}' ;;\n"
-        f'    *) exec {shlex.quote(sys.executable)} "$@" ;;\n'
+        + build_case
+        + f'    *) exec {shlex.quote(sys.executable)} "$@" ;;\n'
         "esac",
     )
 
@@ -381,6 +386,36 @@ class TestCheckPython:
 
         assert proc.returncode == 0, proc.stderr
         assert proc.stderr == ""
+
+
+    @pytest.mark.parametrize(
+        "build, refused",
+        [
+            ("armv7l 32", True),
+            ("aarch64 32", True),
+            ("x86_64 32", True),
+            ("s390x 64", True),
+            ("aarch64 64", False),
+            ("arm64 64", False),
+            ("x86_64 64", False),
+        ],
+    )
+    def test_refuses_a_python_that_has_no_binary_packages(
+        self, tmp_path: Path, build: str, refused: bool
+    ) -> None:
+        """The dependency lock has binary packages for 64-bit Python on
+        x86-64 and ARM64 only. A 64-bit kernel can run a 32-bit Python
+        (Raspberry Pi OS), so the Python itself is asked, not ``uname``."""
+        stubs = tmp_path / "bin"
+        _python3_reporting(stubs, version="3.12", glibc="2.39", build=build)
+
+        proc = _run_function("check_python", stubs)
+
+        if refused:
+            assert proc.returncode != 0
+            assert "64-bit Python on an x86-64 or ARM64" in proc.stderr
+        else:
+            assert proc.returncode == 0, proc.stderr
 
 
 @_POSIX_STUBS

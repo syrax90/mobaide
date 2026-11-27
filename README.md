@@ -94,7 +94,7 @@ Read more on the [voice input page](https://mobaide.com/voice-input): [how it wo
 
 ## Get started
 
-**You need** a computer with at least one agent CLI installed and signed in. Mobaide launches the CLIs you already have. It does not resell or proxy any model provider. On macOS and Linux, the agent also needs Python 3.12+. On macOS, it needs macOS 11 or newer. The Windows installer gets Python for you.
+**You need** a computer with at least one agent CLI installed and signed in. Mobaide launches the CLIs you already have. It does not resell or proxy any model provider. On macOS and Linux, the agent also needs 64-bit Python 3.12+ on an x86-64 or ARM64 computer. On macOS, it needs macOS 11 or newer. The Windows installer gets Python for you.
 
 **1. Install the agent** on the computer you want to reach.
 
