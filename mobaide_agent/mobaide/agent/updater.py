@@ -87,6 +87,13 @@ EXIT_RESTART_REQUESTED = 75
 # Minimum interval between "deferred because busy" retry attempts.
 DEFERRED_RETRY_SECONDS = 30 * 60
 
+# A release that failed to install is tried again after this wait, doubled
+# after each further failure up to the maximum. "Install now" and the command
+# at the computer skip the wait. Without it, a release that cannot install on
+# this computer would be downloaded again at every manifest delivery.
+STAGE_RETRY_BASE_SECONDS = 15 * 60
+STAGE_RETRY_MAX_SECONDS = 24 * 60 * 60
+
 # Log a WARN if a single update has been deferred for longer than this.
 LONG_DEFER_WARN_SECONDS = 24 * 60 * 60
 
@@ -302,6 +309,11 @@ class StagedBinaryUpdater:
         # Signature of the last manifest whose trust data was recorded, so a
         # manifest that arrives again at every tunnel sign-in costs no file I/O.
         self._trust_recorded_for: str | None = None
+        # Retry wait after a failed install: the signature of the manifest
+        # that failed, how often, and the earliest time of the next try.
+        self._stage_failed_for: str | None = None
+        self._stage_failures = 0
+        self._stage_retry_at = 0.0
         self._lock = asyncio.Lock()
 
     @property
@@ -317,6 +329,7 @@ class StagedBinaryUpdater:
         force: bool = False,
         exit_after_stage: bool = True,
         allow_downgrade: bool = False,
+        ignore_retry_wait: bool = False,
     ) -> str:
         """Apply the manifest if appropriate.
 
@@ -336,9 +349,14 @@ class StagedBinaryUpdater:
             print its result line and return the code. A manifest for the version
             this updater already staged returns ``"staged"`` with no new work
             and no second exit call (the restart is still pending).
-            ``"signature_failed"`` — fail-closed; agent stays on current.
+            ``"signature_failed"`` — fail-closed; agent stays on current. Also
+            returned, with no new attempt, while a release that failed to
+            install waits for its next try (``STAGE_RETRY_BASE_SECONDS``).
 
-        ``force`` skips only the wait for idle sessions. Every decision uses
+        ``force`` skips only the wait for idle sessions. ``ignore_retry_wait``
+        skips the wait after a failed install: the paths a person starts
+        ("Install now", the command at the computer) pass it, the automatic
+        ones do not. Every decision uses
         the version inside the signed body: ``latest_version`` comes from the
         sender without a signature, so it never selects what is installed.
         Only ``allow_downgrade`` (the command at the computer) accepts a
@@ -393,6 +411,12 @@ class StagedBinaryUpdater:
             # same release must not rebuild it while the restart is pending.
             if target_version == self._staged_version:
                 return "staged"
+            if (
+                not ignore_retry_wait
+                and signature_b64 == self._stage_failed_for
+                and time.monotonic() < self._stage_retry_at
+            ):
+                return "signature_failed"
             if not force and not self._is_idle():
                 self._note_deferred()
                 return "deferred"
@@ -404,6 +428,7 @@ class StagedBinaryUpdater:
                 )
             except Exception as exc:
                 logger.error("updater.stage_failed version=%s: %s", target_version, exc)
+                self._note_stage_failure(signature_b64)
                 return "signature_failed"
 
             try:
@@ -414,6 +439,7 @@ class StagedBinaryUpdater:
                     target_version, release_dir, exc,
                 )
                 shutil.rmtree(release_dir, ignore_errors=True)
+                self._note_stage_failure(signature_b64)
                 return "signature_failed"
 
             logger.info(
@@ -433,13 +459,15 @@ class StagedBinaryUpdater:
         *,
         exit_after_stage: bool = True,
     ) -> str:
-        """User-triggered update: skips the wait for idle sessions, not the version check."""
+        """User-triggered update: skips the wait for idle sessions and the wait
+        after a failed install, not the version check."""
         return await self.consider_manifest(
             manifest_body,
             signature_b64,
             latest_version,
             force=True,
             exit_after_stage=exit_after_stage,
+            ignore_retry_wait=True,
         )
 
     def _is_idle(self) -> bool:
@@ -462,6 +490,21 @@ class StagedBinaryUpdater:
         state = getattr(session, "state", None)
         value = getattr(state, "value", state)
         return str(value).lower() in {"stopped", "crashed"}
+
+    def _note_stage_failure(self, signature_b64: str) -> None:
+        if signature_b64 != self._stage_failed_for:
+            self._stage_failed_for = signature_b64
+            self._stage_failures = 0
+        self._stage_failures += 1
+        wait = min(
+            STAGE_RETRY_MAX_SECONDS,
+            STAGE_RETRY_BASE_SECONDS * 2 ** min(self._stage_failures - 1, 16),
+        )
+        self._stage_retry_at = time.monotonic() + wait
+        logger.info(
+            "updater.stage_retry_wait automatic retries wait seconds=%d failures=%d",
+            wait, self._stage_failures,
+        )
 
     def _note_deferred(self) -> None:
         now = time.monotonic()

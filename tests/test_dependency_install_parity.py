@@ -5,11 +5,16 @@ the lock under the same name. If one of them differs, a release that passes
 the trial install can fail on a computer, or a computer installs with fewer
 checks than the release was tested with.
 
+The release wheel check and ``deploy/install.sh`` must also name the same
+Python and glibc versions: the check proves one side of that line, and the
+script refuses the other side.
+
 The checks on the install scripts read the script text, so they run without
 bash and without PowerShell.
 """
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 import sys
@@ -23,6 +28,7 @@ sys.path.insert(0, str(_REPO_ROOT / "deploy" / "prod"))
 import release_agent as ra  # noqa: E402
 
 import mobaide.agent.updater as updater  # noqa: E402
+from test_install_script_trap import _sh_function_body  # noqa: E402
 
 _INSTALL_SH = _REPO_ROOT / "deploy" / "install.sh"
 _INSTALL_PS1 = _REPO_ROOT / "deploy" / "install.ps1"
@@ -101,3 +107,30 @@ def test_every_installer_reads_the_lock_under_the_name_the_release_tool_writes()
         assert f'"{ra.DEPENDENCY_LOCK_NAME}"' in script.read_text(encoding="utf-8"), (
             f"{script.name} does not read {ra.DEPENDENCY_LOCK_NAME}"
         )
+
+
+def test_install_sh_refuses_what_the_release_wheel_check_does_not_cover() -> None:
+    """For some Python versions on glibc Linux the wheel check asks only for
+    a newer glibc (``LOCK_PLATFORM_FOR_PYTHON``). ``check_python`` must refuse an
+    older glibc from the same Python version on, and below the same glibc version."""
+    check_python = _sh_function_body("check_python")
+    (first_python_minor,) = re.findall(r'"\$minor" -ge (\d+)', check_python)
+    (needed_glibc,) = re.findall(r">= \((\d+), (\d+)\)", check_python)
+
+    covered = ra.LOCK_PLATFORM_FOR_PYTHON
+    assert covered, "the wheel check has no glibc exception; remove the one in install.sh"
+    assert min(int(version.split(".")[1]) for _platform, version in covered) == int(
+        first_python_minor
+    )
+    assert {platform.split("-manylinux_")[1] for platform in covered.values()} == {
+        "_".join(needed_glibc)
+    }
+    # install.sh refuses every glibc Linux, so the check must cover each one
+    # the release targets, for every Python from the first one on.
+    assert set(covered) == {
+        (platform, version)
+        for platform in ra.LOCK_TARGET_PLATFORMS
+        if platform.endswith("-linux-gnu")
+        for version in ra.LOCK_PYTHON_VERSIONS
+        if int(version.split(".")[1]) >= int(first_python_minor)
+    }

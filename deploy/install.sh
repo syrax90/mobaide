@@ -107,6 +107,17 @@ check_python() {
         fail "Python 3.12+ is required (found $version)."
     fi
     info "Python $version detected."
+    # Python 3.15 and later on glibc Linux: one dependency has binary packages
+    # only for glibc 2.39 or newer. Keep both numbers in sync with
+    # LOCK_PLATFORM_FOR_PYTHON in deploy/prod/release_agent.py.
+    if [ "$PLATFORM" = "linux" ] && [ "$minor" -ge 15 ]; then
+        local glibc
+        glibc="$(python3 -c 'import platform; lib, ver = platform.libc_ver(); print(ver if lib == "glibc" else "")' 2>/dev/null || true)"
+        if [ -n "$glibc" ] && ! python3 -c 'import sys; sys.exit(0 if tuple(int(p) for p in sys.argv[1].split(".")[:2]) >= (2, 39) else 1)' "$glibc" 2>/dev/null; then
+            fail "Python $version on this system (glibc $glibc) cannot install the agent: the agent needs glibc 2.39 or newer with Python 3.15 and later.
+Put Python 3.12, 3.13 or 3.14 first on PATH as 'python3' and run the installer again."
+        fi
+    fi
 }
 
 ensure_ensurepip_available() {

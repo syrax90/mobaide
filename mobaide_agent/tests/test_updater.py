@@ -663,6 +663,213 @@ async def test_finalize_failure_restores_prior_release(layout) -> None:
     assert not layout.current_version_file.exists()
 
 
+class _Clock:
+    """Stands in for ``time`` inside the updater. ``monotonic`` moves only
+    when a test moves it, so no test sleeps."""
+
+    time = staticmethod(time.time)
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _FailingInstall:
+    """A ``venv_builder`` that fails while ``broken`` is set. ``attempts``
+    counts the install attempts that reached it."""
+
+    def __init__(self) -> None:
+        self.broken = True
+        self.attempts = 0
+
+    def __call__(self, venv_dir: Path) -> None:
+        self.attempts += 1
+        if self.broken:
+            raise RuntimeError("venv build failed on this computer")
+        _fake_venv_builder(venv_dir)
+
+
+@pytest.fixture
+def clock(monkeypatch) -> _Clock:
+    import mobaide.agent.updater as _updater_mod
+
+    clock = _Clock()
+    monkeypatch.setattr(_updater_mod, "time", clock)
+    return clock
+
+
+def _updater_with_failing_install(
+    layout, public_key_b64: str, exits: list[int] | None = None,
+) -> tuple[StagedBinaryUpdater, _FailingInstall]:
+    install = _FailingInstall()
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=install,
+        finalizer=_fake_finalizer,
+        exit_func=(exits if exits is not None else []).append,
+    )
+    return updater, install
+
+
+async def test_wait_after_a_failed_install_doubles_up_to_one_day(
+    layout, clock
+) -> None:
+    """The relay delivers the manifest again at every sign-in. A release that
+    cannot install on this computer must not be downloaded and built each
+    time: 15 minutes after the first failure, doubled after each further one,
+    24 hours at most."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    updater, install = _updater_with_failing_install(layout, public_key_b64)
+    quarter_hour, one_day = 15 * 60, 24 * 60 * 60
+    waits = [quarter_hour * 2**n for n in range(7)] + [one_day, one_day]
+
+    for failures, wait in enumerate(waits, start=1):
+        outcome = await updater.consider_manifest(body, signature_b64, body["version"])
+        assert outcome == "signature_failed"
+        assert install.attempts == failures, f"no new attempt after a {wait}s wait"
+
+        clock.advance(wait - 1)
+        outcome = await updater.consider_manifest(body, signature_b64, body["version"])
+        assert outcome == "signature_failed"
+        assert install.attempts == failures, (
+            f"tried again {wait - 1}s after failure {failures}"
+        )
+        clock.advance(1)
+
+    assert not layout.current_version_file.exists()
+
+
+async def test_another_manifest_does_not_inherit_the_wait(layout, clock) -> None:
+    """The wait belongs to one signed manifest. A new release (the fix for
+    the one that failed) is tried at once and starts at the first wait."""
+    private_key = Ed25519PrivateKey.generate()
+    public_key_b64, failed_body, failed_signature = _signed_manifest(
+        layout.prefix / "tmp", private_key=private_key,
+    )
+    _, next_body, next_signature = _signed_manifest(
+        layout.prefix / "tmp-next", version="0.3.0", private_key=private_key,
+    )
+    updater, install = _updater_with_failing_install(layout, public_key_b64)
+
+    await updater.consider_manifest(failed_body, failed_signature, "0.2.0")
+    clock.advance(15 * 60)
+    await updater.consider_manifest(failed_body, failed_signature, "0.2.0")
+    assert install.attempts == 2
+
+    outcome = await updater.consider_manifest(next_body, next_signature, "0.3.0")
+    assert outcome == "signature_failed"
+    assert install.attempts == 3
+
+    clock.advance(15 * 60 - 1)
+    await updater.consider_manifest(next_body, next_signature, "0.3.0")
+    assert install.attempts == 3
+    clock.advance(1)
+    await updater.consider_manifest(next_body, next_signature, "0.3.0")
+    assert install.attempts == 4
+
+
+async def test_install_now_does_not_wait_after_a_failed_install(
+    layout, clock
+) -> None:
+    """The user who asks for the update has usually just removed the cause
+    of the failure. The request must not answer from the wait."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    updater, install = _updater_with_failing_install(layout, public_key_b64)
+    await updater.consider_manifest(body, signature_b64, body["version"])
+
+    still_broken = await updater.force_update_now(
+        body, signature_b64, body["version"], exit_after_stage=False,
+    )
+    install.broken = False
+    repaired = await updater.force_update_now(
+        body, signature_b64, body["version"], exit_after_stage=False,
+    )
+
+    assert (still_broken, repaired) == ("signature_failed", "staged")
+    assert install.attempts == 3
+    assert layout.current_version_file.read_text().strip() == "0.2.0"
+
+
+async def test_forced_automatic_update_keeps_the_wait_after_a_failed_install(
+    layout, clock
+) -> None:
+    """``force`` also comes from an automatic path: the update check after
+    the relay refused the protocol version of this agent. It skips the wait
+    for idle sessions only. A signal that arrives again and again must not
+    start a download and a build each time."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    updater, install = _updater_with_failing_install(layout, public_key_b64)
+    await updater.consider_manifest(body, signature_b64, body["version"])
+    install.broken = False
+
+    inside_the_wait = await updater.consider_manifest(
+        body, signature_b64, body["version"], force=True, exit_after_stage=False,
+    )
+    assert inside_the_wait == "signature_failed"
+    assert install.attempts == 1
+    assert not layout.current_version_file.exists()
+
+    clock.advance(15 * 60)
+    after_the_wait = await updater.consider_manifest(
+        body, signature_b64, body["version"], force=True, exit_after_stage=False,
+    )
+    assert after_the_wait == "staged"
+    assert install.attempts == 2
+    assert layout.current_version_file.read_text().strip() == "0.2.0"
+
+
+async def test_release_installs_when_the_wait_is_over(layout, clock) -> None:
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    exits: list[int] = []
+    updater, install = _updater_with_failing_install(layout, public_key_b64, exits)
+    await updater.consider_manifest(body, signature_b64, body["version"])
+    install.broken = False
+
+    inside_the_wait = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+    )
+    clock.advance(15 * 60)
+    after_the_wait = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+    )
+
+    assert (inside_the_wait, after_the_wait) == ("signature_failed", "staged")
+    assert install.attempts == 2
+    assert is_release_complete(layout.releases_dir / "0.2.0")
+    assert layout.current_version_file.read_text().strip() == "0.2.0"
+    assert exits == [75]
+
+
+async def test_failed_pointer_swap_also_starts_the_wait(
+    layout, clock, monkeypatch
+) -> None:
+    """A failure after the build (the ``current_version`` file cannot be
+    written) costs a full download and build each time, so it waits too."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    updater, install = _updater_with_failing_install(layout, public_key_b64)
+    install.broken = False
+
+    def read_only_prefix(version: str) -> None:
+        raise OSError("current_version is not writable")
+
+    monkeypatch.setattr(updater, "_swap_pointer", read_only_prefix)
+
+    first = await updater.consider_manifest(body, signature_b64, body["version"])
+    again = await updater.consider_manifest(body, signature_b64, body["version"])
+
+    assert (first, again) == ("signature_failed", "signature_failed")
+    assert install.attempts == 1
+    assert not layout.current_version_file.exists()
+
+
 def test_swap_into_place_returns_backup_for_existing_release(layout) -> None:
     """``_swap_into_place`` now returns the ``.old-*`` backup (the caller drops
     it only after finalize + sentinel), or ``None`` when there was no prior
@@ -1883,3 +2090,32 @@ def test_update_command_with_allow_downgrade_prints_no_refusal(
     output = capsys.readouterr()
     assert "--allow-downgrade" not in output.out + output.err
     assert "Nothing was installed" not in output.out + output.err
+
+
+def test_update_command_does_not_wait_after_a_failed_install(
+    layout, monkeypatch, clock
+) -> None:
+    """``mobaide-agent update`` is a request of the person at the computer,
+    like "Install now": it must try the install, not answer from the wait.
+    The command makes its own updater, so the test gives it one that is
+    inside the wait for the published manifest."""
+    import mobaide.agent.updater as _updater_mod
+
+    run = _update_command(layout, monkeypatch, installed="0.1.0", flags=[])
+    record = json.loads(
+        (layout.prefix / "tmp" / "manifest.json").read_text(encoding="utf-8")
+    )
+    updater, install = _updater_with_failing_install(
+        layout, layout.trust_public_key.read_text(encoding="utf-8").strip(),
+    )
+    first = asyncio.run(
+        updater.consider_manifest(record["body"], record["signature_b64"], "0.2.0")
+    )
+    assert (first, install.attempts) == ("signature_failed", 1)
+    install.broken = False
+    monkeypatch.setattr(_updater_mod, "StagedBinaryUpdater", lambda **_kwargs: updater)
+
+    assert run() == 75
+
+    assert install.attempts == 2
+    assert layout.current_version_file.read_text().strip() == "0.2.0"

@@ -7,6 +7,8 @@ Usage:
     python deploy/prod/release_agent.py --skip-publish    # build + sign only, publish nothing
     python deploy/prod/release_agent.py --force           # allow a dirty working tree
     python deploy/prod/release_agent.py --new-relay-pairing-key   # print a new key pair, do nothing else
+    python deploy/prod/release_agent.py --update-lock     # write mobaide_agent/requirements.lock for a pull request
+    python deploy/prod/release_agent.py --upgrade-lock    # the same, with the newest version of every dependency
 
 What it does:
   1) Preflight: tools (git, uv), clean tree, release dir keys, the tag
@@ -14,10 +16,12 @@ What it does:
      trust key the relay serves, and the relay pairing key in the release
      dir equals the one the relay holds
   2) Detached worktree at the tag: the install scripts must carry the
-     signing key's public half; uv build (wheel + sdist); a hash-pinned
-     dependency lock (requirements.lock) goes into the source tarball; uv
-     confirms a binary wheel for every supported platform and a trial
-     install proves that pip accepts the lock; SHA-256 of all three
+     signing key's public half; uv build (wheel + sdist); the committed
+     hash-pinned dependency lock (mobaide_agent/requirements.lock) must fit
+     pyproject.toml and goes into the source tarball; uv confirms a binary
+     wheel for every supported platform and a trial install proves that pip
+     accepts the lock; SHA-256 of all three. A release never picks new
+     dependency versions: --update-lock does, for a pull request
   3) Sign the manifest with the local Ed25519 key. The signed body names
      the lock by SHA-256 and lists the keys agents may trust
   4) PUT the tarball and wheel to the relay, which stores them by SHA-256
@@ -38,6 +42,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -49,6 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from deploy_central import (
+    PROJECT_ROOT,
     DeployError,
     check_clean_tree,
     dim,
@@ -99,7 +105,15 @@ LOCK_TARGET_PLATFORMS = (
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
 )
-LOCK_PYTHON_VERSIONS = ("3.12", "3.13", "3.14")
+LOCK_PYTHON_VERSIONS = ("3.12", "3.13", "3.14", "3.15")
+# Python 3.15 on glibc Linux: one dependency has wheels only for
+# glibc 2.39 or newer. install.sh refuses an older glibc with that Python,
+# so the check uses the platform that can install.
+LOCK_PLATFORM_FOR_PYTHON = {
+    ("x86_64-unknown-linux-gnu", "3.15"): "x86_64-manylinux_2_39",
+    ("aarch64-unknown-linux-gnu", "3.15"): "aarch64-manylinux_2_39",
+}
+PYPI_INDEX = "https://pypi.org/simple"
 INSTALL_SCRIPTS = ("deploy/install.sh", "deploy/install.ps1")
 
 
@@ -235,28 +249,176 @@ def minimum_python(requires_python: str) -> str:
     return m.group(1)
 
 
-def build_dependency_lock(agent_dir: Path, out_dir: Path, python_floor: str) -> Path:
+# uv settings that may come from this machine without a change of what is resolved.
+_UV_ENV_KEPT = ("UV_CACHE_DIR", "UV_NATIVE_TLS", "UV_SYSTEM_CERTS", "UV_HTTP_TIMEOUT")
+
+
+def _uv_env() -> dict[str, str]:
+    """uv must resolve from the public index and from pyproject.toml only,
+    whatever this machine's own uv settings say (indexes, constraints,
+    overrides)."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("UV_") or k in _UV_ENV_KEPT}
+
+
+def compile_lock(agent_dir: Path, lock: Path, python_floor: str, *, upgrade: bool = False) -> None:
     """Resolve every dependency for all platforms and every Python from
-    ``python_floor`` up, with the SHA-256 of each file. Without the floor uv
-    starts at the interpreter it finds, and an agent on an older Python
-    would miss a dependency in the lock."""
-    lock = out_dir / DEPENDENCY_LOCK_NAME
+    ``python_floor`` up, with the SHA-256 of each file, into ``lock``. Without
+    the floor uv starts at the interpreter it finds, and an agent on an
+    older Python would miss a dependency. uv keeps the versions that ``lock``
+    already holds when they still fit; ``upgrade`` takes the newest instead."""
     r = subprocess.run(
         [
-            "uv", "pip", "compile", "pyproject.toml",
+            "uv", "--no-config", "pip", "compile", "pyproject.toml",
             "--universal", "--python-version", python_floor,
+            "--default-index", PYPI_INDEX,
             "--generate-hashes", "--no-header", "--no-annotate",
+            *(["--upgrade"] if upgrade else []),
             "--quiet", "--output-file", str(lock),
         ],
-        cwd=agent_dir,
+        cwd=agent_dir, env=_uv_env(),
     )
     if r.returncode != 0 or not lock.is_file():
         raise ReleaseError("uv pip compile failed")
     # LF on every OS, so the lock has the same SHA-256 wherever it was made.
     lock.write_bytes(lock.read_bytes().replace(b"\r\n", b"\n"))
-    pinned = sum(1 for line in lock.read_text(encoding="utf-8").splitlines() if "==" in line)
-    ok(f"Locked {pinned} dependencies with hashes")
+
+
+_LOCK_PIN_RE = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)\s*(?:;\s*([^\\]*?))?\s*\\?\s*$")
+_LOCK_HASH_RE = re.compile(r"--hash=(sha256:[0-9a-f]{64})")
+
+
+def lock_entries(text: str) -> dict[tuple[str, str, str], frozenset[str]]:
+    """(name, version, marker) -> the hashes the lock accepts for it."""
+    entries: dict[tuple[str, str, str], set[str]] = {}
+    current: set[str] | None = None
+    for line in text.splitlines():
+        m = _LOCK_PIN_RE.match(line)
+        if m:
+            current = entries.setdefault((m.group(1).lower(), m.group(2), (m.group(3) or "").strip()), set())
+        elif current is not None:
+            current.update(_LOCK_HASH_RE.findall(line))
+    return {key: frozenset(hashes) for key, hashes in entries.items()}
+
+
+_LOCK_PIN_LINE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*==[^\s;\\]+( ; [^\\]+)? \\")
+_LOCK_HASH_LINE_RE = re.compile(r"    --hash=sha256:[0-9a-f]{64}( \\)?")
+
+
+def check_lock_grammar(text: str) -> None:
+    """The lock may hold only what the comparison with the index reads: a
+    pinned version with an optional marker, then its sha256 lines. pip
+    understands more (other hash forms, URLs, index options), so any other
+    line stops the release."""
+    in_entry = False
+    number = 0
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line:
+            valid = not in_entry
+        elif _LOCK_PIN_LINE_RE.fullmatch(line):
+            valid = not in_entry and " --" not in line
+            in_entry = True
+        elif _LOCK_HASH_LINE_RE.fullmatch(line):
+            valid = in_entry
+            in_entry = line.endswith("\\")
+        else:
+            valid = False
+        if not valid:
+            break
+    else:
+        if not in_entry:
+            return
+    raise ReleaseError(
+        f"mobaide_agent/{DEPENDENCY_LOCK_NAME} line {number} is not a complete pinned version "
+        "with its sha256 lines. Run 'python deploy/prod/release_agent.py --update-lock' "
+        "and commit its output unchanged."
+    )
+
+
+def lock_pins(text: str) -> dict[str, set[str]]:
+    """Package name -> pinned versions (more than one when platforms differ)."""
+    pins: dict[str, set[str]] = {}
+    for name, version, _marker in lock_entries(text):
+        pins.setdefault(name, set()).add(version)
+    return pins
+
+
+def lock_difference(old_text: str, new_text: str) -> list[str]:
+    """One line per dependency whose versions, markers or hashes differ."""
+    old, new = lock_entries(old_text), lock_entries(new_text)
+    old_pins, new_pins = lock_pins(old_text), lock_pins(new_text)
+    lines = []
+    for name in sorted({key[0] for key in old.keys() | new.keys()}):
+        before, after = old_pins.get(name, set()), new_pins.get(name, set())
+        if before != after:
+            lines.append(f"{name}: {', '.join(sorted(before)) or 'new'} -> {', '.join(sorted(after)) or 'removed'}")
+        elif {k: v for k, v in old.items() if k[0] == name} != {k: v for k, v in new.items() if k[0] == name}:
+            lines.append(f"{name}: hashes or markers changed")
+    return lines
+
+
+def recompile_from_pins(agent_dir: Path, text: str, target: Path, python_floor: str, *, upgrade: bool = False) -> None:
+    """Resolve again with the versions of ``text`` as the starting point, but
+    without its hashes: uv copies hashes from the file it starts from, and
+    here they must come from the index."""
+    seed = [
+        f"{name}=={version}" + (f" ; {marker}" if marker else "")
+        for name, version, marker in lock_entries(text)
+    ]
+    target.write_text("\n".join(seed) + "\n", encoding="utf-8")
+    compile_lock(agent_dir, target, python_floor, upgrade=upgrade)
+
+
+def load_dependency_lock(agent_dir: Path, out_dir: Path, python_floor: str) -> Path:
+    """Take the lock that is committed with the source. Its versions were
+    reviewed in a pull request; a release never picks new ones. The lock
+    must be what the index gives for those versions and for pyproject.toml:
+    a changed dependency, marker or hash stops the release here."""
+    committed = agent_dir / DEPENDENCY_LOCK_NAME
+    if not committed.is_file():
+        raise ReleaseError(f"mobaide_agent/{DEPENDENCY_LOCK_NAME} is missing at this tag")
+    lock = out_dir / DEPENDENCY_LOCK_NAME
+    lock.write_bytes(committed.read_bytes().replace(b"\r\n", b"\n"))
+    text = lock.read_text(encoding="utf-8")
+    check_lock_grammar(text)
+    fresh = out_dir / "lock-fresh.txt"
+    recompile_from_pins(agent_dir, text, fresh, python_floor)
+    difference = lock_difference(text, fresh.read_text(encoding="utf-8"))
+    fresh.unlink(missing_ok=True)
+    if difference:
+        raise ReleaseError(
+            f"mobaide_agent/{DEPENDENCY_LOCK_NAME} is not what the package index gives for "
+            "mobaide_agent/pyproject.toml (lock -> index):\n  " + "\n  ".join(difference) + "\n"
+            "Run 'python deploy/prod/release_agent.py --update-lock', review the change in a "
+            "pull request, and release from a tag that contains it."
+        )
+    ok(f"Dependency lock: {len(lock_entries(text))} pinned versions, as committed")
     return lock
+
+
+def update_lock(*, upgrade: bool) -> int:
+    """Write mobaide_agent/requirements.lock in this checkout, for a pull request."""
+    require_tools("uv")
+    agent_dir = PROJECT_ROOT / "mobaide_agent"
+    with (agent_dir / "pyproject.toml").open("rb") as fh:
+        python_floor = minimum_python(tomllib.load(fh)["project"]["requires-python"])
+    lock = agent_dir / DEPENDENCY_LOCK_NAME
+    old_text = lock.read_text(encoding="utf-8") if lock.is_file() else ""
+    step("Upgrade dependency lock to the newest versions" if upgrade else "Update dependency lock")
+    with tempfile.TemporaryDirectory(prefix="mobaide-lock-") as scratch:
+        candidate = Path(scratch) / DEPENDENCY_LOCK_NAME
+        recompile_from_pins(agent_dir, old_text, candidate, python_floor, upgrade=upgrade)
+        check_lock_has_wheels(candidate, Path(scratch), python_floor)
+        new_text = candidate.read_text(encoding="utf-8")
+        check_lock_grammar(new_text)
+    if new_text == old_text:
+        info(f"  {lock} is already current. Nothing was written.")
+        return 0
+    for line in lock_difference(old_text, new_text) or ["only the layout of the file changed"]:
+        info(f"  {line}")
+    lock.write_text(new_text, encoding="utf-8", newline="\n")
+    info("")
+    info(f"Wrote {lock}. Commit it in a pull request.")
+    return 0
 
 
 def check_lock_has_wheels(lock: Path, out_dir: Path, python_floor: str) -> None:
@@ -275,11 +437,12 @@ def check_lock_has_wheels(lock: Path, out_dir: Path, python_floor: str) -> None:
         for version in versions:
             r = subprocess.run(
                 [
-                    "uv", "pip", "compile", str(lock),
-                    "--python-platform", platform, "--python-version", version,
+                    "uv", "--no-config", "pip", "compile", str(lock),
+                    "--python-platform", LOCK_PLATFORM_FOR_PYTHON.get((platform, version), platform),
+                    "--python-version", version, "--default-index", PYPI_INDEX,
                     "--no-build", "--no-deps", "--quiet", "--output-file", str(scratch),
                 ],
-                capture_output=True, text=True,
+                capture_output=True, text=True, env=_uv_env(),
             )
             if r.returncode != 0:
                 cause = next(
@@ -336,7 +499,11 @@ def build_artifacts(src: Path, version: str, out_dir: Path) -> tuple[Path, Path,
 
     dist = out_dir / "dist"
     r = subprocess.run(
-        ["uv", "build", "--wheel", "--sdist", "--out-dir", str(dist)], cwd=agent_dir
+        [
+            "uv", "--no-config", "build", "--wheel", "--sdist",
+            "--default-index", PYPI_INDEX, "--out-dir", str(dist),
+        ],
+        cwd=agent_dir, env=_uv_env(),
     )
     if r.returncode != 0:
         raise ReleaseError("uv build failed")
@@ -349,7 +516,7 @@ def build_artifacts(src: Path, version: str, out_dir: Path) -> tuple[Path, Path,
     ok(f"Built {wheel.name}")
 
     python_floor = minimum_python(project["requires-python"])
-    lock = build_dependency_lock(agent_dir, out_dir, python_floor)
+    lock = load_dependency_lock(agent_dir, out_dir, python_floor)
     check_lock_has_wheels(lock, out_dir, python_floor)
     trial_install(lock, wheel, sha256_file(wheel), out_dir)
 
@@ -529,6 +696,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="allow a dirty working tree")
     p.add_argument("--new-relay-pairing-key", action="store_true",
                    help="print a new relay pairing key pair and exit; nothing is saved or published")
+    p.add_argument("--update-lock", action="store_true",
+                   help="write mobaide_agent/requirements.lock for the current pyproject.toml and exit; "
+                        "versions already in the lock stay when they still fit")
+    p.add_argument("--upgrade-lock", action="store_true",
+                   help="like --update-lock, but take the newest version of every dependency")
     p.add_argument("--release-dir", help="folder with the release keys (default: $MOBAIDE_RELEASE_DIR, else ~/.config/mobaide-release, on Windows %%LOCALAPPDATA%%\\mobaide-release)")
     p.add_argument("--server-url", default=CENTRAL_SERVER_URL, help=f"relay base URL (default: {CENTRAL_SERVER_URL})")
     return p
@@ -542,6 +714,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.new_relay_pairing_key:
             return print_new_relay_pairing_key()
+        if args.update_lock or args.upgrade_lock:
+            return update_lock(upgrade=args.upgrade_lock)
         return run(args)
     except DeployError as e:
         if str(e):

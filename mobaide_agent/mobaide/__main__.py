@@ -547,6 +547,7 @@ async def _drive_update(
     outcome = await updater.consider_manifest(
         body, signature_b64, latest_version,
         force=force, allow_downgrade=allow_downgrade, exit_after_stage=False,
+        ignore_retry_wait=True,
     )
     sys.stdout.write(_update_outcome_message(outcome, latest_version) + "\n")
     return _outcome_exit_code(outcome)

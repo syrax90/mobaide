@@ -63,6 +63,7 @@ Both scripts work the same way:
 
 ```bash
 python deploy/prod/release_agent.py [VERSION] [--skip-publish] [--force] [--release-dir DIR]
+python deploy/prod/release_agent.py --update-lock | --upgrade-lock
 python deploy/prod/release_android.py [VERSION] [--skip-upload] [--force] [--release-dir DIR]
 ```
 
@@ -120,11 +121,15 @@ Shared helpers live in `deploy/prod/release_common.py`.
 4. Builds the wheel and sdist with `uv build --wheel --sdist`. Builds the source
    tarball with Python `tarfile` (no `__pycache__`, no `*.pyc`, owner
    normalised). Computes SHA-256 values.
-5. Builds the dependency lock `requirements.lock` with
-   `uv pip compile --universal --generate-hashes`. Checks that the lock has a
-   binary wheel for 8 platforms (macOS, Windows, Linux glibc and musl, each
-   x86_64 and arm64) and Python 3.12 to 3.14. Runs a trial install with the same
-   pip flags as the agent. Puts the lock at the root of the tarball.
+5. Takes the committed dependency lock `mobaide_agent/requirements.lock`.
+   Checks that every line is a pinned version with `sha256` hash lines.
+   Re-resolves the lock against the public index and stops when a version,
+   marker or hash differs. Checks that the lock has a binary wheel for 8
+   platforms (macOS, Windows, Linux glibc and musl, each x86_64 and arm64) and
+   Python 3.12 to 3.15 (Python 3.15 on glibc Linux is checked for glibc 2.39).
+   Runs a trial install with the same pip flags as the agent. Puts the lock at
+   the root of the tarball. A release never selects new dependency versions.
+   `uv` ignores the uv settings of the machine.
 6. Signs the **Ed25519 manifest** (same canonical body as before, plus the lock
    hash and the `trust` object).
 7. PUTs the tarball and the wheel to `central_server`, which stores them by
@@ -135,6 +140,10 @@ Shared helpers live in `deploy/prod/release_common.py`.
 
 You can run the script again for the same version at any time. The rebuild
 makes new bytes, so the files get new URLs and nothing is overwritten.
+
+To change a dependency version, run `python deploy/prod/release_agent.py --update-lock`
+(keeps the pinned versions) or `--upgrade-lock` (takes newer versions). Open a
+pull request with the new lock, then release from a tag that contains it.
 
 `--skip-publish` stops after step 6. The script needs `uv`, `gh`, and the
 `cryptography` package (`pip install cryptography`).
@@ -274,7 +283,8 @@ The steps below are for `mobaide_agent`. The same shape works for `android`
    Check first that the tag does not exist and that `pyproject.toml` and the
    manifest agree.
 4. **Run** `python deploy/prod/release_agent.py X.Y.Z`. The script refuses to
-   build if `pyproject.toml` does not match the tag.
+   build if `pyproject.toml` does not match the tag, or if
+   `mobaide_agent/requirements.lock` does not fit `pyproject.toml`.
 
 > [!WARNING]
 > **Pick one path and stay on it.** Either let release-please own the
@@ -809,6 +819,13 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
   dependency. A failed install is reported as `signature_failed` and the agent
   stays on the current version. The venv, `ensurepip` and pip child processes
   run with `PYTHONSAFEPATH=1`.
+* **Retry wait after a failed install** — after a failed stage or pointer
+  swap, the agent waits 15 minutes before it tries the same manifest again.
+  The wait doubles after each failure, up to 24 hours. A manifest with a
+  different signature resets the count. The state is in memory only. The
+  attempt returns `signature_failed` while the wait runs. Operator "Install
+  now" and `mobaide-agent update` skip the wait. Relay delivery, the hourly
+  check and 4002 protocol recovery keep it.
 * **Path-component validation** — the signed manifest `version` is checked
   against a safe-path allowlist at the manifest→filesystem boundary (in both
   `updater.py` and `install.sh`) before it is used as a `releases/<v>` path
@@ -965,6 +982,9 @@ only when both fail. Set `MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1` to opt out and
 require a pre-installed interpreter (CI / locked-down hosts). Under `irm | iex`
 the elevation re-launch re-fetches the installer from
 `MOBAIDE_AGENT_INSTALL_URL`.
+
+   On Linux, Python 3.15 or later needs glibc 2.39 or newer. The installer
+   stops with a message otherwise (musl is not affected).
 
 5. Download tarball + wheel, verify sha256s, extract under
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv. When
