@@ -50,6 +50,28 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_ed25519_private_key(name: str) -> str | None:
+    """Read a base64 Ed25519 private key (32 raw bytes); unset gives None.
+
+    A value that is set but not a key stops the start: a relay that came up
+    without its signing key would refuse pairings with no clear cause.
+    """
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    import base64
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    try:
+        Ed25519PrivateKey.from_private_bytes(base64.b64decode(raw, validate=True))
+    except ValueError as exc:
+        raise ValueError(
+            f"{name} is not a base64 Ed25519 private key (32 raw bytes)"
+        ) from exc
+    return raw
+
+
 _DIGITS_RE = re.compile(r"^\d+$")
 
 
@@ -376,6 +398,10 @@ class CentralServerConfig:
     # Manifest publishing itself remains driven by the external release
     # pipeline and does NOT consume this private key.
     manifest_signing_private_key_b64: str | None = None
+    # The relay's own Ed25519 key for the pairing push (RELAY_PAIRING_PRIVATE_KEY);
+    # agents learn its public half from the signed manifest. The push is still
+    # signed with the manifest key until every agent trusts this one.
+    relay_pairing_private_key_b64: str | None = None
     manifest_store_path: str = "data/agent_manifest.json"
     # Content-addressed agent release files the manifest URLs point at.
     agent_release_dir: str = "data/agent_releases"
@@ -444,6 +470,25 @@ class CentralServerConfig:
     cloud_voice_max_concurrency: int = 4
     # When not empty, only these accounts are offered cloud voice input.
     cloud_voice_allowed_emails: tuple[str, ...] = ()
+
+    @property
+    def relay_pairing_public_key_b64(self) -> str | None:
+        """Public half of the relay pairing key, or None when it is unset."""
+        if not self.relay_pairing_private_key_b64:
+            return None
+        import base64
+
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        key = Ed25519PrivateKey.from_private_bytes(
+            base64.b64decode(self.relay_pairing_private_key_b64, validate=True)
+        )
+        raw = key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        return base64.b64encode(raw).decode("ascii")
 
     @property
     def cloud_voice_missing(self) -> tuple[str, ...]:
@@ -654,6 +699,9 @@ class CentralServerConfig:
             ),
             manifest_signing_private_key_b64=(
                 os.getenv("MANIFEST_SIGNING_PRIVATE_KEY") or None
+            ),
+            relay_pairing_private_key_b64=_env_ed25519_private_key(
+                "RELAY_PAIRING_PRIVATE_KEY"
             ),
             manifest_store_path=_storage_path(
                 "MANIFEST_STORE_PATH",

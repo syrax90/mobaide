@@ -5,7 +5,8 @@ transport — the network-handling outer ``wait_for_claim`` is integration-
 shaped (real WS server). The verification rules covered here are the
 agent's defense against:
 
-* tampered server pushes (signature must verify with pinned key),
+* tampered server pushes (signature must verify with one of the trusted
+  keys: the pinned release key or a relay pairing key),
 * a server impersonating another relay (relay_url must match what the
   agent originally connected to),
 * badly-clocked or clock-skewed pushes (issued_at within 5 min of now),
@@ -77,7 +78,7 @@ class TestParseAndVerifyHappyPath:
 
         claim = PairingWsClient._parse_and_verify(
             push,
-            trust_pub_key_b64=pub_b64,
+            trust_pub_keys_b64=[pub_b64],
             expected_relay_url="https://relay.test",
         )
 
@@ -86,6 +87,32 @@ class TestParseAndVerifyHappyPath:
         assert claim.agent_token == "tok-urlsafe-32-bytes-1234567890"
         assert claim.relay_url == "https://relay.test"
         assert claim.agent_friendly_name == "lab-host"
+
+    def test_accepts_a_push_signed_with_any_trusted_key(self):
+        # The relay signs with the release key today and with its own
+        # pairing key later; the agent accepts both.
+        release_priv_b64, release_pub_b64 = _ed25519_keypair_b64()
+        pairing_priv_b64, pairing_pub_b64 = _ed25519_keypair_b64()
+
+        for private_key_b64 in (release_priv_b64, pairing_priv_b64):
+            claim = PairingWsClient._parse_and_verify(
+                _signed_push(private_key_b64=private_key_b64),
+                trust_pub_keys_b64=[release_pub_b64, pairing_pub_b64],
+                expected_relay_url="https://relay.test",
+            )
+            assert claim.agent_token == "tok-urlsafe-32-bytes-1234567890"
+
+    def test_an_unusable_key_in_the_list_does_not_block_a_valid_one(self):
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(private_key_b64=priv_b64)
+
+        claim = PairingWsClient._parse_and_verify(
+            push,
+            trust_pub_keys_b64=["@@not-base64@@", "AAAA", pub_b64],
+            expected_relay_url="https://relay.test",
+        )
+
+        assert claim.agent_id == "agent-12hex"
 
 
 class TestParseAndVerifyRejections:
@@ -99,7 +126,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="unexpected push type"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -111,7 +138,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="missing signature_b64"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -124,7 +151,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="signature verification"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -137,7 +164,31 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="signature verification"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b_b64,
+                trust_pub_keys_b64=[pub_b_b64],
+                expected_relay_url="https://relay.test",
+            )
+
+    def test_rejects_signature_from_a_key_outside_the_trusted_list(self):
+        signer_priv_b64, _ = _ed25519_keypair_b64()
+        _, release_pub_b64 = _ed25519_keypair_b64()
+        _, pairing_pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(private_key_b64=signer_priv_b64)
+
+        with pytest.raises(PairingWsError, match="signature verification"):
+            PairingWsClient._parse_and_verify(
+                push,
+                trust_pub_keys_b64=[release_pub_b64, pairing_pub_b64],
+                expected_relay_url="https://relay.test",
+            )
+
+    def test_rejects_every_push_when_no_key_is_trusted(self):
+        priv_b64, _ = _ed25519_keypair_b64()
+        push = _signed_push(private_key_b64=priv_b64)
+
+        with pytest.raises(PairingWsError, match="signature verification"):
+            PairingWsClient._parse_and_verify(
+                push,
+                trust_pub_keys_b64=[],
                 expected_relay_url="https://relay.test",
             )
 
@@ -151,7 +202,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="relay_url mismatch"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -174,7 +225,7 @@ class TestParseAndVerifyRejections:
 
         claim = PairingWsClient._parse_and_verify(
             push,
-            trust_pub_key_b64=pub_b64,
+            trust_pub_keys_b64=[pub_b64],
             expected_relay_url="http://relay.test",
         )
 
@@ -193,7 +244,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="relay_url mismatch"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -210,7 +261,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="relay_url mismatch"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test/v1",
             )
 
@@ -228,7 +279,7 @@ class TestParseAndVerifyRejections:
 
         claim = PairingWsClient._parse_and_verify(
             push,
-            trust_pub_key_b64=pub_b64,
+            trust_pub_keys_b64=[pub_b64],
             expected_relay_url="https://relay.test",
         )
 
@@ -250,7 +301,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="relay_url mismatch"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -266,7 +317,7 @@ class TestParseAndVerifyRejections:
 
         claim = PairingWsClient._parse_and_verify(
             push,
-            trust_pub_key_b64=pub_b64,
+            trust_pub_keys_b64=[pub_b64],
             expected_relay_url="wss://relay.test",
         )
 
@@ -287,7 +338,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="relay_url mismatch"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -305,7 +356,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="relay_url mismatch"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -320,7 +371,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="clock skew"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -334,7 +385,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="invalid issued_at"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -356,7 +407,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="agent_token failed"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -383,7 +434,7 @@ class TestParseAndVerifyRejections:
         with pytest.raises(PairingWsError, match="missing field"):
             PairingWsClient._parse_and_verify(
                 push,
-                trust_pub_key_b64=pub_b64,
+                trust_pub_keys_b64=[pub_b64],
                 expected_relay_url="https://relay.test",
             )
 
@@ -508,7 +559,7 @@ class TestWaitForClaimWebSocketsConnectKwargs:
         claim = await PairingWsClient().wait_for_claim(
             ws_url="wss://relay.test/ws/pairing/n1",
             timeout_s=30.0,
-            trust_pub_key_b64=pub_b64,
+            trust_pub_keys_b64=[pub_b64],
             expected_relay_url="https://relay.test",
         )
 

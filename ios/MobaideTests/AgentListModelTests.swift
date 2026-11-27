@@ -256,7 +256,6 @@ final class AgentListModelTests: XCTestCase {
         XCTAssertEqual(model.connectedAgentId, "a1")
         XCTAssertFalse(model.isConnecting)
         XCTAssertEqual(harness.router.path, [.sessionList])
-        XCTAssertEqual(harness.session.tokenStore.getConnectionMode(), .relay)
         XCTAssertEqual(harness.session.tokenStore.getAgentId(), "a1")
         XCTAssertEqual(harness.session.tokenStore.getAccessToken(), "relay-at")
 

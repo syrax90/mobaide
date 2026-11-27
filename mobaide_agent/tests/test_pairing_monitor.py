@@ -17,6 +17,7 @@ Targets:
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -26,6 +27,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidHandshake, InvalidMessage, InvalidStatus
 from websockets.http11 import Response
@@ -41,6 +43,7 @@ from mobaide.agent.pairing_monitor import (
 )
 from mobaide.agent.pairing_qr import PendingPairing
 from mobaide.agent.pairing_ws import PairingClaim, PairingWsError
+from mobaide.agent.trust_store import record_manifest_trust
 from mobaide.agent.updater import InstallLayout
 
 
@@ -438,6 +441,19 @@ class _RunPairingMonitorTestBase:
         # cap-vs-uncapped distinction the perf tests rely on.
         monkeypatch.setattr(_pm, "_BACKOFF_FLOOR_S", 0.01)
 
+    @pytest.fixture(autouse=True)
+    def _no_manifest_fetch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Before it initiates, the loop refreshes the trust data from the
+        # signed manifest of the relay. Keep that fetch off the network and
+        # record each call.
+        self.trust_refreshes: list[str] = []
+
+        async def _stub_refresh(_layout, relay_server_url):
+            self.trust_refreshes.append(relay_server_url)
+            return False
+
+        monkeypatch.setattr(_pm, "refresh_manifest_trust", _stub_refresh)
+
     def _make_layout(self, tmp_path: Path) -> InstallLayout:
         prefix = tmp_path / "prefix"
         (prefix / "mobaide_agent").mkdir(parents=True, exist_ok=True)
@@ -525,6 +541,118 @@ class _RunPairingMonitorTestBase:
         monkeypatch.setattr(_pm, "_render_pending_to_stdout", _stub_render)
         monkeypatch.setattr(_pm, "PairingWsClient", ws_client_class)
         monkeypatch.setattr(_pm, "write_credentials_to_env", write_stub)
+
+
+class TestRunPairingMonitorTrustedKeys(_RunPairingMonitorTestBase):
+    """The credential push is checked against the pinned release key and the
+    relay pairing keys that a signed manifest listed."""
+
+    async def test_wait_trusts_the_pinned_key_and_the_relay_pairing_keys(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        recorder: dict = {}
+        claim = self._make_claim()
+        layout = self._make_layout(tmp_path)
+        layout.trust_dir.mkdir(parents=True)
+        pairing_key = base64.b64encode(
+            Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+        ).decode()
+        record_manifest_trust(
+            layout,
+            {
+                "released_at": "2026-06-01T00:00:00+00:00",
+                "trust": {"relay_pairing_public_keys": [pairing_key]},
+            },
+        )
+
+        class _RecordingConn:
+            async def wait_for_claim(conn, **kwargs):
+                recorder["trusted_keys"] = tuple(kwargs["trust_pub_keys_b64"])
+                recorder["refreshes_before_wait"] = list(self.trust_refreshes)
+                return claim
+
+        class _RecordingWsClient:
+            @classmethod
+            @contextlib.asynccontextmanager
+            async def connect(cls, _ws_url):
+                yield _RecordingConn()
+
+        async def _write_ok(_env_path, _claim):
+            return None
+
+        self._wire_base_collaborators(
+            monkeypatch, recorder,
+            pending=self._make_pending(),
+            ws_client_class=_RecordingWsClient,
+            write_stub=_write_ok,
+        )
+
+        await asyncio.wait_for(
+            run_pairing_monitor(
+                layout=layout,
+                relay_server_url="wss://relay.test",
+                on_paired=recorder["on_paired"],
+            ),
+            timeout=5.0,
+        )
+
+        assert recorder["trusted_keys"] == ("stub-pub-key", pairing_key)
+        # The trust data is refreshed before the wait, so a relay pairing
+        # key published after the install is already known.
+        assert recorder["refreshes_before_wait"] == ["wss://relay.test"]
+
+    async def test_a_pairing_kept_from_an_earlier_run_also_gets_a_trust_refresh(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # After a restart the agent waits on the nonce it saved before and
+        # does not initiate. The refresh must not depend on the initiate:
+        # without it this wait would know only the keys of the last run.
+        recorder: dict = {}
+        claim = self._make_claim()
+        pending = self._make_pending()
+
+        class _RecordingConn:
+            async def wait_for_claim(conn, **_kwargs):
+                recorder["refreshes_before_wait"] = list(self.trust_refreshes)
+                return claim
+
+        class _RecordingWsClient:
+            @classmethod
+            @contextlib.asynccontextmanager
+            async def connect(cls, _ws_url):
+                yield _RecordingConn()
+
+        async def _write_ok(_env_path, _claim):
+            return None
+
+        async def _recording_initiate(*_args, **_kwargs):
+            recorder["initiated"] = True
+            return pending
+
+        self._wire_base_collaborators(
+            monkeypatch, recorder,
+            pending=pending,
+            ws_client_class=_RecordingWsClient,
+            write_stub=_write_ok,
+        )
+        monkeypatch.setattr(_pm, "load_pending_pairing", lambda _layout: pending)
+        monkeypatch.setattr(_pm, "_initiate_with_metadata", _recording_initiate)
+
+        await asyncio.wait_for(
+            run_pairing_monitor(
+                layout=self._make_layout(tmp_path),
+                relay_server_url="wss://relay.test",
+                on_paired=recorder["on_paired"],
+            ),
+            timeout=5.0,
+        )
+
+        assert "initiated" not in recorder
+        assert recorder["refreshes_before_wait"] == ["wss://relay.test"]
 
 
 class TestRunPairingMonitorWriteFailureHandling(_RunPairingMonitorTestBase):
@@ -1487,6 +1615,117 @@ class TestRunPairingMonitorRetryPacing(_RunPairingMonitorTestBase):
         floor = _pm._BACKOFF_FLOOR_S
         assert sleeps == pytest.approx([floor, floor * 2, floor * 4, floor * 8])
         assert recorder["saved"] == []
+
+    async def test_trust_data_is_refreshed_once_per_interval_not_per_initiate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # An agent that cannot pair initiates again and again. The manifest
+        # fetch must not follow that rate, and it must still come back, so a
+        # relay pairing key that changes later is learned without a restart.
+        mono = [1000.0]
+        monkeypatch.setattr(
+            _pm,
+            "time",
+            types.SimpleNamespace(time=time.time, monotonic=lambda: mono[0]),
+        )
+        step = _pm._TRUST_REFRESH_INTERVAL_S / 3
+
+        def _advance() -> None:
+            mono[0] += step
+
+        self._capture_sleeps(monkeypatch, stop_after=4, on_sleep=_advance)
+        recorder: dict = {"initiate_calls": 0, "saved": [], "ws_urls": []}
+
+        def _relay_down():
+            raise OSError("relay down")
+
+        self._wire(
+            monkeypatch, recorder,
+            initiate=_relay_down,
+            ws_client_class=self._pre_ready_failing_ws(recorder),
+        )
+
+        with pytest.raises(_StopLoop):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=self._make_layout(tmp_path),
+                    relay_server_url="wss://relay.test",
+                ),
+                timeout=5.0,
+            )
+
+        # Initiates at 0, 1/3, 2/3 and 3/3 of the interval: only the first
+        # and the last one have a fetch before them.
+        assert recorder["initiate_calls"] == 4
+        assert self.trust_refreshes == ["wss://relay.test"] * 2
+
+    @pytest.mark.parametrize(
+        "refresh_result, wait_name",
+        [
+            pytest.param(None, "_TRUST_REFRESH_RETRY_S", id="no-verified-manifest"),
+            pytest.param(True, "_TRUST_REFRESH_INTERVAL_S", id="trust-data-stored"),
+        ],
+    )
+    async def test_a_trust_refresh_without_a_verified_manifest_is_tried_again_sooner(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        refresh_result: bool | None,
+        wait_name: str,
+    ) -> None:
+        # An agent that boots while the relay is down gets no manifest. Until
+        # a refresh works, it does not know a relay pairing key that the
+        # manifest lists, so that refresh must not wait the full interval.
+        mono = [1000.0]
+        monkeypatch.setattr(
+            _pm,
+            "time",
+            types.SimpleNamespace(time=time.time, monotonic=lambda: mono[0]),
+        )
+        refreshed_at: list[float] = []
+
+        async def _refresh(_layout, _relay_server_url):
+            refreshed_at.append(mono[0])
+            return refresh_result
+
+        monkeypatch.setattr(_pm, "refresh_manifest_trust", _refresh)
+        interval = _pm._TRUST_REFRESH_INTERVAL_S
+        step = _pm._TRUST_REFRESH_RETRY_S / 2
+
+        def _advance() -> None:
+            mono[0] += step
+
+        # One loop pass per step, up to and including the pass at the end of
+        # one full interval.
+        self._capture_sleeps(
+            monkeypatch, stop_after=int(interval / step) + 1, on_sleep=_advance,
+        )
+        recorder: dict = {"initiate_calls": 0, "saved": [], "ws_urls": []}
+
+        def _relay_down():
+            raise OSError("relay down")
+
+        self._wire(
+            monkeypatch, recorder,
+            initiate=_relay_down,
+            ws_client_class=self._pre_ready_failing_ws(recorder),
+        )
+
+        with pytest.raises(_StopLoop):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=self._make_layout(tmp_path),
+                    relay_server_url="wss://relay.test",
+                ),
+                timeout=5.0,
+            )
+
+        wait = getattr(_pm, wait_name)
+        assert refreshed_at == pytest.approx(
+            [1000.0 + wait * n for n in range(int(interval / wait) + 1)]
+        )
 
     async def test_rejected_handshake_drops_the_unsaved_nonce_and_backs_off(
         self,

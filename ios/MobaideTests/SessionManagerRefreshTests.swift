@@ -33,8 +33,14 @@ final class SessionManagerRefreshTests: XCTestCase {
     func testSuccessRotatesTokensAndPromotesState() async {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         await harness.sessionManager.agentDisconnect()
-        harness.tokenStore.saveAgentUrl("https://agent.example.com")
-        harness.tokenStore.saveTokens(accessToken: "old", refreshToken: "old-refresh")
+        harness.tokenStore.saveRelayCredentials(
+            serverUrl: "https://relay.example.com",
+            agentId: "agent-1",
+            pairingId: "agent-1",
+            deviceId: "device-1",
+            accessToken: "old",
+            refreshToken: "old-refresh"
+        )
 
         let result = await harness.sessionManager.refresh()
 
@@ -55,7 +61,7 @@ final class SessionManagerRefreshTests: XCTestCase {
         XCTAssertTrue(harness.userIdentityStore.isUserLoggedIn())
     }
 
-    func testMissingAgentUrlIsTerminal() async {
+    func testMissingRelayServerUrlIsTerminal() async {
         let harness = SessionHarness()
         harness.tokenStore.saveTokens(accessToken: "a", refreshToken: "r")
 
@@ -174,15 +180,6 @@ final class SessionManagerRefreshTests: XCTestCase {
         XCTAssertEqual(result, .terminal)
         let state = await harness.sessionManager.currentAuthState
         XCTAssertEqual(state, .incompatibleServer(info), "a stale 401 must not demote the upgrade takeover")
-    }
-
-    func testDirectModeUsesAgentRefreshPath() async {
-        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
-        _ = await harness.sessionManager.refresh()
-        XCTAssertEqual(
-            harness.refreshTransport.requests.first?.url?.absoluteString,
-            "https://agent.example.com/api/auth/refresh"
-        )
     }
 
     func testRelayModeUsesMobileRefreshPath() async {

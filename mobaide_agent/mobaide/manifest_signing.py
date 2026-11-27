@@ -4,14 +4,14 @@ Intentionally duplicated from ``central_server.manifest.store`` — the two
 packages cannot share code (same constraint that drives the duplicated
 ``relay/envelope.py`` files). The private key stays in the operator's local
 release folder and signs each manifest in ``deploy/prod/release_agent.py``.
-The central server holds only the public half, which is baked into install
-scripts at script-publish time and persisted at
+The public half is carried by the install scripts and persisted at
 ``<prefix>/trust/central_server.pub``.
 """
 from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Iterable
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -57,3 +57,24 @@ def verify_signature(
         public_key.verify(signature_bytes, canonical_json(body))
     except InvalidSignature as exc:
         raise ManifestSignatureError("signature does not verify") from exc
+
+
+def verify_signature_any(
+    body: dict[str, Any],
+    signature_b64: str,
+    public_keys_b64: Iterable[str],
+) -> str:
+    """Validate the signature against each key in turn; return the key that matched.
+
+    Raises:
+        ManifestSignatureError: no key verifies the signature.
+    """
+    last_error: ManifestSignatureError | None = None
+    for public_key_b64 in public_keys_b64:
+        try:
+            verify_signature(body, signature_b64, public_key_b64)
+        except ManifestSignatureError as exc:
+            last_error = exc
+            continue
+        return public_key_b64
+    raise last_error or ManifestSignatureError("no trusted public key is configured")

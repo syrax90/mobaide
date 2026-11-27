@@ -5,9 +5,8 @@ import SwiftUI
 /// Shows a store link (App Store deep link, falling back to the web listing when
 /// the deep link is unset) and a "What changed" link.
 ///
-/// `info.reason` is server-controlled on the 4002 close path, where in direct
-/// mode the peer is the paired agent host. Nothing reads it; it stays only for
-/// state parity with Android and web. Do not render it.
+/// `info.reason` is server-controlled on the 4002 close path. Nothing reads
+/// it; it stays only for state parity with Android and web. Do not render it.
 struct IncompatibleServerScreen: View {
     let info: AuthState.IncompatibleServer
 

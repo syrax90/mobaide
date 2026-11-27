@@ -1001,15 +1001,13 @@ export interface paths {
          * Get Trust Key
          * @description Return the manifest-signing public key for agent-side bootstrap.
          *
-         *     The agent's auto-updater needs this key (pinned at
-         *     ``<prefix>/trust/central_server.pub``) to verify Ed25519 signatures on
-         *     every release manifest. The install scripts and the
-         *     ``mobaide-agent fetch-trust-key`` CLI fetch this endpoint when the
-         *     operator hasn't pre-set ``MOBAIDE_AGENT_TRUST_KEY_B64``. Returns 503
-         *     when ``MANIFEST_SIGNING_PUBLIC_KEY`` is unset on this server — agents
-         *     cannot bootstrap auto-update against a server that has no signing key
-         *     configured. Anonymous: matches the public ``manifest.json`` contract,
-         *     so unpaired install hosts can fetch it before having any credentials.
+         *     The agent's auto-updater pins this key at
+         *     ``<prefix>/trust/central_server.pub`` to verify Ed25519 signatures on
+         *     every release manifest. Current install scripts carry the key and do
+         *     not read this endpoint. It stays for the release script, which compares
+         *     it with the local signing key, and for installers published earlier.
+         *     Returns 503 when ``MANIFEST_SIGNING_PUBLIC_KEY`` is unset on this server.
+         *     Anonymous, like the public ``manifest.json``.
          */
         get: operations["get_trust_key_api_v1_agent_trust_key_get"];
         put?: never;

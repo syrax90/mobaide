@@ -16,7 +16,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-TRUST_KEY_ENDPOINT_PATH = "/api/v1/agent/trust_key"
 MANIFEST_ENDPOINT_PATH = "/api/v1/agent/manifest.json"
 
 ALLOW_INSECURE_HTTPS_BOOTSTRAP_ENV = "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH"
@@ -221,11 +220,10 @@ def endpoint_url_from_relay_server_url(relay_server_url: str, endpoint_path: str
       to ``evil.example``. A ``RELAY_SERVER_URL`` with user-info would silently
       retarget the HTTPS fetch to an attacker-controlled host.
     * **Cleartext refused by default** — ``ws://`` / ``http://`` would let a
-      passive on-path attacker substitute the response (trust key) or feed an
-      unsigned manifest body. Refused unless
+      passive on-path attacker read or change the exchange. Refused unless
       ``MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1`` is set (self-host
-      loopback / local testing escape hatch — name kept for compatibility
-      across the trust-key and manifest paths).
+      loopback / local testing escape hatch — the name is kept for
+      compatibility).
     """
     parsed = urlparse(relay_server_url)
     if not parsed.scheme or not parsed.hostname:
@@ -263,11 +261,6 @@ def endpoint_url_from_relay_server_url(relay_server_url: str, endpoint_path: str
     if parsed.port is not None:
         host = f"{host}:{parsed.port}"
     return f"{scheme}://{host}{endpoint_path}"
-
-
-def trust_key_url_from_relay_server_url(relay_server_url: str) -> str:
-    """Resolve ``<scheme>://<host>/api/v1/agent/trust_key`` from a relay URL."""
-    return endpoint_url_from_relay_server_url(relay_server_url, TRUST_KEY_ENDPOINT_PATH)
 
 
 def manifest_url_from_relay_server_url(relay_server_url: str) -> str:

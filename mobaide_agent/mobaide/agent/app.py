@@ -72,7 +72,7 @@ from .auth.user_store import UserStore
 from .autoscan.router import router as autoscan_router
 from .autoscan.router import ws_router as autoscan_ws_router
 from .codex.router import router as codex_router
-from .config import AgentConfig
+from .config import AgentConfig, migrate_stored_host
 from .git.changes_jobs import job_registry
 from .git.delete_jobs import delete_job_registry
 from .git.changes_models import GIT_CAPABILITIES
@@ -438,10 +438,19 @@ def _resolve_env_file() -> Path | None:
 
 def create_app(config: AgentConfig | None = None) -> FastAPI:
     """Build and return the FastAPI application."""
+    migrated_host = False
     if config is None:
-        config = AgentConfig.from_env(env_file=_resolve_env_file())
+        env_file = _resolve_env_file()
+        config = AgentConfig.from_env(env_file=env_file)
+        if env_file is not None and not config.is_test_mode:
+            migrated_host = migrate_stored_host(env_file)
 
     configure_logging(config)
+    if migrated_host:
+        logger.warning(
+            "agent.listen_host_migrated: the stored HOST was not a loopback "
+            "address; the agent now listens on %s only", config.host,
+        )
 
     relay_cfg = config.relay_config
     pairing_pending = relay_cfg is not None and relay_cfg.pairing_pending
@@ -669,9 +678,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         await app.state.agent_settings.shutdown(restarting=restart_requested())
         shutdown_logging()
 
-    # Default-deny on the doc routes: the agent binds every interface, so
-    # FastAPI's stock /docs would publish the full session/workspace/git/codex
-    # surface to the local network. ENABLE_API_DOCS opts a dev box back in.
+    # Default-deny on the doc routes: the stock /docs would publish the
+    # full session/workspace/git/codex surface. ENABLE_API_DOCS opts a dev box
+    # back in.
     docs_enabled = config.enable_api_docs
     app = FastAPI(
         title="Mobaide Agent",

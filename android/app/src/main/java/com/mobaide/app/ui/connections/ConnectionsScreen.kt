@@ -18,7 +18,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.mobaide.app.ui.common.pixel.PixelFab
 import androidx.compose.material3.HorizontalDivider
@@ -122,21 +121,10 @@ private fun ConnectionItem(
             }
         },
         supportingContent = {
-            Text(
-                when (profile.mode) {
-                    "relay" -> "Relay: ${profile.relayServerUrl ?: "unknown"}"
-                    else -> "Direct: ${profile.agentUrl ?: "unknown"}"
-                },
-            )
+            Text("Relay: ${profile.relayServerUrl ?: "unknown"}")
         },
         leadingContent = {
-            Icon(
-                when (profile.mode) {
-                    "relay" -> Icons.Default.Cloud
-                    else -> Icons.Default.Lan
-                },
-                contentDescription = profile.mode,
-            )
+            Icon(Icons.Default.Cloud, contentDescription = "relay")
         },
         trailingContent = {
             if (!isActive) {

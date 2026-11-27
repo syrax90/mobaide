@@ -178,7 +178,7 @@ final class SessionManagerStateTests: XCTestCase {
     func testAccountSwitchFromFullyConnectedTearsDownPreviousAccount() async throws {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         try await assertAccountSwitchTearsDown(harness)
-        XCTAssertNil(harness.tokenStore.getAgentUrl())
+        XCTAssertNil(harness.tokenStore.getRelayServerUrl())
     }
 
     private func assertAccountSwitchTearsDown(_ harness: SessionHarness) async throws {
@@ -238,7 +238,7 @@ final class SessionManagerStateTests: XCTestCase {
 
         XCTAssertNil(harness.tokenStore.getAccessToken())
         XCTAssertNil(harness.tokenStore.getRefreshToken())
-        XCTAssertNil(harness.tokenStore.getAgentUrl())
+        XCTAssertNil(harness.tokenStore.getRelayServerUrl())
         XCTAssertEqual(identity.getUserId(), "u2")
         let state = await harness.sessionManager.currentAuthState
         XCTAssertEqual(state, .userOnly)

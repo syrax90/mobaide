@@ -3,10 +3,11 @@
 
 ``stage_release`` runs for real against ``file://`` assets: curl is never
 reached, and ``resolve_base_python`` is swapped for a stub interpreter whose
-``-m venv`` writes a fake ``pip`` that logs its arguments. That keeps the
-test offline while still covering the download, sha256 check, extraction,
-``.installed`` sentinel, ``current_version`` pin and the move-aside /
-restore of a release that is being reinstalled.
+``-m venv`` writes a fake ``pip`` and a fake ``python`` that log their
+arguments. That keeps the test offline while still covering the download,
+sha256 check, extraction, the dependency-lock check, ``.installed`` sentinel,
+``current_version`` pin and the move-aside / restore of a release that is
+being reinstalled.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -33,6 +35,9 @@ pytestmark = [
 
 VERSION = "9.9.9"
 WHEEL_NAME = f"mobaide_agent-{VERSION}-py3-none-any.whl"
+# Stands in for the hash-pinned lock at the tarball root; the fake
+# interpreter never gives it to a real pip.
+LOCK_TEXT = "example-dependency==1.0 --hash=sha256:" + "0" * 64 + "\n"
 
 
 def _run_download_asset(url: str, dest: Path) -> subprocess.CompletedProcess[str]:
@@ -64,15 +69,27 @@ def test_download_asset_fails_on_a_missing_local_source(tmp_path) -> None:
     assert proc.returncode != 0
 
 
-def _assets(tmp_path: Path, *, corrupt_wheel_sha: bool = False) -> Path:
+def _assets(
+    tmp_path: Path,
+    *,
+    corrupt_wheel_sha: bool = False,
+    lock_in_tarball: str | None = None,
+    signed_lock: str | None = None,
+) -> Path:
+    """``signed_lock`` is the lock text whose SHA-256 the manifest names
+    (``None``: a release made before the lock existed). ``lock_in_tarball``
+    is the lock the tarball really carries."""
     assets = tmp_path / "assets"
     assets.mkdir()
+    members = {"mobaide/__init__.py": f'__version__ = "{VERSION}"\n'.encode()}
+    if lock_in_tarball is not None:
+        members["requirements.lock"] = lock_in_tarball.encode()
     buf = BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        payload = f'__version__ = "{VERSION}"\n'.encode()
-        info = tarfile.TarInfo(name="mobaide/__init__.py")
-        info.size = len(payload)
-        tar.addfile(info, BytesIO(payload))
+        for name, payload in members.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            tar.addfile(info, BytesIO(payload))
     tarball = assets / "agent.tar.gz"
     tarball.write_bytes(buf.getvalue())
     wheel = assets / WHEEL_NAME
@@ -88,6 +105,10 @@ def _assets(tmp_path: Path, *, corrupt_wheel_sha: bool = False) -> Path:
             else hashlib.sha256(wheel.read_bytes()).hexdigest()
         ),
     }
+    if signed_lock is not None:
+        body["dependency_lock_sha256"] = hashlib.sha256(
+            signed_lock.encode()
+        ).hexdigest()
     manifest = assets / "manifest.json"
     manifest.write_text(
         json.dumps({"body": body, "signature_b64": base64.b64encode(b"x").decode()})
@@ -96,8 +117,13 @@ def _assets(tmp_path: Path, *, corrupt_wheel_sha: bool = False) -> Path:
 
 
 def _fake_base_python(tmp_path: Path, pip_log: Path, wheel_rc: int) -> Path:
-    """``-m venv DIR`` creates ``DIR/bin/pip``; that pip logs its argv and
-    exits ``wheel_rc`` for the wheel install."""
+    """``-m venv DIR`` creates ``DIR/bin/pip`` and ``DIR/bin/python``.
+
+    The pip logs its argv and exits ``wheel_rc`` for the wheel install. The
+    python (the hash-pinned path runs ``python -m pip``) logs its argv with a
+    ``python`` prefix, keeps a copy of the requirements file (its last
+    argument, in a temp dir that ``stage_release`` removes) and exits
+    ``wheel_rc`` too."""
     py = tmp_path / "fake-python"
     py.write_text(
         "#!/bin/sh\n"
@@ -109,7 +135,14 @@ def _fake_base_python(tmp_path: Path, pip_log: Path, wheel_rc: int) -> Path:
         f'case "$*" in *.whl*) exit {wheel_rc} ;; esac\n'
         "exit 0\n"
         "PIP\n"
-        'chmod +x "$3/bin/pip"\n',
+        "cat > \"$3/bin/python\" <<'PYTHON'\n"
+        "#!/bin/sh\n"
+        f"echo \"python $*\" >> '{pip_log}'\n"
+        'for last in "$@"; do :; done\n'
+        f"cp \"$last\" '{tmp_path / 'requirements.copy'}'\n"
+        f"exit {wheel_rc}\n"
+        "PYTHON\n"
+        'chmod +x "$3/bin/pip" "$3/bin/python"\n',
         encoding="utf-8",
     )
     py.chmod(0o755)
@@ -127,6 +160,7 @@ def _stage_release(
         f"PATH={shlex.quote(os.path.dirname(sys.executable))}:\"$PATH\"\n"
         f"MOBAIDE_AGENT_PREFIX={shlex.quote(str(prefix))}\n"
         "info() { :; }\n"
+        "warn() { printf '[WARN] %s\\n' \"$*\" >&2; }\n"
         "fail() { printf '[ERROR] %s\\n' \"$*\" >&2; exit 1; }\n"
         + _sh_function("download_asset")
         + _sh_function("cleanup_on_exit")
@@ -177,19 +211,76 @@ def test_successful_reinstall_drops_the_moved_aside_release(tmp_path) -> None:
     assert _scratch_dirs(prefix) == []
 
 
-@pytest.mark.parametrize("fault", ["wheel-sha-mismatch", "pip-install-fails"])
+def test_release_with_a_dependency_lock_installs_only_from_the_pinned_file(
+    tmp_path,
+) -> None:
+    """A manifest that names a dependency lock gets one install step: pip
+    with ``--require-hashes`` on a file that holds the signed lock plus the
+    wheel pinned by its signed SHA-256. No other pip step runs."""
+    prefix = tmp_path / "prefix"
+    manifest = _assets(tmp_path, lock_in_tarball=LOCK_TEXT, signed_lock=LOCK_TEXT)
+
+    proc, pip_log = _stage_release(tmp_path, prefix, manifest)
+
+    assert proc.returncode == 0, proc.stderr
+    installs = [shlex.split(line) for line in pip_log.read_text().splitlines()]
+    assert len(installs) == 1
+    (install,) = installs
+    assert install[:4] == ["python", "-m", "pip", "install"]
+    assert "--require-hashes" in install
+    assert install[install.index("--only-binary") + 1] == ":all:"
+    assert install[-2] == "-r"
+
+    requirements = (tmp_path / "requirements.copy").read_text()
+    wheel_sha = json.loads(manifest.read_text())["body"]["wheel_sha256"]
+    assert requirements.startswith(LOCK_TEXT)
+    assert re.fullmatch(
+        rf"mobaide-agent @ file://\S*/{re.escape(WHEEL_NAME)} --hash=sha256:{wheel_sha}",
+        requirements[len(LOCK_TEXT):].strip(),
+    )
+    assert (prefix / "releases" / VERSION / ".installed").read_text().strip() == VERSION
+    assert (prefix / "current_version").read_text().strip() == VERSION
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "wheel-sha-mismatch",
+        "pip-install-fails",
+        "lock-differs-from-signed-hash",
+        "lock-missing-from-tarball",
+        "hash-pinned-install-fails",
+    ],
+)
 def test_failed_reinstall_restores_the_previous_release(tmp_path, fault) -> None:
     prefix = tmp_path / "prefix"
     release = _existing_release(prefix)
-    manifest = _assets(tmp_path, corrupt_wheel_sha=fault == "wheel-sha-mismatch")
+    if fault == "lock-differs-from-signed-hash":
+        manifest = _assets(
+            tmp_path,
+            lock_in_tarball="example-dependency==2.0 --hash=sha256:" + "1" * 64 + "\n",
+            signed_lock=LOCK_TEXT,
+        )
+    elif fault == "lock-missing-from-tarball":
+        manifest = _assets(tmp_path, signed_lock=LOCK_TEXT)
+    elif fault == "hash-pinned-install-fails":
+        manifest = _assets(tmp_path, lock_in_tarball=LOCK_TEXT, signed_lock=LOCK_TEXT)
+    else:
+        manifest = _assets(tmp_path, corrupt_wheel_sha=fault == "wheel-sha-mismatch")
 
-    proc, _ = _stage_release(
-        tmp_path, prefix, manifest, wheel_rc=1 if fault == "pip-install-fails" else 0
+    proc, pip_log = _stage_release(
+        tmp_path,
+        prefix,
+        manifest,
+        wheel_rc=1 if fault in ("pip-install-fails", "hash-pinned-install-fails") else 0,
     )
 
     assert proc.returncode != 0
     if fault == "wheel-sha-mismatch":
         assert "sha256 mismatch" in proc.stderr
+    if fault.startswith("lock-"):
+        # The lock is checked before any install step runs.
+        assert not pip_log.exists()
     assert (release / "previous-marker").read_text() == "keep me"
     assert (release / ".installed").read_text() == "old"
     assert _scratch_dirs(prefix) == []

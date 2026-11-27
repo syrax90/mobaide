@@ -1,16 +1,12 @@
 package com.mobaide.app.data.repository
 
-import com.mobaide.app.data.auth.ConnectionStore
 import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.auth.SessionManager
-import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.CentralApi
-import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.CancelAccountDeletionResponse
 import com.mobaide.app.data.network.dto.DeleteAccountRequest
-import com.mobaide.app.data.network.dto.TokenResponse
 import com.mobaide.app.data.network.dto.UserAuthResponse
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -29,14 +25,11 @@ import org.junit.Test
 /**
  * Unit tests for [AuthRepository] — covers both user-identity operations
  * (register, loginWithPassword, loginWithGoogle) and agent-connection
- * operations (connectAgent, disconnectAgent, logout).
+ * operations (disconnectAgent, logout).
  */
 class AuthRepositoryTest {
 
     // ---- Helpers ------------------------------------------------------------
-
-    private fun newConnectionStore(): ConnectionStore =
-        mockk<ConnectionStore>(relaxed = true)
 
     private fun newUserIdentityStore(): UserIdentityStore =
         mockk<UserIdentityStore>(relaxUnitFun = true)
@@ -44,17 +37,11 @@ class AuthRepositoryTest {
     private fun newCentralApi(): CentralApi = mockk<CentralApi>()
 
     private fun newRepo(
-        restApi: RestApi = mockk(),
         centralApi: CentralApi = newCentralApi(),
-        tokenStore: TokenStore = mockk(relaxUnitFun = true),
         userIdentityStore: UserIdentityStore = newUserIdentityStore(),
         sessionManager: SessionManager = mockk(relaxUnitFun = true),
-        connectionStore: ConnectionStore = newConnectionStore(),
         deviceIdentityStore: DeviceIdentityStore = deviceIdentityStore(null),
-    ) = AuthRepository(
-        restApi, centralApi, tokenStore, userIdentityStore, sessionManager, connectionStore,
-        deviceIdentityStore,
-    )
+    ) = AuthRepository(centralApi, userIdentityStore, sessionManager, deviceIdentityStore)
 
     /** A store yielding [deviceId], or failing to read when it is null. */
     private fun deviceIdentityStore(deviceId: String?): DeviceIdentityStore =
@@ -174,57 +161,6 @@ class AuthRepositoryTest {
             userStore.saveUserSession("user-token-3", "carol@gmail.com", "u3", "viewer")
             sessionManager.markUserLoggedIn()
         }
-    }
-
-    // ---- connectAgent -------------------------------------------------------
-
-    @Test
-    fun connectAgent_storesAgentUrl_tokens_thenMarksAgentConnected() = runTest {
-        val restApi = mockk<RestApi>()
-        val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
-        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
-        val repo = newRepo(restApi = restApi, tokenStore = tokenStore, sessionManager = sessionManager)
-
-        coEvery {
-            restApi.login("https://example.com", "alice", "hunter2")
-        } returns TokenResponse(
-            access_token = "access-xyz",
-            refresh_token = "refresh-xyz",
-        )
-
-        repo.connectAgent("https://example.com", "alice", "hunter2")
-
-        verifyOrder {
-            tokenStore.saveAgentUrl("https://example.com")
-            tokenStore.saveTokens("access-xyz", "refresh-xyz")
-            sessionManager.markAgentConnected()
-        }
-    }
-
-    @Test
-    fun connectAgent_propagatesApiException_andDoesNotTouchTokenStore() = runTest {
-        val restApi = mockk<RestApi>()
-        val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
-        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
-        val repo = newRepo(restApi = restApi, tokenStore = tokenStore, sessionManager = sessionManager)
-
-        coEvery {
-            restApi.login(any(), any(), any())
-        } throws ApiException(401, """{"detail":"Invalid credentials"}""")
-
-        try {
-            repo.connectAgent("https://example.com", "alice", "wrong")
-            fail("expected ApiException")
-        } catch (e: ApiException) {
-            assertEquals(401, e.code)
-        }
-
-        // The first clear() call in connectAgent doesn't happen because the
-        // exception is thrown by restApi.login() which is the first call.
-        // But we check that saveAgentUrl/saveTokens/markAgentConnected are not called.
-        verify(exactly = 0) { tokenStore.saveAgentUrl(any()) }
-        verify(exactly = 0) { tokenStore.saveTokens(any(), any()) }
-        verify(exactly = 0) { sessionManager.markAgentConnected() }
     }
 
     // ---- Admin login is blocked on mobile -----------------------------------

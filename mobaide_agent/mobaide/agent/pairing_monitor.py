@@ -51,6 +51,8 @@ from .pairing_qr import (
     write_pairing_hints,
 )
 from .pairing_ws import PairingClaim, PairingWsClient, PairingWsError
+from .trust_store import pairing_verification_keys
+from .update_check import refresh_manifest_trust
 from .updater import InstallLayout
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,10 @@ _BACKOFF_CEIL_S = 60.0
 # local clock all work, so the next cycle may start from the backoff floor.
 # Anything shorter is a fast failure and must keep growing the backoff.
 _HEALTHY_WAIT_S = 30.0
+# The signed manifest changes only at a release, so one fetch covers many
+# pairing nonces. A fetch that failed is tried again sooner.
+_TRUST_REFRESH_INTERVAL_S = 15 * 60.0
+_TRUST_REFRESH_RETRY_S = 60.0
 from .install_paths import ALLOW_INSECURE_HTTPS_BOOTSTRAP_ENV as _ALLOW_INSECURE_FETCH_ENV
 
 
@@ -130,8 +136,8 @@ def _pairing_ws_url(relay_server_url: str, nonce: str) -> str:
     * ``http://host``  → ``ws://host/ws/pairing/{nonce}``
 
     Cleartext (``ws://`` / ``http://``) is refused unless
-    ``MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1`` is set, mirroring
-    the trust-key fetch's same loopback-only escape hatch (see
+    ``MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1`` is set, the same
+    loopback-only escape hatch as the manifest fetch (see
     ``endpoint_url_from_relay_server_url`` in ``mobaide.agent.install_paths``).
 
     Any path/query/fragment on the relay URL is intentionally discarded
@@ -524,7 +530,7 @@ async def run_pairing_monitor(
     if not pinned_pub_key:
         logger.error(
             "pairing_monitor.no_trust_key path=%s; cannot proceed. "
-            "Run `mobaide-agent fetch-trust-key` to bootstrap.",
+            "Run the Mobaide installer again to restore it.",
             layout.trust_public_key,
         )
         return
@@ -538,8 +544,16 @@ async def run_pairing_monitor(
     # that refuses every upgrade with 403 then costs one extra initiate,
     # then one per TTL, not one per retry.
     dropped_after_403 = False
+    trust_refresh_due = 0.0
     while True:
         try:
+            if time.monotonic() >= trust_refresh_due:
+                refreshed = await refresh_manifest_trust(layout, relay_server_url)
+                trust_refresh_due = time.monotonic() + (
+                    _TRUST_REFRESH_RETRY_S
+                    if refreshed is None
+                    else _TRUST_REFRESH_INTERVAL_S
+                )
             pending = load_pending_pairing(layout)
             logger.info(
                 "pairing_monitor.loop_iter has_pending=%s env_path=%s",
@@ -630,7 +644,9 @@ async def run_pairing_monitor(
                     wait_started = time.monotonic()
                     claim = await conn.wait_for_claim(
                         timeout_s=timeout_s,
-                        trust_pub_key_b64=pinned_pub_key,
+                        trust_pub_keys_b64=pairing_verification_keys(
+                            layout, pinned_pub_key
+                        ),
                         expected_relay_url=pending.relay_url,
                     )
             except PairingWsError as exc:

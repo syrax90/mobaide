@@ -21,6 +21,7 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -533,6 +534,46 @@ class TestClaimWsDispatch:
         ).encode("utf-8")
         # Does not raise = signature valid.
         pub.verify(base64.b64decode(push["signature_b64"]), canonical)
+
+    async def test_push_is_signed_with_the_manifest_key_when_a_pairing_key_is_set(
+        self, client, qr_app, api_auth_headers
+    ):
+        # Agents in the field trust only the release (manifest) key until a
+        # signed manifest lists the relay pairing key. A relay that has the
+        # pairing key configured must therefore keep signing with the old key.
+        pairing_priv_b64, pairing_pub_b64 = _ed25519_keypair_b64()
+        _override_config(qr_app, relay_pairing_private_key_b64=pairing_priv_b64)
+        nonce = await TestClaim._initiate_nonce(self, client)
+        queue = await qr_app.state.pairing_ws_registry.register_waiter(
+            hash_pairing_nonce(nonce)
+        )
+
+        resp = await client.post(
+            "/api/pairing/claim",
+            json={
+                "nonce": nonce,
+                "trust_key_fp": compute_trust_key_fp(qr_app.state._test_pub_b64),
+                "mobile_device_id": _CLAIM_DEV_UUID,
+            },
+            headers=api_auth_headers,
+        )
+
+        assert resp.status_code == 200
+        push = json.loads((await queue.get()).decode("utf-8"))
+        signature = base64.b64decode(push["signature_b64"])
+        canonical = json.dumps(
+            {k: v for k, v in push.items() if k != "signature_b64"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        # Does not raise = signed with the manifest key.
+        Ed25519PublicKey.from_public_bytes(
+            base64.b64decode(qr_app.state._test_pub_b64)
+        ).verify(signature, canonical)
+        with pytest.raises(InvalidSignature):
+            Ed25519PublicKey.from_public_bytes(
+                base64.b64decode(pairing_pub_b64)
+            ).verify(signature, canonical)
 
     async def test_claim_relay_url_matches_persisted_value(
         self, client, qr_app, api_auth_headers

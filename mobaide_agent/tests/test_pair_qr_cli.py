@@ -13,7 +13,7 @@ import base64
 import io
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -34,6 +34,8 @@ from mobaide.agent.pairing_qr import (
     format_pairing_link,
     save_pending_pairing,
 )
+from mobaide.agent.pairing_ws import PairingWsError
+from mobaide.agent.trust_store import record_manifest_trust
 from mobaide.agent.updater import InstallLayout
 
 _REAL_LOCAL_AGENT_HEALTH = _main._local_agent_health
@@ -130,7 +132,11 @@ class TestRunPairQrEarlyExits:
         rc = _run_pair_qr(_ns(prefix=str(tmp_path), print=True))
 
         assert rc == 4
-        assert "fetch-trust-key" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        # The key is no longer fetched from the relay: only the installer,
+        # which carries it, can restore it.
+        assert "installer" in err
+        assert "fetch-trust-key" not in err
 
     def test_initiate_network_failure_returns_3(
         self, tmp_path, capsys, monkeypatch
@@ -202,6 +208,76 @@ class TestRunPairQrEarlyExits:
         lines = capsys.readouterr().out.split("\n")
         assert payload in lines
         assert format_pairing_link(payload) in lines
+
+
+class TestRunPairQrManifestFetch:
+    """``--wait`` reads the relay pairing keys from the signed manifest of the
+    relay. The phone can scan the QR as soon as it is on screen, so the fetch
+    must end before that. Without ``--wait`` nothing checks a credential push,
+    so the command does not fetch."""
+
+    @pytest.fixture
+    def pinned(self, tmp_path, monkeypatch) -> str:
+        """A prefix that can pair, with a QR already on disk: no initiate request."""
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        pub_b64 = _seed_trust_key(tmp_path)
+        monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+        _seed_pending(tmp_path, trust_key_fp=compute_trust_key_fp(pub_b64))
+        return pub_b64
+
+    def test_wait_fetches_the_pairing_keys_before_the_qr_is_shown(
+        self, tmp_path, monkeypatch, pinned
+    ):
+        order: list[str] = []
+        pairing_key = base64.b64encode(
+            Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+        ).decode()
+
+        async def _fetch(layout, _relay_server_url):
+            order.append("fetch")
+            return record_manifest_trust(
+                layout,
+                {
+                    "released_at": "2026-06-01T00:00:00+00:00",
+                    "trust": {"relay_pairing_public_keys": [pairing_key]},
+                },
+            )
+
+        monkeypatch.setattr(
+            "mobaide.agent.update_check.refresh_manifest_trust", _fetch
+        )
+        monkeypatch.setattr(
+            "mobaide.agent.pairing_qr.render_qr_to_terminal",
+            lambda _payload: order.append("qr"),
+        )
+
+        with patch("mobaide.agent.pairing_ws.PairingWsClient") as mock_ws_cls:
+            mock_ws_cls.return_value.wait_for_claim = AsyncMock(
+                side_effect=PairingWsError("boom")
+            )
+            rc = _run_pair_qr(_ns(prefix=str(tmp_path), wait=True))
+
+        assert rc == 6
+        assert order == ["fetch", "qr"]
+        # The wait trusts what the fetch stored.
+        wait = mock_ws_cls.return_value.wait_for_claim
+        assert tuple(wait.await_args.kwargs["trust_pub_keys_b64"]) == (
+            pinned, pairing_key,
+        )
+
+    def test_without_wait_the_manifest_is_not_fetched(
+        self, tmp_path, monkeypatch, pinned
+    ):
+        fetch = AsyncMock(return_value=False)
+        monkeypatch.setattr(
+            "mobaide.agent.update_check.refresh_manifest_trust", fetch
+        )
+
+        rc = _run_pair_qr(_ns(prefix=str(tmp_path), print=True))
+
+        assert rc == 0
+        fetch.assert_not_called()
 
 
 class TestRunShowQr:

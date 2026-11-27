@@ -268,6 +268,14 @@ JWT_SECRET_KEY=${JWT_SECRET}
 # RELEASE_AUTH_TOKEN=
 # MANIFEST_SIGNING_PUBLIC_KEY=
 
+# The relay's own Ed25519 key for the pairing credential push (base64 of the
+# 32 raw private bytes). Make it on your own machine, never on this server:
+#   python deploy/prod/release_agent.py --new-relay-pairing-key
+# Put the private line here and keep the public line in the local release
+# key folder as agent/relay-pairing-public-key. Agents learn the public half
+# from the signed release manifest.
+# RELAY_PAIRING_PRIVATE_KEY=
+
 # Web pairing links: the QR pairing nonce must survive the human hop from
 # a terminal QR on one machine to a browser on another (copy link, switch
 # device, log in, open). 600s closes that race; the nonce stays

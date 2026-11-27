@@ -207,7 +207,7 @@ class ChatResumeViewModel @Inject constructor(
         else -> e.message ?: "Could not $action."
     }
 
-    /** `{"detail": str}`, or the same object nested under `detail` by the direct REST path. */
+    /** `{"detail": str}`, or the same object nested under `detail`. */
     private fun apiDetail(body: String): String? = runCatching {
         val detail = Json.parseToJsonElement(body).jsonObject["detail"]
         when (detail) {

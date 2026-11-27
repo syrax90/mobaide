@@ -111,7 +111,6 @@ class CreateSessionViewModelReorderTest {
         coEvery { prefs.getRecentCustomPaths(any()) } returns emptyList()
         every { autoScanRepo.getAutoScanPrompt() } returns "default auto scan prompt"
         every { tokenStore.getAgentId() } returns "agent-1"
-        every { tokenStore.getAgentUrl() } returns null
 
         val customTypesFlow = MutableStateFlow(customTypes)
         val modeOrderFlow = MutableStateFlow(modeOrder)

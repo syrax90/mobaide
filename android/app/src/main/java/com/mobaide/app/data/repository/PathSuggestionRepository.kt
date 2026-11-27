@@ -33,7 +33,7 @@ class PathSuggestionRepository(
     private val caches = HashMap<String, DirListingCache>()
     private val support = HashMap<String, Support>()
 
-    private fun agentKey(): String = tokenStore.getAgentId() ?: tokenStore.getAgentUrl() ?: ""
+    private fun agentKey(): String = tokenStore.getAgentId() ?: ""
 
     private fun cache(): DirListingCache = synchronized(lock) {
         caches.getOrPut(agentKey()) { DirListingCache(now) }

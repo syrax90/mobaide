@@ -552,11 +552,9 @@ the wrong hook: it is cleared on both paths.
 
 #### Plaintext scope key (CLA-258 item 6)
 
-The scope key stays plaintext in the key name, deliberately. In DIRECT mode there
-is no `agent_id`, so `TokenStore.getAgentScopeKey()` falls back to the agent URL,
-and an internal hostname becomes part of a preference key
-(`recent_custom_paths::https://build-box.example.internal:8765`). Hashing it
-would protect nothing, because the *values* in the same unencrypted bucket are
+The scope key stays plaintext in the key name, deliberately. It is the
+`agent_id` (`TokenStore.getAgentScopeKey()`). Hashing it would protect
+nothing, because the *values* in the same unencrypted bucket are
 absolute workstation paths. It would also break the key format all three clients
 share and orphan every existing bucket. The sign-out purge removes the key
 outright, name included.

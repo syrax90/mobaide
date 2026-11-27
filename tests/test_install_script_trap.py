@@ -121,6 +121,22 @@ def _python3_failing_first_call(directory: Path) -> None:
     )
 
 
+def _python3_reporting(directory: Path, *, version: str, glibc: str) -> None:
+    """``python3`` stub for ``check_python``: it reports the Python
+    ``version`` and the glibc version ``glibc`` (empty: another C library).
+    Every other call goes to the real interpreter, so the version comparison
+    of the script itself runs."""
+    _stub(
+        directory,
+        "python3",
+        'case "$2" in\n'
+        f"    *version_info*) echo {version} ;;\n"
+        f"    *libc_ver*) echo '{glibc}' ;;\n"
+        f'    *) exec {shlex.quote(sys.executable)} "$@" ;;\n'
+        "esac",
+    )
+
+
 def _run_function(
     name: str,
     stubs: Path,
@@ -323,6 +339,47 @@ class TestEnsureEnsurepipAvailable:
 
         assert proc.returncode != 0
         assert "still fails" in proc.stderr
+
+
+@_POSIX_STUBS
+class TestCheckPython:
+    """One dependency has binary packages for Python 3.15 on glibc Linux
+    only from glibc 2.39, and the agent installs from binary packages only.
+    The installer must stop at the Python check with the cause, not later
+    inside pip."""
+
+    @pytest.mark.parametrize(
+        "version, glibc",
+        [("3.15", "2.35"), ("3.16", "2.38")],
+        ids=["python-3.15", "later-python"],
+    )
+    def test_refuses_a_new_python_on_an_older_glibc(
+        self, tmp_path: Path, version: str, glibc: str
+    ) -> None:
+        stubs = tmp_path / "bin"
+        _python3_reporting(stubs, version=version, glibc=glibc)
+
+        proc = _run_function("check_python", stubs)
+
+        assert proc.returncode != 0
+        assert f"glibc {glibc}" in proc.stderr
+        assert "glibc 2.39" in proc.stderr
+
+    @pytest.mark.parametrize(
+        "version, glibc",
+        [("3.15", "2.39"), ("3.15", "2.41"), ("3.14", "2.35"), ("3.15", "")],
+        ids=["oldest-glibc-with-wheels", "newer-glibc", "older-python", "not-glibc"],
+    )
+    def test_accepts_every_combination_that_has_binary_packages(
+        self, tmp_path: Path, version: str, glibc: str
+    ) -> None:
+        stubs = tmp_path / "bin"
+        _python3_reporting(stubs, version=version, glibc=glibc)
+
+        proc = _run_function("check_python", stubs)
+
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stderr == ""
 
 
 @_POSIX_STUBS

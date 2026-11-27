@@ -12,7 +12,6 @@ import com.mobaide.app.data.network.AutoScanWsClient
 import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.WebSocketManager
-import com.mobaide.app.data.auth.ConnectionStore
 import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.repository.AgentRepository
 import com.mobaide.app.data.repository.AgentSettingsRepository
@@ -73,18 +72,12 @@ object RepositoryModule {
     @Provides
     @Singleton
     fun provideAuthRepository(
-        restApi: RestApi,
         centralApi: CentralApi,
-        tokenStore: TokenStore,
         userIdentityStore: UserIdentityStore,
         sessionManager: SessionManager,
-        connectionStore: ConnectionStore,
         deviceIdentityStore: DeviceIdentityStore,
     ): AuthRepository {
-        return AuthRepository(
-            restApi, centralApi, tokenStore, userIdentityStore, sessionManager,
-            connectionStore, deviceIdentityStore,
-        )
+        return AuthRepository(centralApi, userIdentityStore, sessionManager, deviceIdentityStore)
     }
 
     @Provides

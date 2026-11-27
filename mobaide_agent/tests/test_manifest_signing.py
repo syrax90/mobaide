@@ -15,6 +15,7 @@ from mobaide.manifest_signing import (
     ManifestSignatureError,
     canonical_json,
     verify_signature,
+    verify_signature_any,
 )
 
 
@@ -85,3 +86,29 @@ class TestVerifySignatureFailure:
         wrong_sig = base64.b64encode(b"\x00" * 32).decode()
         with pytest.raises(ManifestSignatureError, match="does not verify"):
             verify_signature(body, wrong_sig, public_key_b64)
+
+
+class TestVerifySignatureAny:
+    """The updater trusts the pinned release key and any release key that a
+    signed manifest added; one matching key is enough, no key means refusal."""
+
+    @staticmethod
+    def _other_key_b64() -> str:
+        other = Ed25519PrivateKey.generate()
+        return base64.b64encode(other.public_key().public_bytes_raw()).decode()
+
+    def test_returns_the_key_that_verified(self, signed_body):
+        body, sig_b64, public_key_b64 = signed_body
+        keys = [self._other_key_b64(), "@@not-base64@@", public_key_b64]
+        assert verify_signature_any(body, sig_b64, keys) == public_key_b64
+
+    def test_fails_when_no_listed_key_verifies(self, signed_body):
+        body, sig_b64, _ = signed_body
+        keys = [self._other_key_b64(), self._other_key_b64()]
+        with pytest.raises(ManifestSignatureError, match="does not verify"):
+            verify_signature_any(body, sig_b64, keys)
+
+    def test_fails_when_no_key_is_listed(self, signed_body):
+        body, sig_b64, _ = signed_body
+        with pytest.raises(ManifestSignatureError, match="no trusted public key"):
+            verify_signature_any(body, sig_b64, [])

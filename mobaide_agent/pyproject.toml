@@ -21,7 +21,17 @@ dependencies = [
     "orjson",
     "websockets>=13.0",
     "certifi",
-    "cryptography>=43.0",
+    # The agent installs from binary wheels only. cryptography has no wheel
+    # for Intel macOS after 48.0.1 and none for Windows on ARM64 after 46.0.3,
+    # so those two platforms are capped there. The ">=49.0" on the first line
+    # keeps every other platform on the newest version. The capped versions
+    # have public advisories in parts the agent does not use: keep the agent
+    # to Ed25519 signature checks from this package while the caps exist.
+    # When a newer cryptography has those wheels again, go back to one plain
+    # requirement.
+    "cryptography>=49.0; (sys_platform != 'darwin' or platform_machine != 'x86_64') and (sys_platform != 'win32' or platform_machine != 'ARM64')",
+    "cryptography>=43.0,<=48.0.1; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "cryptography>=46.0.0,<=46.0.3; sys_platform == 'win32' and platform_machine == 'ARM64'",
     "segno>=1.6",
 ]
 

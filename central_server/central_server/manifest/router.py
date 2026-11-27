@@ -81,15 +81,13 @@ async def get_manifest(request: Request) -> ManifestResponse:
 async def get_trust_key(request: Request) -> TrustKeyResponse:
     """Return the manifest-signing public key for agent-side bootstrap.
 
-    The agent's auto-updater needs this key (pinned at
-    ``<prefix>/trust/central_server.pub``) to verify Ed25519 signatures on
-    every release manifest. The install scripts and the
-    ``mobaide-agent fetch-trust-key`` CLI fetch this endpoint when the
-    operator hasn't pre-set ``MOBAIDE_AGENT_TRUST_KEY_B64``. Returns 503
-    when ``MANIFEST_SIGNING_PUBLIC_KEY`` is unset on this server — agents
-    cannot bootstrap auto-update against a server that has no signing key
-    configured. Anonymous: matches the public ``manifest.json`` contract,
-    so unpaired install hosts can fetch it before having any credentials.
+    The agent's auto-updater pins this key at
+    ``<prefix>/trust/central_server.pub`` to verify Ed25519 signatures on
+    every release manifest. Current install scripts carry the key and do
+    not read this endpoint. It stays for the release script, which compares
+    it with the local signing key, and for installers published earlier.
+    Returns 503 when ``MANIFEST_SIGNING_PUBLIC_KEY`` is unset on this server.
+    Anonymous, like the public ``manifest.json``.
     """
     config = request.app.state.config
     public_key_b64 = config.manifest_signing_public_key_b64
@@ -102,6 +100,29 @@ async def get_trust_key(request: Request) -> TrustKeyResponse:
             ),
         )
     return TrustKeyResponse(public_key_b64=public_key_b64)
+
+
+class PairingKeyResponse(BaseModel):
+    public_key_b64: str | None = None
+
+
+@router.get(
+    "/api/v1/agent/pairing_key",
+    response_model=PairingKeyResponse,
+    tags=["manifest"],
+    # Read only by the release script; kept out of the public schema.
+    include_in_schema=False,
+)
+async def get_pairing_key(request: Request) -> PairingKeyResponse:
+    """Return the public half of the relay pairing key.
+
+    Only the release script reads it, to compare with the key in the signed
+    manifest. ``public_key_b64`` is null when ``RELAY_PAIRING_PRIVATE_KEY`` is
+    unset, so "no key" differs from a failed request.
+    """
+    return PairingKeyResponse(
+        public_key_b64=request.app.state.config.relay_pairing_public_key_b64
+    )
 
 
 def _require_release_token(request: Request, x_release_token: str | None) -> None:

@@ -76,6 +76,7 @@ final class AppContainer {
         let themeStore = ThemeStore(preferences: preferencesStore)
         let trustKeyPinning = TrustKeyPinning()
 
+        tokenStore.clearCredentialsWithoutRelay()
         let initialState = AuthState.initial(
             tokenStore: tokenStore,
             userIdentityStore: userIdentityStore
@@ -163,7 +164,6 @@ final class AppContainer {
         )
 
         let authRepository = AuthRepository(
-            agentAPI: agentAPI,
             centralAPI: centralAPI,
             tokenStore: tokenStore,
             userIdentityStore: userIdentityStore,

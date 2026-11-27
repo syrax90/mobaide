@@ -15,31 +15,28 @@ final class RelayRoutingTests: XCTestCase {
         )
     }
 
-    func testDirectURLUsesWsForHTTPBase() {
+    func testRelayHostedChannelUsesWsForHTTPBase() {
         let url = RelayRouting.webSocketURLString(
-            baseURL: "http://192.168.1.5:8000",
-            path: "ws/events",
-            mode: .direct,
+            relayServerURL: "http://192.168.1.5:8000",
+            path: "ws/user-events",
             token: "t"
         )
-        XCTAssertEqual(url, "ws://192.168.1.5:8000/ws/events?token=t")
+        XCTAssertEqual(url, "ws://192.168.1.5:8000/ws/user-events?token=t")
     }
 
-    func testDirectURLUsesWssForHTTPSBase() {
+    func testRelayHostedChannelUsesWssForHTTPSBaseAndKeepsThePath() {
         let url = RelayRouting.webSocketURLString(
-            baseURL: "https://agent.example.com",
-            path: "ws/session/s1",
-            mode: .direct,
+            relayServerURL: "https://relay.example.com",
+            path: "ws/user-events",
             token: "tok"
         )
-        XCTAssertEqual(url, "wss://agent.example.com/ws/session/s1?token=tok")
+        XCTAssertEqual(url, "wss://relay.example.com/ws/user-events?token=tok")
     }
 
-    func testRelayURLRewritesPathAndKeepsRawToken() {
-        let url = RelayRouting.webSocketURLString(
-            baseURL: "https://relay.example.com",
+    func testAgentChannelRewritesPathAndKeepsRawToken() {
+        let url = RelayRouting.agentWebSocketURLString(
+            relayServerURL: "https://relay.example.com",
             path: "ws/session/s1",
-            mode: .relay,
             agentId: "A1",
             token: "ab+c/d="
         )
@@ -48,9 +45,8 @@ final class RelayRoutingTests: XCTestCase {
 
     func testTokenAppendsWithAmpersandWhenQueryPresent() {
         let url = RelayRouting.webSocketURLString(
-            baseURL: "https://host",
+            relayServerURL: "https://host",
             path: "ws/events?foo=1",
-            mode: .direct,
             token: "t"
         )
         XCTAssertEqual(url, "wss://host/ws/events?foo=1&token=t")
@@ -65,10 +61,9 @@ final class RelayRoutingTests: XCTestCase {
     }
 
     func testTrailingSlashBaseDoesNotDoubleSlashWebSocketURL() {
-        let url = RelayRouting.webSocketURLString(
-            baseURL: "https://relay.example.com/",
+        let url = RelayRouting.agentWebSocketURLString(
+            relayServerURL: "https://relay.example.com/",
             path: "ws/events",
-            mode: .relay,
             agentId: "A1",
             token: "t"
         )
@@ -78,8 +73,6 @@ final class RelayRoutingTests: XCTestCase {
     func testTrailingSlashRelayURLDoesNotDoubleSlashRESTBase() {
         XCTAssertEqual(
             RelayRouting.agentRESTBaseURL(
-                mode: .relay,
-                agentURL: nil,
                 relayServerURL: "https://relay.example.com//",
                 agentId: "A1"
             ),
@@ -87,14 +80,10 @@ final class RelayRoutingTests: XCTestCase {
         )
     }
 
-    func testAgentRESTBaseURLRelayRequiresAgentId() {
+    func testAgentRESTBaseURLRequiresTheRelayAndTheAgentId() {
         XCTAssertNil(
-            RelayRouting.agentRESTBaseURL(
-                mode: .relay,
-                agentURL: nil,
-                relayServerURL: "https://relay.example.com",
-                agentId: nil
-            )
+            RelayRouting.agentRESTBaseURL(relayServerURL: "https://relay.example.com", agentId: nil)
         )
+        XCTAssertNil(RelayRouting.agentRESTBaseURL(relayServerURL: nil, agentId: "A1"))
     }
 }

@@ -109,7 +109,6 @@ class CreateSessionViewModelTest {
         lastUsedWorkspace: String? = null,
         autoScanPrompt: String? = "default auto scan prompt",
         agentId: String? = "agent-1",
-        agentUrl: String? = null,
         recentCustomPaths: List<String> = emptyList(),
     ): Fixture {
         val workspacesRepo = mockk<WorkspacesRepository>(relaxed = true)
@@ -147,7 +146,6 @@ class CreateSessionViewModelTest {
         coEvery { prefs.removeRecentCustomPath(any(), any()) } just Runs
         every { autoScanRepo.getAutoScanPrompt() } returns autoScanPrompt
         every { tokenStore.getAgentId() } returns agentId
-        every { tokenStore.getAgentUrl() } returns agentUrl
 
         // Strict mock on purpose: the init block must only observe + refresh;
         // CRUD calls are stubbed per-test.
@@ -1177,26 +1175,6 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun selectCustomPath_usesAgentUrlFallback_whenAgentIdIsNull() = runTest {
-        // Per the plan: DIRECT-mode peers have no `agent_id`; we fall back
-        // to `agent_url` for the recents scope key. Both null ⇒ no key,
-        // and the recents load is skipped (rare; the screen wouldn't load).
-        val fx = newFixture(
-            agentId = null,
-            agentUrl = "https://agent.local:8080",
-            recentCustomPaths = listOf("/home/me"),
-        )
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.selectCustomPath()
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) { fx.prefs.getRecentCustomPaths("https://agent.local:8080") }
-        assertEquals(listOf("/home/me"), vm.uiState.value.recentCustomPaths)
-    }
-
-    @Test
     fun setCustomPathDraft_relativePath_setsError_andClampsSelectionPath() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -1436,9 +1414,9 @@ class CreateSessionViewModelTest {
 
     @Test
     fun removeRecentCustomPath_noScopeKey_isSilentNoOp() = runTest {
-        // No agent_id AND no agent_url ⇒ there is no bucket to write to. The
-        // VM must skip the store entirely rather than key off null.
-        val fx = newFixture(agentId = null, agentUrl = null)
+        // No agent_id ⇒ there is no bucket to write to. The VM must skip
+        // the store entirely rather than key off null.
+        val fx = newFixture(agentId = null)
         val vm = fx.buildVm()
         advanceUntilIdle()
         vm.selectCustomPath()
@@ -1512,10 +1490,10 @@ class CreateSessionViewModelTest {
 
     @Test
     fun submit_customPath_withoutAgentScope_skipsRecentsButStillSucceeds() = runTest {
-        // No agent_id and no agent_url ⇒ recents won't persist. The submit
-        // path must NOT crash — it just skips the `addRecentCustomPath`
-        // call and proceeds to navigation.
-        val fx = newFixture(agentId = null, agentUrl = null)
+        // No agent_id ⇒ recents won't persist. The submit path must NOT
+        // crash — it just skips the `addRecentCustomPath` call and proceeds
+        // to navigation.
+        val fx = newFixture(agentId = null)
         val vm = fx.buildVm()
         advanceUntilIdle()
         vm.selectCustomPath()

@@ -60,7 +60,7 @@ class KeepAwakeViewModel @Inject constructor(
     agentRepository: AgentRepository,
     tokenStore: TokenStore,
 ) : ViewModel() {
-    private val agentKey: String? = tokenStore.getAgentId() ?: tokenStore.getAgentUrl()
+    private val agentKey: String? = tokenStore.getAgentId()
     private val availability = MutableStateFlow(
         if (agentKey == null) KeepAwakeAvailability.NoAgent else KeepAwakeAvailability.Checking,
     )

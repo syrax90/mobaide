@@ -15,12 +15,20 @@
 
 set -euo pipefail
 
+# Python must not import modules from the directory this script is run in:
+# a file named like a standard module there would run inside the checks below.
+export PYTHONSAFEPATH=1
+
 # Defaults (override via env var).
 : "${MOBAIDE_AGENT_PREFIX:=}"
 : "${MOBAIDE_AGENT_MANIFEST_URL:=https://api.mobaide.com/api/v1/agent/manifest.json}"
+# Public half of the key that signs every release manifest (base64 Ed25519).
+# The script carries it, so no server is asked which key to trust. Set
+# MOBAIDE_AGENT_TRUST_KEY_B64 to install from your own release pipeline.
+MOBAIDE_RELEASE_PUBLIC_KEY_B64="f+cIAgdrhuXQtkHjRI5NSYjKAAc0aUWWZP7s7eIjunw="
 : "${MOBAIDE_AGENT_TRUST_KEY_B64:=}"
-# Self-host / loopback escape hatch for the trust-key fetch. Defaults to "0"
-# (HTTPS-only); set to "1" only on a trusted local network.
+# Not used by this script; the agent commands it runs inherit it. "1" lets
+# the agent reach a relay over cleartext http/ws: only on a trusted local network.
 : "${MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH:=0}"
 # The agent runs as a real user (not a system account) so it can read/write
 # their own /home/<user>/<repo> source trees. With `sudo curl|bash` this
@@ -99,6 +107,17 @@ check_python() {
         fail "Python 3.12+ is required (found $version)."
     fi
     info "Python $version detected."
+    # Python 3.15 and later on glibc Linux: one dependency has binary packages
+    # only for glibc 2.39 or newer. Keep both numbers in sync with
+    # LOCK_PLATFORM_FOR_PYTHON in deploy/prod/release_agent.py.
+    if [ "$PLATFORM" = "linux" ] && [ "$minor" -ge 15 ]; then
+        local glibc
+        glibc="$(python3 -c 'import platform; lib, ver = platform.libc_ver(); print(ver if lib == "glibc" else "")' 2>/dev/null || true)"
+        if [ -n "$glibc" ] && ! python3 -c 'import sys; sys.exit(0 if tuple(int(p) for p in sys.argv[1].split(".")[:2]) >= (2, 39) else 1)' "$glibc" 2>/dev/null; then
+            fail "Python $version on this system (glibc $glibc) cannot install the agent: the agent needs glibc 2.39 or newer with Python 3.15 and later.
+Put Python 3.12, 3.13 or 3.14 first on PATH as 'python3' and run the installer again."
+        fi
+    fi
 }
 
 ensure_ensurepip_available() {
@@ -301,8 +320,8 @@ fetch_manifest() {
 # OS-native trust store), never Python urllib: a python.org framework build
 # whose bundled ``Install Certificates.command`` never ran has an EMPTY OpenSSL
 # CA store, so urllib fails TLS verification with CERTIFICATE_VERIFY_FAILED even
-# when curl to the same endpoint succeeds (fetch_manifest + bootstrap_trust_key
-# above already prove curl works against the same infra). Mirrors
+# when curl to the same endpoint succeeds (fetch_manifest above already proves
+# curl works against the same infra). Mirrors
 # deploy/install.ps1's Invoke-AgentDownload, which downloads via Invoke-WebRequest
 # for the identical root cause. The file:// / absolute-path branch preserves the
 # air-gapped self-host path (offline mirrors, test fixtures) the old Python
@@ -325,8 +344,7 @@ download_asset() {
 }
 
 # Round-trip validate that ``$MOBAIDE_AGENT_TRUST_KEY_B64`` decodes to a
-# 32-byte Ed25519 public key. Used by both the env-var-pinned path and the
-# central-server-fetched path so a malformed key surfaces immediately at
+# 32-byte Ed25519 public key, so a malformed key surfaces immediately at
 # install time as "your key is malformed" rather than later as a confusing
 # "manifest signature does not verify".
 _validate_trust_key_or_fail() {
@@ -342,89 +360,17 @@ except Exception as exc:
 PY
 }
 
-# Trust-key bootstrap: ensure ``$MOBAIDE_AGENT_TRUST_KEY_B64`` is set before
-# fetching the manifest. If the operator pinned a value, validate and use
-# it. Otherwise fetch the manifest-signing public key from the
-# central_server endpoint (host derived from
-# ``$MOBAIDE_AGENT_MANIFEST_URL``). Fail-closed if neither path yields a
-# valid key — never silently ship an install whose auto-updater can't
-# verify rollouts.
-#
-# Two security guards on the fetch path:
-# * User-info in ``$MOBAIDE_AGENT_MANIFEST_URL`` (e.g.
-#   ``https://api.mobaide.com@evil.example/...``) is rejected — would
-#   otherwise DNS-resolve to ``evil.example`` and pin an attacker key.
-# * ``http://`` schemes refused unless
-#   ``MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1`` is set — a passive
-#   on-path attacker could substitute the public key over cleartext.
+# Trust key: the release public key this script carries, unless the operator
+# pinned another one with ``MOBAIDE_AGENT_TRUST_KEY_B64``. The key never
+# comes from the server that also serves the manifest: that server could
+# then sign its own manifest.
 bootstrap_trust_key() {
     if [ -n "$MOBAIDE_AGENT_TRUST_KEY_B64" ]; then
         info "Using operator-pinned trust key (MOBAIDE_AGENT_TRUST_KEY_B64)."
-        _validate_trust_key_or_fail
-        return 0
+    else
+        MOBAIDE_AGENT_TRUST_KEY_B64="$MOBAIDE_RELEASE_PUBLIC_KEY_B64"
     fi
-
-    # Parse $MOBAIDE_AGENT_MANIFEST_URL into a clean scheme://host[:port]
-    # base. The Python heredoc rejects user-info up front (urlparse's
-    # ``netloc`` would otherwise smuggle ``user@host`` into the trust-key
-    # URL and DNS-resolve to the wrong host) and rebuilds the origin from
-    # ``hostname`` + optional ``port`` so the netloc surface is fully
-    # under our control.
-    local origin
-    origin="$(printf '%s\n' "$MOBAIDE_AGENT_MANIFEST_URL" | python3 -c '
-import os, sys, urllib.parse as p
-
-raw = sys.stdin.read().strip()
-u = p.urlparse(raw)
-if not u.scheme or not u.hostname:
-    sys.exit(f"MOBAIDE_AGENT_MANIFEST_URL is not a valid URL: {raw!r}")
-if u.username is not None or u.password is not None:
-    sys.exit(
-        f"MOBAIDE_AGENT_MANIFEST_URL must not contain user-info "
-        f"(user@/user:pass@): {raw!r}"
-    )
-scheme = u.scheme.lower()
-if scheme not in ("http", "https"):
-    sys.exit(
-        f"MOBAIDE_AGENT_MANIFEST_URL has unsupported scheme {scheme!r}: {raw!r}"
-    )
-if scheme == "http" and os.environ.get(
-    "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH"
-) != "1":
-    sys.exit(
-        f"Trust-key fetch over cleartext http:// is refused by default "
-        f"(MOBAIDE_AGENT_MANIFEST_URL={raw!r}). Set "
-        f"MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1 to override "
-        f"(only safe on a trusted local network, e.g. self-host loopback)."
-    )
-host = u.hostname
-if ":" in host and not host.startswith("["):
-    host = f"[{host}]"
-if u.port is not None:
-    host = f"{host}:{u.port}"
-print(f"{scheme}://{host}")
-')"
-    if [ -z "$origin" ]; then
-        fail "Could not derive a trust-key endpoint from MOBAIDE_AGENT_MANIFEST_URL=$MOBAIDE_AGENT_MANIFEST_URL"
-    fi
-
-    local trust_url="${origin}/api/v1/agent/trust_key"
-    info "Fetching trust key from $trust_url"
-    local body
-    if ! body="$(curl -fsSL --max-time 30 "$trust_url")"; then
-        fail "Could not bootstrap trust key from $trust_url.
-Set MOBAIDE_AGENT_TRUST_KEY_B64=<base64-ed25519> explicitly,
-or ensure central_server has MANIFEST_SIGNING_PUBLIC_KEY configured.
-See docs/versioning-and-updates.md → Trust-key bootstrap."
-    fi
-    MOBAIDE_AGENT_TRUST_KEY_B64="$(printf '%s' "$body" | python3 -c 'import json, sys; print(json.load(sys.stdin)["public_key_b64"].strip())')"
-    if [ -z "$MOBAIDE_AGENT_TRUST_KEY_B64" ]; then
-        fail "Trust-key endpoint returned an empty public_key_b64."
-    fi
-    # Round-trip validate fail-closed BEFORE any files land on disk so a
-    # misconfigured central_server can't smuggle in a malformed key.
     _validate_trust_key_or_fail
-    info "Trust key bootstrapped from central_server."
 }
 
 verify_manifest_signature() {
@@ -432,7 +378,7 @@ verify_manifest_signature() {
     if [ -z "$MOBAIDE_AGENT_TRUST_KEY_B64" ]; then
         # ``bootstrap_trust_key`` should have populated this — defensive check
         # only fires if a future refactor reorders the call sites.
-        fail "Internal error: trust key not bootstrapped before signature verification."
+        fail "Internal error: trust key not set before signature verification."
     fi
     info "Verifying manifest signature"
     "$VERIFIER_PYTHON" - "$manifest_path" "$MOBAIDE_AGENT_TRUST_KEY_B64" <<'PY'
@@ -450,7 +396,10 @@ try:
         base64.b64decode(sig), canon
     )
 except InvalidSignature:
-    sys.exit("manifest signature does not verify")
+    sys.exit(
+        "manifest signature does not verify. A manifest from your own release "
+        "pipeline needs its public key in MOBAIDE_AGENT_TRUST_KEY_B64."
+    )
 PY
 }
 
@@ -555,7 +504,9 @@ stage_release() {
     download_asset "$wheel_url" "$tmpdir/wheel.download" "$user_agent"
 
     # Pure-local staging: verify sha256, rename the wheel to its canonical PEP
-    # 427 name, extract the tarball. Prints exactly one line — the staged
+    # 427 name, extract the tarball. When the signed manifest names a
+    # dependency lock, check the lock from the tarball against it and write
+    # the hash-pinned requirements file for pip. Prints exactly one line — the staged
     # wheel's full path. Runs as a plain command with stdout redirected to a
     # file (NOT captured in ``$(...)``) so macOS bash 3.2 never re-scans the
     # Python body — see test_install_sh_heredoc_no_subst.py.
@@ -605,6 +556,19 @@ verify_sha256(wheel, body["wheel_sha256"])
 with tarfile.open(tarball, mode="r:gz") as tar:
     tar.extractall(release_dir, filter="data")
 
+lock_sha = str(body.get("dependency_lock_sha256") or "")
+if lock_sha:
+    lock = Path(release_dir) / "requirements.lock"
+    if not lock.is_file():
+        sys.exit("release tarball has no requirements.lock")
+    verify_sha256(lock, lock_sha)
+    (Path(tmpdir) / "requirements.txt").write_text(
+        lock.read_text(encoding="utf-8")
+        + f"\nmobaide-agent @ {wheel.resolve().as_uri()}"
+        f" --hash=sha256:{body['wheel_sha256'].lower()}\n",
+        encoding="utf-8",
+    )
+
 print(wheel)
 PY
     wheel_path="$(cat "$tmpdir/wheel_path")"
@@ -613,8 +577,22 @@ PY
     local base_python
     base_python="$(resolve_base_python)"
     env -u VIRTUAL_ENV -u PYTHONHOME "$base_python" -m venv "$release_dir/venv"
-    "$release_dir/venv/bin/pip" install --no-cache-dir --upgrade pip
-    "$release_dir/venv/bin/pip" install --no-cache-dir "$wheel_path"
+    if [ -f "$tmpdir/requirements.txt" ]; then
+        # Every dependency at the exact version and SHA-256 that the signed
+        # manifest pins. --require-hashes refuses a file with another hash and
+        # a dependency the lock does not list; --only-binary refuses source
+        # builds, whose build tools no hash covers. pip is the bundled copy.
+        info "Installing the agent with hash-pinned dependencies"
+        "$release_dir/venv/bin/python" -m pip install --no-cache-dir \
+            --disable-pip-version-check --no-input --require-hashes \
+            --only-binary :all: -r "$tmpdir/requirements.txt" \
+            || fail "Dependency install failed: a package did not match the versions and hashes that the signed release lists."
+    else
+        # Releases made before the dependency lock existed have no pins.
+        warn "This release lists no dependency hashes; installing dependencies without hash checks."
+        "$release_dir/venv/bin/pip" install --no-cache-dir --upgrade pip
+        "$release_dir/venv/bin/pip" install --no-cache-dir "$wheel_path"
+    fi
 
     rm -rf "$tmpdir"
 
@@ -764,7 +742,7 @@ else:
     if [ ! -f "$pending_file" ]; then
         fail "Agent service is up but did not initiate pairing within ${pending_timeout_sec}s
 (no ${pending_file}). The service likely cannot reach central_server. Check:
-    curl -fsS ${MOBAIDE_AGENT_MANIFEST_URL%/api/*}/api/v1/agent/trust_key
+    curl -fsS -o /dev/null -w '%{http_code}\n' ${MOBAIDE_AGENT_MANIFEST_URL}
 The service is still running; once connectivity is restored it will
 initiate a nonce on its own. Run '$CLI_CMD show-qr' to re-display."
     fi
@@ -1357,17 +1335,17 @@ main() {
     resolve_verifier_python
 
     mkdir -p "$MOBAIDE_AGENT_PREFIX"
-    # Order: bootstrap key (env var or central_server fetch) → pin to disk
-    # so the agent picks it up at runtime → fetch manifest → verify it
-    # against the same key → stage. ``bootstrap_trust_key`` fails the
-    # install with an actionable message if neither path yields a key.
+    # Order: choose the trust key (the built-in one, or the operator's) →
+    # fetch manifest → verify it against that key → pin the key to disk so
+    # the agent picks it up at runtime → stage. A key that does not verify
+    # the manifest never replaces the key of an existing install.
     bootstrap_trust_key
-    write_trust_key
 
     local manifest
     manifest="$(mktemp)"
     fetch_manifest "$manifest"
     verify_manifest_signature "$manifest"
+    write_trust_key
     stage_release "$manifest"
     rm -f "$manifest"
 

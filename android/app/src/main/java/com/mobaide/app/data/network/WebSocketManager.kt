@@ -414,8 +414,8 @@ class WebSocketManager(
      */
     private val userClient: OkHttpClient,
     /**
-     * Base for user-scoped channels when [TokenStore] holds no relay or
-     * agent URL yet — see [resolveUserEventsUrl].
+     * Base for user-scoped channels when [TokenStore] holds no relay URL
+     * yet — see [resolveUserEventsUrl].
      */
     private val centralServerUrl: String = BuildConfig.CENTRAL_SERVER_URL,
 ) {
@@ -425,8 +425,8 @@ class WebSocketManager(
      * by [SessionManager] is picked up on the next handshake without
      * rebuilding the connection object.
      *
-     * In relay mode, the [path] is rewritten to use the central server's
-     * relay WebSocket endpoints with the paired agent's ID.
+     * The [path] is rewritten to use the central server's relay WebSocket
+     * endpoints with the paired agent's ID.
      */
     fun createConnection(path: String): WebSocketConnection {
         // Use an anonymous function instead of a lambda so early `return null`
@@ -443,23 +443,12 @@ class WebSocketManager(
 
             val token = tokenStore.getAccessToken() ?: return null
 
-            val url = when (tokenStore.getConnectionMode()) {
-                TokenStore.ConnectionMode.DIRECT -> {
-                    val agentUrl = tokenStore.getAgentUrl() ?: return null
-                    val wsScheme = if (agentUrl.startsWith("https")) "wss" else "ws"
-                    val host = agentUrl.removePrefix("https://").removePrefix("http://")
-                    "$wsScheme://$host/$path"
-                }
-
-                TokenStore.ConnectionMode.RELAY -> {
-                    val serverUrl = tokenStore.getRelayServerUrl() ?: return null
-                    val agentId = tokenStore.getAgentId() ?: return null
-                    val wsScheme = if (serverUrl.startsWith("https")) "wss" else "ws"
-                    val host = serverUrl.removePrefix("https://").removePrefix("http://")
-                    val relayPath = mapToRelayPath(path, agentId)
-                    "$wsScheme://$host/$relayPath"
-                }
-            }
+            val serverUrl = tokenStore.getRelayServerUrl() ?: return null
+            val agentId = tokenStore.getAgentId() ?: return null
+            val wsScheme = if (serverUrl.startsWith("https")) "wss" else "ws"
+            val host = serverUrl.removePrefix("https://").removePrefix("http://")
+            val relayPath = mapToRelayPath(path, agentId)
+            val url = "$wsScheme://$host/$relayPath"
 
             val separator = if (url.contains("?")) "&" else "?"
             return "$url${separator}token=$token"
@@ -476,24 +465,15 @@ class WebSocketManager(
      * Resolve the URL of a user-scoped channel such as `ws/user-events`, or
      * `null` when nobody is signed in.
      *
-     * The base is the stored relay URL (relay mode) or the stored agent URL
-     * (direct mode, single-agent dev setups where the agent fronts the user
-     * API) when one exists, otherwise [centralServerUrl]. Both stores are
-     * written only by connecting to an already-paired agent, so an account
-     * that has never connected one — every first pairing — and any account
-     * after [SessionManager.agentDisconnect] has neither. Without the
-     * fallback the user socket never opened in that state and the
-     * `agent.status_changed` push behind "waiting for the agent to come
-     * online" could not arrive. Mirrors iOS `UserEventBus.urlProvider`.
+     * The base is the stored relay URL, otherwise [centralServerUrl]: an
+     * account that never connected an agent, or disconnected one, has no relay
+     * URL yet still needs this socket for the `agent.status_changed` push.
      */
     internal fun resolveUserEventsUrl(path: String): String? {
         if (!userIdentityStore.isUserLoggedIn()) return null
         val token = userIdentityStore.getUserAccessToken() ?: return null
 
-        val baseUrl = when (tokenStore.getConnectionMode()) {
-            TokenStore.ConnectionMode.RELAY -> tokenStore.getRelayServerUrl()
-            TokenStore.ConnectionMode.DIRECT -> tokenStore.getAgentUrl()
-        } ?: centralServerUrl
+        val baseUrl = tokenStore.getRelayServerUrl() ?: centralServerUrl
 
         val wsScheme = if (baseUrl.startsWith("https")) "wss" else "ws"
         val host = baseUrl.removePrefix("https://").removePrefix("http://").trimEnd('/')
@@ -540,9 +520,9 @@ class WebSocketManager(
     }
 
     /**
-     * Map a direct-mode WebSocket path to its relay equivalent.
+     * Map an agent WebSocket path to its relay endpoint.
      *
-     * | Direct Path              | Relay Path                                     |
+     * | Agent Path               | Relay Path                                     |
      * |--------------------------|------------------------------------------------|
      * | `ws/session/{sid}`       | `relay/ws/session/{agentId}/{sid}`             |
      * | `ws/events`              | `relay/ws/events/{agentId}`                    |

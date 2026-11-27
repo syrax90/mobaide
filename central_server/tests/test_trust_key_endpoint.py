@@ -1,11 +1,11 @@
 """Cover ``GET /api/v1/agent/trust_key``.
 
-The endpoint exposes the manifest-signing public key so the agent's
-install scripts and the ``mobaide-agent fetch-trust-key`` CLI can
-bootstrap ``<prefix>/trust/central_server.pub`` without operator-side
-env var plumbing. Returns 503 when ``MANIFEST_SIGNING_PUBLIC_KEY`` is
-not configured (mirrors the existing manifest-publish 503 pattern).
-The endpoint is anonymous — the install host has no credentials yet.
+The endpoint exposes the manifest-signing public key. Current install
+scripts carry the key and do not read it; the release script compares it
+with the local signing key, and installers published earlier still fetch
+it. Returns 503 when ``MANIFEST_SIGNING_PUBLIC_KEY`` is not configured
+(mirrors the existing manifest-publish 503 pattern). The endpoint is
+anonymous.
 """
 from __future__ import annotations
 

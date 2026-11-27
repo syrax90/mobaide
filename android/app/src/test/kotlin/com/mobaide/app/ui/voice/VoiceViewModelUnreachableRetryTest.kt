@@ -78,8 +78,6 @@ class VoiceViewModelUnreachableRetryTest {
         val agentRepository = mockk<AgentRepository> { every { observeAgents() } returns MutableStateFlow(emptyList()) }
         val tokenStore = mockk<TokenStore> {
             every { getAgentId() } returns "agent-1"
-            every { getAgentUrl() } returns null
-            every { getConnectionMode() } returns TokenStore.ConnectionMode.RELAY
         }
         val preferencesStore = mockk<PreferencesStore> {
             every { voiceMicHidden(any()) } returns flowOf(false)

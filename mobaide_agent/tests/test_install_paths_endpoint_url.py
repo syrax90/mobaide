@@ -2,11 +2,10 @@
 
 ``endpoint_url_from_relay_server_url`` is the security-critical core that
 turns a ``RELAY_SERVER_URL`` (operator-supplied) into a co-located HTTPS
-endpoint. The trust-key fetch and the HTTPS-bootstrap update path both
-route through it, so the user-info rejection / cleartext refusal /
-scheme-rebuild guards live here. ``trust_key_url_from_relay_server_url``
-and ``manifest_url_from_relay_server_url`` are thin wrappers we cover
-once each — exhaustive coverage of the core stays in ``TestEndpointUrl``.
+endpoint. The HTTPS-bootstrap update path routes through it, so the
+user-info rejection / cleartext refusal / scheme-rebuild guards live here.
+``manifest_url_from_relay_server_url`` is a thin wrapper we cover once —
+exhaustive coverage of the core stays in ``TestEndpointUrl``.
 """
 from __future__ import annotations
 
@@ -15,7 +14,6 @@ import pytest
 from mobaide.agent.install_paths import (
     endpoint_url_from_relay_server_url,
     manifest_url_from_relay_server_url,
-    trust_key_url_from_relay_server_url,
 )
 
 
@@ -60,8 +58,7 @@ class TestEndpointUrl:
         # The classic redirect vector: ``urlparse('wss://api@evil.example')``
         # produces ``netloc='api@evil.example'`` which DNS-resolves to
         # ``evil.example``. Catching this guarantees a misbehaving
-        # operator-provided URL can't redirect the trust-key / manifest
-        # fetch off-host.
+        # operator-provided URL can't redirect the manifest fetch off-host.
         with pytest.raises(ValueError, match="user-info"):
             endpoint_url_from_relay_server_url(
                 "wss://api.mobaide.com@evil.example", "/foo",
@@ -92,24 +89,14 @@ class TestEndpointUrl:
                 endpoint_url_from_relay_server_url("ws://example.com", "/foo")
 
 
-class TestTrustKeyWrapper:
-    """The trust-key wrapper just plugs the canonical endpoint path."""
-
-    def test_propagates_userinfo_rejection(self):
-        # Smoke-test that the wrapper inherits the core's security guards
-        # rather than bypassing them through some local path.
-        with pytest.raises(ValueError, match="user-info"):
-            trust_key_url_from_relay_server_url("wss://a@b.example")
-
-
 class TestManifestUrlWrapper:
-    """The manifest wrapper is the new piece — the rest of the test surface
-    for the HTTPS-bootstrap path depends on its derivation matching the
-    server's published manifest endpoint exactly."""
+    """The rest of the test surface for the HTTPS-bootstrap path depends on
+    this derivation matching the server's published manifest endpoint
+    exactly."""
 
     def test_strips_relay_path_keeps_origin(self):
-        # Mirrors the trust-key behaviour: the relay tunnel and the
-        # manifest endpoint share an origin; the relay path is dropped.
+        # The relay tunnel and the manifest endpoint share an origin; the
+        # relay path is dropped.
         assert (
             manifest_url_from_relay_server_url("wss://example.com/ws/agent-tunnel")
             == "https://example.com/api/v1/agent/manifest.json"

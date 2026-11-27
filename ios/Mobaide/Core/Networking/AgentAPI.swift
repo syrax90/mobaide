@@ -19,8 +19,8 @@ struct AgentAPI: Sendable {
 
     private static let sessionExpiredBody = #"{"detail":"Session expired"}"#
 
-    /// Effective base URL, re-evaluated per call: DIRECT → agent URL,
-    /// RELAY → `{relay}/proxy/{agentId}` (Android `TokenStore.getEffectiveBaseUrl`).
+    /// Effective base URL, re-evaluated per call: `{relay}/proxy/{agentId}`
+    /// (Android `TokenStore.getEffectiveBaseUrl`).
     let baseURL: @Sendable () async -> String?
     let tokens: any AgentTokenProviding
     let client: HTTPClient
@@ -36,17 +36,6 @@ struct AgentAPI: Sendable {
     }
 
     // MARK: - Routes
-
-    /// The only route that targets a caller-supplied agent URL instead of the
-    /// effective base (used before a connection is configured).
-    func login(agentUrl: String, username: String, password: String) async throws -> TokenResponse {
-        let base = trimTrailingSlashes(agentUrl)
-        return try await execute(
-            method: "POST",
-            url: "\(base)/api/auth/token",
-            body: TokenRequest(username: username, password: password)
-        )
-    }
 
     func forceAgentUpdate() async throws -> ForceUpdateResponse {
         try await execute(method: "POST", url: "\(try await base())/api/agent/update/force_now", rawBody: Data())

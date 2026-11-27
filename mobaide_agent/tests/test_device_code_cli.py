@@ -25,6 +25,7 @@ from mobaide.__main__ import (
     _run_show_trust_fp,
 )
 from mobaide.agent._env_writer import env_path_for_prefix
+from mobaide.agent.pairing_monitor import DeviceCodeRejected
 from mobaide.agent.pairing_qr import (
     PendingDeviceCode,
     PendingPairing,
@@ -34,7 +35,18 @@ from mobaide.agent.pairing_qr import (
     save_pending_device_code,
 )
 from mobaide.agent.pairing_ws import PairingWsError
+from mobaide.agent.trust_store import record_manifest_trust
 from mobaide.agent.updater import InstallLayout
+
+
+@pytest.fixture(autouse=True)
+def _no_manifest_fetch(monkeypatch):
+    """The wait step first refreshes the trust data from the signed manifest
+    of the relay. Keep that fetch off the network."""
+    monkeypatch.setattr(
+        "mobaide.agent.update_check.refresh_manifest_trust",
+        AsyncMock(return_value=False),
+    )
 
 
 def _ns(**overrides) -> argparse.Namespace:
@@ -175,7 +187,9 @@ class TestRunPairRefusals:
         rc = _run_pair(_ns(prefix=str(tmp_path)))
 
         assert rc == 4
-        assert "fetch-trust-key" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "installer" in err
+        assert "fetch-trust-key" not in err
 
 
 class TestRunPairResume:
@@ -277,6 +291,70 @@ class TestRunPairResume:
         mock_input.assert_not_called()
         assert "Resuming the pairing request" in capsys.readouterr().out
         assert rc == 6
+
+
+class TestRunPairTrustedKeys:
+    def test_the_wait_trusts_the_pinned_key_and_the_relay_pairing_keys(
+        self, tmp_path
+    ):
+        # The credential push may be signed with the release key or with a
+        # relay pairing key that a signed manifest listed.
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        pinned = _seed_trust_key(tmp_path)
+        pairing_key = base64.b64encode(
+            Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+        ).decode()
+        record_manifest_trust(
+            InstallLayout(prefix=tmp_path),
+            {
+                "released_at": "2026-06-01T00:00:00+00:00",
+                "trust": {"relay_pairing_public_keys": [pairing_key]},
+            },
+        )
+        _seed_pending_device_code(tmp_path, confirmed=True)
+
+        with patch("sys.stdin.isatty", return_value=True), patch(
+            "mobaide.agent.pairing_monitor.accept_device_code"
+        ), patch("mobaide.agent.pairing_ws.PairingWsClient") as mock_ws_cls:
+            mock_ws_cls.return_value.wait_for_claim = AsyncMock(
+                side_effect=PairingWsError("boom")
+            )
+            _run_pair(_ns(prefix=str(tmp_path), yes=False))
+
+        wait = mock_ws_cls.return_value.wait_for_claim
+        assert tuple(wait.await_args.kwargs["trust_pub_keys_b64"]) == (
+            pinned, pairing_key,
+        )
+
+
+    def test_the_pairing_keys_are_fetched_before_the_code_is_redeemed(
+        self, tmp_path, monkeypatch
+    ):
+        # A redeemed code starts the lifetime of its pairing nonce, so the
+        # manifest fetch must not come between the redeem and the wait.
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        order: list[str] = []
+
+        async def _fetch(_layout, _relay_server_url):
+            order.append("fetch")
+            return False
+
+        def _redeem(*_args, **_kwargs):
+            order.append("redeem")
+            raise DeviceCodeRejected("code refused")
+
+        monkeypatch.setattr(
+            "mobaide.agent.update_check.refresh_manifest_trust", _fetch
+        )
+
+        with patch(
+            "mobaide.agent.pairing_monitor.redeem_device_code", side_effect=_redeem
+        ):
+            rc = _run_pair(_ns(prefix=str(tmp_path)))
+
+        assert rc == 8
+        assert order == ["fetch", "redeem"]
 
 
 class TestRunPairApproval:

@@ -12,12 +12,12 @@ migration:
 * ``_wait_for_windows_scheduled_task_ready`` — polling helper that
   parses ``schtasks.exe /Query /FO LIST /V`` for ``Status: Ready``.
 
-The dispatcher is reachable from three CLI verbs (``fetch-trust-key``,
-``pair-qr --wait``, ``re-pair``) so a silent regression here strands
+The dispatcher is reachable from the pairing CLI verbs (``pair-qr --wait``,
+``pair``, ``re-pair``) so a silent regression here strands
 post-pair restarts for every Windows operator. The tests stub
 ``_run_with_timeout`` at the module level (the workspace's existing pattern
-for testing subprocess-backed CLI helpers — see ``test_main.py`` and
-``test_fetch_trust_key.py``) so the test suite runs on Linux / macOS
+for testing subprocess-backed CLI helpers — see ``test_main.py``) so the
+test suite runs on Linux / macOS
 CI hosts that have no ``schtasks.exe`` or ``sc.exe`` on PATH.
 """
 from __future__ import annotations
@@ -639,8 +639,7 @@ class TestRunWithTimeoutHidesConsoleWindow:
     per-user Scheduled Task (no parent console). Without
     ``CREATE_NO_WINDOW``, each schtasks / sc invocation pops a
     transient console window into the user's session on every
-    post-pair restart, ``fetch-trust-key``, and ``re-pair``
-    invocation. The flag is OS-conditional via the module-level
+    post-pair restart and ``re-pair`` invocation. The flag is OS-conditional via the module-level
     ``_WINDOWS_NO_WINDOW`` constant (``CREATE_NO_WINDOW`` on win32,
     ``0`` elsewhere).
     """

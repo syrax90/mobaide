@@ -14,8 +14,8 @@ send the token in a header instead of the URL.
 Routing is all this layer does — whether a hook becomes a user-visible alert is
 :mod:`mobaide.core.attention_gate`'s decision.
 
-Security: the agent binds ``0.0.0.0``, so this endpoint is guarded by a loopback
-source check **and** the per-agent token. It carries no auth dependency on
+Security: this endpoint is guarded by a loopback source check **and** the
+per-agent token, also when a test stack binds another address. It carries no auth dependency on
 purpose — the only intended caller is the local ``claude`` child process, which
 cannot present a user JWT. Handlers stay non-blocking (look-up + in-memory
 enqueue, then 200) so a ``Stop`` or ``PreToolUse`` hook — which blocks Claude
@@ -41,9 +41,9 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
-# request.client.host values that count as same-host. The agent binds IPv4
-# 0.0.0.0, so the local child connects as 127.0.0.1; the IPv6 forms are
-# defensive for hosts that resolve loopback differently.
+# request.client.host values that count as same-host. The local child
+# connects as 127.0.0.1; the IPv6 forms are defensive for hosts that resolve
+# loopback differently.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
 
 

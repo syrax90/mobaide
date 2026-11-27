@@ -52,8 +52,6 @@ import com.mobaide.app.data.network.dto.ScrollbackResponse
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.StartScanRequest
 import com.mobaide.app.data.network.dto.StopScanRequest
-import com.mobaide.app.data.network.dto.TokenRequest
-import com.mobaide.app.data.network.dto.TokenResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
 import com.mobaide.app.data.network.dto.VoiceCleanupRequest
 import com.mobaide.app.data.network.dto.VoiceCleanupResponse
@@ -105,16 +103,6 @@ class RestApi(
 
     private fun baseUrl(): String = tokenStore.getEffectiveBaseUrl()
         ?: throw IllegalStateException("Agent URL not configured")
-
-    suspend fun login(agentUrl: String, username: String, password: String): TokenResponse {
-        val body = json.encodeToString(TokenRequest(username, password))
-            .toRequestBody(jsonMediaType)
-        val request = Request.Builder()
-            .url("${agentUrl.trimEnd('/')}/api/auth/token")
-            .post(body)
-            .build()
-        return execute(request)
-    }
 
     suspend fun forceAgentUpdate(): ForceUpdateResponse {
         val body = "".toRequestBody(jsonMediaType)

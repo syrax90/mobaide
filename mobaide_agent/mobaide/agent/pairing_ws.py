@@ -2,7 +2,8 @@
 
 Connects to the central server's ``WS /ws/pairing/{nonce}``, awaits the
 signed credential push, validates the Ed25519 signature against the
-pinned trust public key, and returns the parsed claim. The atomic .env
+trusted keys (the pinned release key and the relay pairing keys that a
+signed manifest listed), and returns the parsed claim. The atomic .env
 write is the caller's responsibility — this module is concerned only
 with transport + verification.
 
@@ -26,21 +27,19 @@ that want one-shot semantics (CLI ``pair-qr --wait``, tests).
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import json
 import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from collections.abc import Sequence
 from typing import AsyncIterator
 from urllib.parse import SplitResult, urlsplit
 
 import websockets
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from mobaide.manifest_signing import canonical_json
+from mobaide.manifest_signing import ManifestSignatureError, verify_signature_any
 
 logger = logging.getLogger(__name__)
 
@@ -79,16 +78,6 @@ class PairingClaim:
     relay_url: str
     agent_friendly_name: str
     issued_at: str
-
-
-def _verify_signature(
-    payload: dict, signature_b64: str, trust_pub_key_b64: str
-) -> None:
-    """Ed25519-verify the canonical JSON of ``payload``."""
-    pub_bytes = base64.b64decode(trust_pub_key_b64, validate=True)
-    pub_key = Ed25519PublicKey.from_public_bytes(pub_bytes)
-    sig = base64.b64decode(signature_b64, validate=True)
-    pub_key.verify(sig, canonical_json(payload))
 
 
 def _normalised_port(parts: SplitResult) -> int | None:
@@ -246,7 +235,7 @@ class PairingWsClient:
         self,
         ws_url: str,
         timeout_s: float,
-        trust_pub_key_b64: str,
+        trust_pub_keys_b64: Sequence[str],
         expected_relay_url: str,
     ) -> PairingClaim:
         """One-shot: connect, await ``"ready"``, await the push, validate.
@@ -259,7 +248,7 @@ class PairingWsClient:
         async with self.connect(ws_url) as conn:
             return await conn.wait_for_claim(
                 timeout_s=timeout_s,
-                trust_pub_key_b64=trust_pub_key_b64,
+                trust_pub_keys_b64=trust_pub_keys_b64,
                 expected_relay_url=expected_relay_url,
             )
 
@@ -274,7 +263,7 @@ class PairingWsClient:
 
     @classmethod
     def _parse_and_verify(
-        cls, push: object, *, trust_pub_key_b64: str, expected_relay_url: str
+        cls, push: object, *, trust_pub_keys_b64: Sequence[str], expected_relay_url: str
     ) -> PairingClaim:
         if not isinstance(push, dict):
             raise PairingWsError("push frame is not a JSON object")
@@ -288,8 +277,8 @@ class PairingWsClient:
 
         unsigned = {k: v for k, v in push.items() if k != "signature_b64"}
         try:
-            _verify_signature(unsigned, signature_b64, trust_pub_key_b64)
-        except (InvalidSignature, ValueError) as exc:
+            verify_signature_any(unsigned, signature_b64, trust_pub_keys_b64)
+        except ManifestSignatureError as exc:
             raise PairingWsError(
                 f"signature verification failed: {exc}"
             ) from exc
@@ -351,7 +340,7 @@ class PairingWsConnection:
         self,
         *,
         timeout_s: float,
-        trust_pub_key_b64: str,
+        trust_pub_keys_b64: Sequence[str],
         expected_relay_url: str,
     ) -> PairingClaim:
         """Wait for the signed claim push, validate, and return the parsed claim."""
@@ -404,7 +393,7 @@ class PairingWsConnection:
 
         claim = PairingWsClient._parse_and_verify(
             push,
-            trust_pub_key_b64=trust_pub_key_b64,
+            trust_pub_keys_b64=trust_pub_keys_b64,
             expected_relay_url=expected_relay_url,
         )
         logger.info(

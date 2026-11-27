@@ -65,11 +65,9 @@ def compute_trust_key_fp(public_key_b64: str) -> str:
 def read_pinned_trust_key_fp(layout) -> str | None:
     """Return the fingerprint of the locally pinned trust public key.
 
-    Returns ``None`` if the agent has not yet been bootstrapped via
-    ``mobaide-agent fetch-trust-key`` (or the equivalent install-script
-    step). The ``pair-qr`` flow is fail-closed: without a pinned key
-    we cannot verify the server's response signature and refuse to
-    proceed.
+    Returns ``None`` when the install scripts have not pinned a key. The
+    ``pair-qr`` flow is fail-closed: without a pinned key we cannot verify
+    the server's response signature and refuse to proceed.
     """
     pub_key_b64 = read_trust_public_key(layout)
     if not pub_key_b64:

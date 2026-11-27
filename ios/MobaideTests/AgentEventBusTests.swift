@@ -160,7 +160,9 @@ final class AgentEventBusTests: XCTestCase {
         await bus.start()
 
         let connection = try await transportFactory.connection(1)
-        XCTAssertTrue(connection.url.absoluteString.hasPrefix("wss://agent.example.com/ws/events?token="))
+        XCTAssertTrue(
+            connection.url.absoluteString.hasPrefix("wss://relay.example.com/relay/ws/events/agent-1?token=")
+        )
 
         // Initial burst immediately after open must not be lost
         // (consumer attaches before connect).
@@ -197,13 +199,16 @@ final class AgentEventBusTests: XCTestCase {
 
     func testStartsOnTransitionToFullyConnectedAndStopsOnDemotion() async throws {
         let harness = SessionHarness(userLoggedIn: true)
-        harness.tokenStore.saveAgentUrl("https://agent.example.com")
         let transportFactory = FakeWebSocketTransportFactory()
         let bus = makeBus(harness: harness, transportFactory: transportFactory)
         let states = StreamCollector(bus.connectionStates())
 
         await bus.start()
-        harness.tokenStore.saveTokens(
+        harness.tokenStore.saveRelayCredentials(
+            serverUrl: "https://relay.example.com",
+            agentId: "agent-1",
+            pairingId: "agent-1",
+            deviceId: "device-1",
             accessToken: TestJWT.token(exp: Int64(Date().timeIntervalSince1970) + 3600),
             refreshToken: "r"
         )

@@ -3,7 +3,7 @@
 Voice input lets a user dictate into a session. The app or browser records the microphone, and one of two engines turns the audio into text. The user chooses the engine for each agent:
 
 - **Mobaide Cloud** (recommended, preselected in the chooser). The client uploads the recording to the central server, which has a hosted speech service transcribe it. Nothing is installed on the computer. See [Cloud voice input](#cloud-voice-input).
-- **On this computer.** The client streams the audio to the user's own agent: through the relay, or directly when a phone uses direct-connection mode. The agent transcribes it on that computer with NVIDIA Parakeet TDT 0.6B v3.
+- **On this computer.** The client streams the audio to the user's own agent: through the relay. The agent transcribes it on that computer with NVIDIA Parakeet TDT 0.6B v3.
 
 The text lands in the composer (mobile) or a review field (web).
 
@@ -185,7 +185,7 @@ An opt-in, per-agent setting, off by default: **Clean up dictated text with the 
   - The browser prompts the first time; when denied, the app shows per-browser instructions.
   - Only the SPA origin allows `microphone=(self)` (both Caddyfiles); central_server pages keep `microphone=()` (docs/deployment.md).
   - The AudioWorklet is a static same-origin file, because the CSP is `script-src 'self'` with no `blob:`.
-- **Privacy policy** (`central_server/legal/privacy.md` §3.4, §3.7, §3.9, §4): for on-computer voice, audio is used only while dictating, sent over TLS to the user's own agent (relayed in memory, or directly in mobile direct-connection mode), never stored or logged. §3.9 covers Mobaide Cloud: the audio is not stored, and the speech service keeps the recognised text for up to 14 days to stop abuse. The opt-in transcript cleanup above is the one path where the text leaves the computer, through the session's own AI agent (Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie or Pi); §3.4 and §6 say so. The public `/voice-input` page says so too (*Where your voice goes* and the FAQ).
+- **Privacy policy** (`central_server/legal/privacy.md` §3.4, §3.7, §3.9, §4): for on-computer voice, audio is used only while dictating, sent over TLS to the user's own agent (relayed in memory), never stored or logged. §3.9 covers Mobaide Cloud: the audio is not stored, and the speech service keeps the recognised text for up to 14 days to stop abuse. The opt-in transcript cleanup above is the one path where the text leaves the computer, through the session's own AI agent (Claude Code, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie or Pi); §3.4 and §6 say so. The public `/voice-input` page says so too (*Where your voice goes* and the FAQ).
 
 ## Release checklist (manual steps)
 

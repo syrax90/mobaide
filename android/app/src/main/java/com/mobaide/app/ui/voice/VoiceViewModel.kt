@@ -138,11 +138,10 @@ class VoiceViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     private val sessionId: String? = savedStateHandle["sessionId"]
-    private val agentKey: String? = tokenStore.getAgentId() ?: tokenStore.getAgentUrl()
+    private val agentKey: String? = tokenStore.getAgentId()
 
-    /** The agent as the account holds it; null in direct-connection mode, which has no cloud voice input. */
-    private val cloudAgentId: String? =
-        tokenStore.getAgentId().takeIf { tokenStore.getConnectionMode() == TokenStore.ConnectionMode.RELAY }
+    /** The agent as the account holds it. */
+    private val cloudAgentId: String? = agentKey
 
     private val capabilityState = MutableStateFlow(CapabilityProbe())
     private val controllerState = MutableStateFlow<DictationState>(DictationState.Idle)
