@@ -3218,7 +3218,8 @@ class ChatSession:
         """Raise the attention again when the request a notification can
         answer changes while the session keeps waiting, so the request left
         after an answer gets an alert of its own. A change to none only
-        refreshes the session row: clients drop the stale actions."""
+        refreshes the session row: a shown alert keeps its actions, which
+        answer their own request by id."""
         if self._attention != "awaiting_permission" or not self._requests:
             return
         key = self._attention_request_id()
