@@ -1538,8 +1538,9 @@ class PiChatSpec(_ChatSpecBase):
         if options.code_mode and self._fixed_command() is None:
             # Before the worktree, like the missing-binary check.
             await self._launcher.check_code_mode_version(env)
-            # The bridge passes these on to every ``pi`` it starts.
-            argv = [*argv, *PI_CODE_MODE_ARGS]
+            # The bridge passes these on to every ``pi`` session it starts,
+            # and not to ``pi auth check``, which would refuse them.
+            argv = [*argv, pi_bridge.SESSION_OPTIONS_SEPARATOR, *PI_CODE_MODE_ARGS]
         cwd = await self._launcher.resolve_cwd(target, options)
         return ChatLaunchPlan(
             argv=argv,
