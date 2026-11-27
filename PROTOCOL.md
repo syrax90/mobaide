@@ -125,6 +125,24 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-27: fork a chat
+
+Additive delta within proto-v7 (2026-11-27): **one chat state key, one optional agent item field, one chat command. No version bump; `central_server` is untouched.**
+
+| Where | Change |
+|-------|--------|
+| State key `fork` | `{chat, at_answer}`. `chat` is `true` when the agent advertises `loadSession`, `sessionCapabilities.fork` and `sessionCapabilities.close`. `at_answer` is `true` only when `chat` is and the agent is known to read the fork point: Claude Code and Codex. OpenCode advertises `fork` and copies the whole conversation whatever the point. An older agent sends no key: clients offer no fork. |
+| `agent` item field `fork_point` | `true` on the final answer of a finished turn while `fork.at_answer` is `true`: the last item of the turn's main flow (no thought, tool call or subagent card after it; a subagent's own tool calls do not count) with an ACP `messageId`. Set when the turn ends with `end_turn` (not on a stopped or failed turn); in a `session/load` replay, on the last answer before each user message (not before Claude Code's "[Request interrupted by user" marker) and at the end of the replay (not while another app runs a turn). A replay carries no stop reason: after a reload, the answer of a stopped Codex turn or of a failed turn can be a fork point. A Restart that cannot reload the conversation drops every `fork_point`. Absent = `false`. |
+| `'c'` command `fork` | `item_id?`. Without `item_id`: a copy of the whole conversation. With it: the conversation up to that answer (an `agent` item with `fork_point`). `data: {session_id, session}`, `session` being the new session's row as `sessions.changed` sends it, so a client can open it before its list has it. |
+
+* The PC agent sends `session/fork` (unstable ACP) on the chat's own connection with `cwd`, `mcpServers: []` and the chat's `additionalDirectories`. For an answer it adds `_meta.jetbrains.air.fork: {version: 1, messageId, messageFingerprint: "sha256:<hex of the item text>", messageOccurrence}`, the JetBrains (AIR) field both pinned adapters read: claude-agent-acp keeps the transcript up to that message, codex-acp up to the end of the turn that holds it. `messageOccurrence` counts the agent messages with the same text up to this one (1-based); the adapters use it with the fingerprint when the id does not match. The fork point code is in `mobaide/acp/fork.py`: clients name Mobaide item ids only, so a later move to ACP session cursors changes no client.
+* Then `session/close` of the new ACP session on the same connection: claude-agent-acp starts the fork it makes, and two processes must not write one conversation. Then a new chat session opens it with `session/load`, as Continue a session does: the same kind, workspace, folder (a worktree too, never a new one), extra folders and options, the source's config values in use (required ones stay required), no trust question. Live Codex chats fork on the shared app-server; closing the new thread stops no turn of another app.
+* Refused: "Wait for the turn to end, or stop it, then fork the chat." while a turn runs (also another app's), "Wait for the chat to start, then try again." while it starts, "The agent is not running. Use Restart to start it again." in `error`, "Send a message first: there is nothing to fork yet." for an empty chat, "This answer can no longer be used as a fork point. Pick the last answer of a finished turn." for an unknown item, one without `fork_point`, or an agent error `-32602` for the point. A fork in flight refuses a second one and `new_conversation`; a `prompt` meanwhile queues. After 20 s the command fails ("The agent did not make the fork in time. A copy may still appear in Continue a session in New session."); the PC agent still waits for that fork and closes its copy, and refuses a new fork until it ends. When the new chat cannot open, the error says the copy is saved and Continue a session opens it.
+* The new chat's title starts with "Fork: " (also titles the agent sends), so the sessions list tells it apart from its source even when it cuts a long title; `new_conversation` in it drops the prefix.
+* The new chat compares its replay with the chosen answer: when the last replayed `agent` text differs, it adds a `warning` notice "The fork may hold more of the conversation than you chose".
+* Files on the PC are not rewound: both chats work in the same folder.
+* Clients show **Fork from here** on an `agent` item with `fork_point` while `fork.at_answer` is `true`, and **Fork chat** in the chat menu while `fork.chat` is `true`. Both are enabled only while `status` is `ready` (Fork chat also needs a `user` or `agent` item). Each asks first, shows "Forking the chat…" in the status line while the command runs, then opens the new session and makes it the last-used one. Older clients ignore the key and the field, and never send the command.
+
 ### Delta 2026-11-27: suggested next prompt in chat
 
 Additive delta within proto-v7 (2026-11-27): **one chat state key. No version bump; `central_server` is untouched.**
@@ -858,6 +876,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `restart` | — | After a failure: respawns the agent and reloads the conversation (new epoch). |
 | `new_conversation` | — | Starts an empty conversation with the same settings in a new agent process (new epoch) (Delta 2026-11-18). |
 | `cancel_subagent` | `subagent_id` | Stops one subagent; the turn goes on (Delta 2026-11-25). |
+| `fork` | `item_id?` | Copies the conversation, all of it or up to that answer, into a new chat session (Delta 2026-11-27 "fork a chat"). |
 | `sign_in` | `action` (`start` + `method`, `submit` + `value`, `cancel`) | Drives the `sign_in` request (Delta 2026-11-11 "sign-in from the chat"). |
 
 | Frame `t` | Fields | Client action |
@@ -866,8 +885,8 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | `events` | `epoch`, `seq`, `events[]` with own `seq` | Apply in order: `item` (upsert by `id`), `append` (add `text` to an item), `remove` (drop the item with that `id`; an unknown `id` is a no-op), `state` (shallow-merge `patch`). Skip an unknown event type but count its `seq`. On a gap or another epoch, send `sync`. |
 | `result` | `id`, `ok`, `data?`, `error?` | Resolve the command with that `id`; ignore others. |
 
-* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`, `steering` (Delta 2026-11-08), `background` (Delta 2026-11-16), `new_conversation` (Delta 2026-11-18), `limit_wait` (Delta 2026-11-21), `prompt_suggestions` (Delta 2026-11-27).
-* Item types: `user`, `agent`, `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`, `subagent` (Delta 2026-11-25). Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
+* State keys: `status`, `error`, `agent`, `title`, `cwd`, `acp_session_id`, `config`, `commands`, `usage`, `plan`, `requests`, `queue`, `prompt_caps`, `turn_started_at`, `cancelling`, `steering` (Delta 2026-11-08), `background` (Delta 2026-11-16), `new_conversation` (Delta 2026-11-18), `limit_wait` (Delta 2026-11-21), `prompt_suggestions` (Delta 2026-11-27), `fork` (Delta 2026-11-27 "fork a chat").
+* Item types: `user`, `agent` (`fork_point`: Delta 2026-11-27 "fork a chat"), `thought`, `tool`, `notice`, `compaction`, `turn_end`, `error`, `subagent` (Delta 2026-11-25). Tool content parts: `text`, `diff` (a unified diff the agent computes), `image`, `link`, `resource`, `terminal`.
 * Bounds: text parts 32 KB, message texts 256 KB, diffs 48 KB / 1 200 lines, a snapshot ~2 MB (`truncated` marks dropped older items).
 * Attention works as for terminal sessions: a pending request raises `awaiting_permission`, a finished turn `turn_finished`, an agent exit `ended` (`exit_reason: process_exited`). A Claude chat raises `turn_finished` from Claude Code hooks (Delta 2026-11-15). An RPC error on the user's own prompt raises `turn_failed` (not after Stop, not on process death, not when a queued prompt starts next, not when a usage-limit wait is armed (Delta 2026-11-21)).
 
@@ -877,6 +896,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 |-------------|----------|
 | `initialize` | Client capabilities `session.notices`, `session.compaction`, `session.configOptions.boolean`, `elicitation.form`; `subagents` for Claude, Codex and Cursor (Delta 2026-11-25). No `fs` or `terminal`: the agent already works on the host. |
 | `session/new`, `session/load`, `session/list`, `session/close` | Create, continue (with history replay), list, close. |
+| `session/fork` (unstable) | Fork a chat (Delta 2026-11-27 "fork a chat"). |
 | `session/prompt`, `session/cancel`, `session/update` | Turns and the timeline. |
 | `session/set_config_option`, `session/set_mode` | Mode, model, effort and other options. |
 | `session/request_permission`, `elicitation/create` (form) | Approval cards and question forms (Claude's AskUserQuestion). |

@@ -72,6 +72,8 @@ class ChatFramesFixtureTest {
         "sign_in_cancel" to { id -> ChatProtocol.signInCancel(id) },
         "new_conversation" to { id -> ChatProtocol.newConversation(id) },
         "cancel_subagent" to { id -> ChatProtocol.cancelSubagent(id, "sess-7f2a-agent-1") },
+        "fork_chat" to { id -> ChatProtocol.fork(id, null) },
+        "fork_at_answer" to { id -> ChatProtocol.fork(id, "m:4") },
     )
 
     private fun sync(id: String, request: ChatSyncRequest): JsonObject = when (request) {
@@ -421,6 +423,51 @@ class ChatFramesFixtureTest {
         assertEquals(60L, started.seq)
         assertEquals(ChatStatus.RUNNING, started.state.status)
         assertEquals(emptyList<String>(), started.state.promptSuggestions)
+    }
+
+    @Test
+    fun forkEvents_offerTheForksAndMarkTheAnswer_andTheResultNamesTheNewSession() {
+        val reducer = loaded()
+        // The snapshot is from an agent without fork: it offers none.
+        assertFalse(reducer.timeline!!.state.forkChat)
+        assertFalse(reducer.timeline!!.state.forkAtAnswer)
+        assertFalse((reducer.timeline!!.items.single { it.id == "m:3" } as ChatItem.Agent).forkPoint)
+        reducer.apply(batch())
+        for (name in listOf(
+            "events_remove",
+            "events_sign_in",
+            "events_background_cleared",
+            "events_limit_wait",
+            "events_limit_wait_cleared",
+            "events_subagent_running",
+            "events_subagent_done",
+            "events_prompt_suggestions",
+        )) {
+            reducer.apply(server(name) as ChatFrame.Events)
+        }
+
+        val reduction = reducer.apply(server("events_fork") as ChatFrame.Events)
+
+        assertNull(reduction.sync)
+        val timeline = reducer.timeline!!
+        assertEquals(62L, timeline.seq)
+        assertTrue(timeline.state.forkChat)
+        assertTrue(timeline.state.forkAtAnswer)
+        assertEquals(
+            ChatItem.Agent("m:4", "Fixed: the token is now checked before the redirect.", forkPoint = true),
+            timeline.items.single { it.id == "m:4" },
+        )
+
+        val data = (server("result_fork") as ChatFrame.Result).data!!
+        val forked = ChatProtocol.forkResult(data)!!
+        assertEquals("5e0c7a9b21f4", forked.sessionId)
+        assertEquals("5e0c7a9b21f4", forked.session?.session_id)
+        assertTrue(forked.session!!.isChat)
+        // A row of another session is not the new one's: the client opens the id alone.
+        val row = data["session"] as JsonObject
+        val otherRow = JsonObject(data + ("session" to JsonObject(row + ("session_id" to JsonPrimitive("other")))))
+        assertEquals(ChatForkResult("5e0c7a9b21f4", null), ChatProtocol.forkResult(otherRow))
+        assertNull(ChatProtocol.forkResult(JsonObject(mapOf("session" to row))))
     }
 
     @Test

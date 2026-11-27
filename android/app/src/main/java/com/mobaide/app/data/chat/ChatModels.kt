@@ -226,7 +226,8 @@ sealed interface ChatItem {
         val attachments: List<ChatAttachment>,
     ) : ChatItem
 
-    data class Agent(override val id: String, val text: String) : ChatItem
+    /** [forkPoint]: the final answer of a finished turn, which `fork` can keep the chat up to. */
+    data class Agent(override val id: String, val text: String, val forkPoint: Boolean = false) : ChatItem
 
     data class Thought(override val id: String, val text: String) : ChatItem
 
@@ -315,6 +316,10 @@ data class ChatState(
     val newConversation: Boolean = false,
     // The prompts the agent predicts the user sends next, most likely first.
     val promptSuggestions: List<String> = emptyList(),
+    // The agent takes `fork` of the whole chat, and at an answer marked `fork_point`;
+    // an older one leaves the key out.
+    val forkChat: Boolean = false,
+    val forkAtAnswer: Boolean = false,
 )
 
 /** Lenient decoding of the agent's JSON: a malformed field never drops its whole frame. */
@@ -366,6 +371,8 @@ internal object ChatJson {
         promptSuggestions = obj.objects("prompt_suggestions").mapNotNull { suggestion ->
             suggestion.str("text")?.takeIf { it.isNotBlank() }
         },
+        forkChat = obj.obj("fork")?.bool("chat") == true,
+        forkAtAnswer = obj.obj("fork")?.bool("at_answer") == true,
     )
 
     private fun planEntry(entry: JsonObject): ChatPlanEntry? {
@@ -508,7 +515,11 @@ internal object ChatJson {
                     }
                 },
             )
-            "agent" -> ChatItem.Agent(id = id, text = obj.str("text").orEmpty())
+            "agent" -> ChatItem.Agent(
+                id = id,
+                text = obj.str("text").orEmpty(),
+                forkPoint = obj.bool("fork_point") == true,
+            )
             "thought" -> ChatItem.Thought(id = id, text = obj.str("text").orEmpty())
             "tool" -> ChatItem.Tool(
                 id = id,

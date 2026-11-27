@@ -132,6 +132,12 @@ final class SessionRepository {
         return response
     }
 
+    /// A session the agent created for this client (a forked chat), published
+    /// like a created session before the client opens it.
+    func noteCreatedSession(_ session: SessionResponse) {
+        upsert(session)
+    }
+
     /// Opens the terminal session that installs the GitHub CLI or signs it in
     /// for Auto Scan, published like a created session.
     func createGitHubSetupSession(workspaceName: String, action: GitHubSetupAction) async throws -> SessionResponse {

@@ -67,6 +67,10 @@ export interface ChatViewState {
   restarting: boolean;
   /** A `new_conversation` is waiting for its result. */
   startingNew: boolean;
+  /** A `fork` is waiting for its result. */
+  forking: boolean;
+  /** The answer that fork keeps the chat up to; null for the whole chat. */
+  forkingItemId: string | null;
   timeline: ChatTimeline;
   /** Config values set here and not yet confirmed by the agent's state. */
   overrides: Readonly<Record<string, string | boolean>>;
@@ -96,6 +100,8 @@ function initialView(): ChatViewState {
     gone: false,
     restarting: false,
     startingNew: false,
+    forking: false,
+    forkingItemId: null,
     timeline: INITIAL_CHAT_TIMELINE,
     overrides: {},
     draftImages: [],
@@ -141,6 +147,7 @@ export class ChatSessionModel {
   private cancelSettle: (() => void) | null = null;
   private restartInFlight: Promise<ChatResult> | null = null;
   private newConversationInFlight: Promise<ChatResult> | null = null;
+  private forkInFlight: Promise<ChatResult> | null = null;
 
   constructor(agentId: string, sessionId: string, options: ChatSessionModelOptions = {}) {
     this.agentId = agentId;
@@ -286,6 +293,25 @@ export class ChatSessionModel {
       return result;
     });
     this.newConversationInFlight = done;
+    return done;
+  }
+
+  /**
+   * Copy the conversation into a new chat session: all of it, or up to the
+   * answer `itemId`. This chat stays as it is. A second call while one is in
+   * flight shares its result instead of sending again.
+   */
+  fork(itemId?: string): Promise<ChatResult> {
+    if (this.forkInFlight !== null) return this.forkInFlight;
+    this.patch({ forking: true, forkingItemId: itemId ?? null });
+    const done = this.command(itemId === undefined ? { op: 'fork' } : { op: 'fork', item_id: itemId }).then(
+      (result) => {
+        this.forkInFlight = null;
+        this.patch({ forking: false, forkingItemId: null });
+        return result;
+      },
+    );
+    this.forkInFlight = done;
     return done;
   }
 

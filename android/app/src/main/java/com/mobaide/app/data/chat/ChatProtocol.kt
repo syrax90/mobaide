@@ -1,5 +1,6 @@
 package com.mobaide.app.data.chat
 
+import com.mobaide.app.data.network.dto.SessionResponse
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -36,6 +37,9 @@ sealed interface ChatFrame {
     data class Result(val id: String, val ok: Boolean, val data: JsonObject?, val error: String?) : ChatFrame
 }
 
+/** A successful `fork`: the new session, with its row when the agent sent a readable one. */
+data class ChatForkResult(val sessionId: String, val session: SessionResponse?)
+
 /** An image ready for a `prompt` command: base64 without a `data:` prefix. */
 data class ChatImagePayload(val mime: String, val data: String)
 
@@ -48,6 +52,9 @@ object ChatProtocol {
     const val TYPE_FRAME: Byte = 'a'.code.toByte()
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    // The REST session decoder's settings: an unknown or null field keeps its default.
+    private val sessionJson = Json { ignoreUnknownKeys = true; coerceInputValues = true }
 
     fun encode(command: JsonObject): ByteString =
         Buffer().writeByte(TYPE_COMMAND.toInt()).write(command.toString().encodeUtf8()).readByteString()
@@ -85,6 +92,22 @@ object ChatProtocol {
     fun restart(id: String): JsonObject = op(id, "restart")
 
     fun newConversation(id: String): JsonObject = op(id, "new_conversation")
+
+    /** Copy the conversation into a new chat: all of it, or up to the answer [itemId]. */
+    fun fork(id: String, itemId: String?): JsonObject = buildJsonObject {
+        put("id", id)
+        put("op", "fork")
+        if (itemId != null) put("item_id", itemId)
+    }
+
+    /** The `data` of a successful `fork`, or null when it names no session. */
+    fun forkResult(data: JsonObject?): ChatForkResult? {
+        val sessionId = data?.str("session_id")?.takeIf { it.isNotEmpty() } ?: return null
+        val session = data.obj("session")?.let { row ->
+            runCatching { sessionJson.decodeFromJsonElement(SessionResponse.serializer(), row) }.getOrNull()
+        }?.takeIf { it.session_id == sessionId }
+        return ChatForkResult(sessionId, session)
+    }
 
     /** Stop one subagent; the parent's turn goes on. */
     fun cancelSubagent(id: String, subagentId: String): JsonObject = buildJsonObject {

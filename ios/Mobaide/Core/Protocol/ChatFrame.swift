@@ -31,6 +31,7 @@ struct ChatCommand: Encodable, Equatable, Sendable {
     var queue_id: String?
     var method: String?
     var subagent_id: String?
+    var item_id: String?
 
     var encoded: Data {
         let body = (try? WireJSON.encoder().encode(self)) ?? Data("{}".utf8)
@@ -82,6 +83,11 @@ struct ChatCommand: Encodable, Equatable, Sendable {
     /// Starts an empty conversation with the same folder and settings.
     static func newConversation(id: String) -> ChatCommand {
         ChatCommand(id: id, op: "new_conversation")
+    }
+
+    /// Copies the conversation into a new chat: all of it, or up to the answer `itemId`.
+    static func fork(id: String, itemId: String?) -> ChatCommand {
+        ChatCommand(id: id, op: "fork", item_id: itemId)
     }
 
     static func signInStart(id: String, method: String) -> ChatCommand {
@@ -161,6 +167,25 @@ struct ChatResultFrame: Sendable, Equatable {
     let ok: Bool
     let data: JSONValue?
     let error: String?
+}
+
+/// A successful `fork`: the new session, with its row when the agent sent a readable one.
+struct ChatForkResult: Sendable, Equatable {
+    let sessionId: String
+    let session: SessionResponse?
+
+    /// The `data` of a `fork` result; nil when it names no session.
+    init?(data: JSONValue?) {
+        guard case .object(let fields)? = data, case .string(let id)? = fields["session_id"], !id.isEmpty else {
+            return nil
+        }
+        sessionId = id
+        let row = fields["session"].flatMap { value -> SessionResponse? in
+            guard let bytes = try? WireJSON.encoder().encode(value) else { return nil }
+            return try? WireJSON.decoder().decode(SessionResponse.self, from: bytes)
+        }
+        session = row?.session_id == id ? row : nil
+    }
 }
 
 enum ChatServerFrame: Sendable {

@@ -75,6 +75,8 @@ if TYPE_CHECKING:
 
 # ``resolve_before`` follows each release: dependencies resolve as they were
 # then, not to whatever a range matches on the day a PC first installs.
+# A bump checks a fork at an answer again: both adapters read a vendor field
+# (``_meta.jetbrains.air.fork``, see :mod:`.fork`) that a release can drop.
 CLAUDE_ADAPTER = NpmAdapter(
     "@agentclientprotocol/claude-agent-acp", "0.110.1", "claude-agent-acp", "2026-11-24T00:00:00Z"
 )
@@ -285,6 +287,10 @@ class ChatLaunchPlan:
     # (it answers the running prompt ``end_turn`` and goes on with the same
     # reply), though ``initialize`` does not say so. Send now then uses that.
     steer_by_prompt: bool = False
+    # ``session/fork`` keeps the conversation up to a chosen answer (see
+    # :mod:`.fork`). An agent may advertise ``fork`` and still copy the whole
+    # conversation (OpenCode does): only agents known to read the point say so.
+    fork_at_answer: bool = False
 
 
 class ChatAgentSpec(Protocol):
@@ -859,6 +865,7 @@ class ClaudeChatSpec(_AdapterSpec):
             # With no terminal, Claude Code writes the log to ~/.claude/debug/.
             claude_sdk_options={"debug": True} if options.debug else {},
             subagents=True,
+            fork_at_answer=True,
         )
 
     def _claude_bin(self) -> str | None:
@@ -954,6 +961,7 @@ class CodexChatSpec(_AdapterSpec):
                 codex_bin, spec.env, fake=fake, shared_app_server=self.live_sessions
             ),
             subagents=True,
+            fork_at_answer=True,
         )
 
     def _shared_codex_path(

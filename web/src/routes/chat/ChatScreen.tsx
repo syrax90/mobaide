@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useStore } from 'zustand';
 import { acquireChat, releaseChat, useChatStore } from '../../chat/chatStore';
 import type { ChatSessionModel } from '../../chat/chatModel';
 import { chatStatusLine, type StatusLine } from '../../chat/chatFormat';
 import { imageFilesFrom } from '../../chat/chatImages';
-import type { ChatState } from '../../chat/chatWire';
+import { parseForkResult, type ChatState } from '../../chat/chatWire';
 import { MenuButton, type MenuGroup } from '../../components/MenuButton';
+import { queryKeys } from '../../lib/queryKeys';
 import { useFullscreen } from '../../lib/useFullscreen';
 import { isChatSession, type SessionResponse } from '../../protocol/dto/session';
 import { chatChannelName } from '../../realtime/channels';
+import { upsertSession } from '../../realtime/sessionCache';
 import { useChatPrefsStore } from '../../stores/chatPrefsStore';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
 import { useToastStore } from '../../stores/toastStore';
 import { clearMountedTerminal, setMountedTerminal } from '../../terminal/watchedTerminal';
 import { sessionDialogLabel, sessionKindLabel, worktreeInUse } from '../sessions/sessionDisplay';
+import { terminalPath } from '../sessions/terminalPath';
 import { StopSessionDialog } from '../sessions/StopSessionDialog';
 import { useStopSession } from '../sessions/useStopSession';
 import { ConnectionOverlay } from '../terminal/ConnectionOverlay';
@@ -29,6 +33,7 @@ import { Composer, type ComposerHandle } from './Composer';
 import { ConfigChips, UsageIndicator } from './ConfigChips';
 import { PlanBar, QueueList, toastFailure } from './DockPanels';
 import { RequestDock } from './RequestCard';
+import { ForkDialog } from './ForkDialog';
 import { NewConversationDialog } from './NewConversationDialog';
 import { SessionInfoDialog } from './SessionInfoDialog';
 
@@ -121,8 +126,12 @@ function HeaderStatus({ model, title }: { model: ChatSessionModel; title: string
   const live = useStore(model.store, (view) => view.connection === 'live');
   const gone = useStore(model.store, (view) => view.gone);
   const closed = gone || state.status === 'stopped';
+  const forking = useStore(model.store, (view) => view.forking);
   const now = useNow(state.status === 'running' && state.turn_started_at !== null);
-  const line = chatStatusLine(state, live, gone, now);
+  const line: StatusLine =
+    forking && live && !closed
+      ? { text: 'Forking the chat…', tone: 'muted' }
+      : chatStatusLine(state, live, gone, now);
   return (
     <>
       <span
@@ -182,9 +191,19 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
   const [infoOpen, setInfoOpen] = useState(false);
   const [stopOpen, setStopOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  /** The fork the dialog asks about: up to an answer, or (`null`) the whole chat. */
+  const [forkAt, setForkAt] = useState<{ itemId: string | null } | null>(null);
   const [dragging, setDragging] = useState(false);
   const restarting = useStore(model.store, (view) => view.restarting);
   const startingNew = useStore(model.store, (view) => view.startingNew);
+  const forking = useStore(model.store, (view) => view.forking);
+  const hasConversation = useStore(model.store, (view) =>
+    view.timeline.items.some((item) => item.type === 'user' || item.type === 'agent'),
+  );
+  // The agent refuses a fork while a turn runs or the chat starts: say so by
+  // the disabled control, not by a refusal after the dialog.
+  const canFork =
+    live && !closed && !restarting && !startingNew && !forking && state.status === 'ready';
   const canStartNew =
     live &&
     !restarting &&
@@ -226,6 +245,56 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
       toastFailure(result, 'Could not restart the agent');
     });
   }, [model]);
+
+  const queryClient = useQueryClient();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const requestFork = useCallback((itemId: string) => {
+    setForkAt({ itemId });
+  }, []);
+  const fork = useCallback(
+    (itemId: string | null) => {
+      setForkAt(null);
+      void model.fork(itemId ?? undefined).then((result) => {
+        if (!result.ok) {
+          toastFailure(result, 'Could not fork the chat');
+          return;
+        }
+        const forked = parseForkResult(result.data);
+        if (forked === null) {
+          useToastStore.getState().show('Could not open the forked chat', 'error');
+          return;
+        }
+        // Seeded before navigating, as after a create: a synced list without
+        // the new row would read as "that session has ended".
+        const row = forked.session;
+        if (row !== null) {
+          queryClient.setQueryData<SessionResponse[]>(queryKeys.sessions(model.agentId), (current) =>
+            upsertSession(current ?? [], row),
+          );
+        }
+        void queryClient.invalidateQueries({ queryKey: queryKeys.sessions(model.agentId) });
+        if (!mounted.current) {
+          useToastStore.getState().show('Forked the chat. Open it from Sessions.', 'success');
+          return;
+        }
+        try {
+          // The chat the user goes on in, as after a create.
+          useLastSessionStore.getState().setLastUsedSession(model.agentId, forked.sessionId);
+        } catch {
+          // Storage refused; auto-resume simply will not return here.
+        }
+        // Replace, as switching sessions does: Back goes to the sessions list.
+        void navigate(terminalPath(model.agentId, forked.sessionId), { replace: true });
+      });
+    },
+    [model, navigate, queryClient],
+  );
 
   const startNew = useCallback(() => {
     setNewOpen(false);
@@ -277,6 +346,19 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
                 // Ask first only when this stops a turn or drops queued messages.
                 if (running || state.queue.length > 0) setNewOpen(true);
                 else startNew();
+              },
+            },
+          ]
+        : []),
+      ...(state.fork.chat && !closed
+        ? [
+            {
+              id: 'fork',
+              label: 'Fork chat',
+              description: 'Copy the conversation into a new chat; this one stays',
+              disabled: !canFork || !hasConversation,
+              onSelect: () => {
+                setForkAt({ itemId: null });
               },
             },
           ]
@@ -381,7 +463,13 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
           </MenuButton>
         </header>
 
-        <ChatTimelineView model={model} kindLabel={kindLabel} onRestart={restart}>
+        <ChatTimelineView
+          model={model}
+          kindLabel={kindLabel}
+          onRestart={restart}
+          onFork={state.fork.at_answer && !closed ? requestFork : undefined}
+          forkDisabled={!canFork}
+        >
           <ConnectionOverlay
             message={overlay}
             onRetry={
@@ -451,6 +539,17 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
             onConfirm={startNew}
             onCancel={() => {
               setNewOpen(false);
+            }}
+          />
+        )}
+        {forkAt !== null && (
+          <ForkDialog
+            atAnswer={forkAt.itemId !== null}
+            onConfirm={() => {
+              fork(forkAt.itemId);
+            }}
+            onCancel={() => {
+              setForkAt(null);
             }}
           />
         )}

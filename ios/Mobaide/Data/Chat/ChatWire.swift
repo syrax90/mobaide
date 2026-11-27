@@ -195,10 +195,14 @@ struct ChatItem: Identifiable, Equatable, Sendable, Decodable {
 
     let id: String
     var body: Body
+    /// An agent message that is the final answer of a finished turn: `fork`
+    /// can keep the chat up to it.
+    var forkPoint = false
 
-    init(id: String, body: Body) {
+    init(id: String, body: Body, forkPoint: Bool = false) {
         self.id = id
         self.body = body
+        self.forkPoint = forkPoint
     }
 
     init(from decoder: any Decoder) throws {
@@ -211,6 +215,7 @@ struct ChatItem: Identifiable, Equatable, Sendable, Decodable {
             body = .user(text: text, attachments: c.list(ChatAttachment.self, "attachments"))
         case "agent":
             body = .agent(text: text)
+            forkPoint = c.bool("fork_point") ?? false
         case "thought":
             body = .thought(text: text)
         case "tool":
@@ -636,6 +641,21 @@ struct ChatPromptSuggestion: Sendable, Decodable {
     let text: String
 }
 
+/// The `fork` state key: the agent forks the whole chat, and at an answer
+/// marked `fork_point`. An older agent leaves the key out.
+struct ChatForkSupport: Equatable, Sendable, Decodable {
+    var chat = false
+    var atAnswer = false
+
+    init() {}
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: ChatKey.self)
+        chat = c.bool("chat") ?? false
+        atAnswer = c.bool("at_answer") ?? false
+    }
+}
+
 /// A shallow state patch: a nil field is absent; for nullable fields an inner
 /// nil is an explicit `null`.
 struct ChatStatePatch: Sendable, Decodable {
@@ -659,6 +679,7 @@ struct ChatStatePatch: Sendable, Decodable {
     var limitWait: ChatLimitWait??
     var newConversation: Bool?
     var promptSuggestions: [String]?
+    var fork: ChatForkSupport?
 
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: ChatKey.self)
@@ -697,6 +718,7 @@ struct ChatStatePatch: Sendable, Decodable {
                 .map(\.text)
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         }
+        if c.has("fork") { fork = c.value(ChatForkSupport.self, "fork") ?? ChatForkSupport() }
     }
 }
 
@@ -726,6 +748,7 @@ struct ChatState: Equatable, Sendable {
     var newConversation = false
     /// The prompts the agent predicts the user sends next, most likely first.
     var promptSuggestions: [String] = []
+    var fork = ChatForkSupport()
 
     mutating func apply(_ patch: ChatStatePatch) {
         if let value = patch.status { status = value }
@@ -748,6 +771,7 @@ struct ChatState: Equatable, Sendable {
         if let value = patch.limitWait { limitWait = value }
         if let value = patch.newConversation { newConversation = value }
         if let value = patch.promptSuggestions { promptSuggestions = value }
+        if let value = patch.fork { fork = value }
     }
 
     /// Unknown statuses read as `ready`.

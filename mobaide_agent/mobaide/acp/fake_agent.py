@@ -74,6 +74,15 @@ prompt text picks the scenario:
 a stored session from later ``session/list`` answers of the same process;
 an unknown id gets ``-32002``.
 
+``session/fork`` (the Claude, Codex, OpenCode and Junie flavors) copies the
+messages of a session this process holds into a new one, saved under
+``MOBAIDE_FAKE_ACP_STORE`` (default: a folder in the temp dir) so that
+``session/load`` in another process replays it. With
+``_meta.jetbrains.air.fork`` the Claude flavor keeps the messages up to that
+one and the Codex flavor the turns up to the one that holds it (by message id,
+else by text fingerprint and occurrence; neither matches: ``-32602``); the
+OpenCode flavor ignores the point and copies all, as OpenCode does.
+
 While the file named by ``MOBAIDE_FAKE_ACP_SIGNED_OUT`` exists the agent is
 signed out: the Claude flavor pushes ``_auth/status_update`` and fails each
 prompt, the others fail ``session/new``. ``fake_agent.py login [--flavor F]
@@ -84,9 +93,11 @@ flavor: only the page) and finishes alone; on success it removes that file.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -194,10 +205,43 @@ PI_LEVELS = [
     for v, n in (("off", "Off"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high"))
 ]
 SIGNED_OUT_ENV = "MOBAIDE_FAKE_ACP_SIGNED_OUT"
+STORE_ENV = "MOBAIDE_FAKE_ACP_STORE"
 # The stored sessions ``session/list`` returns (the Antigravity flavor adds one).
 STORED_SESSION_IDS = frozenset({"external-1111", "external-2222", "external-3333"})
 LIMIT_RESET_ENV = "MOBAIDE_FAKE_ACP_LIMIT_RESET"
 AUTH_REQUIRED = -32000
+
+
+def store_dir() -> str:
+    return os.environ.get(STORE_ENV) or os.path.join(tempfile.gettempdir(), "mobaide-fake-acp")
+
+
+def load_stored(sid: str) -> list[dict[str, Any]] | None:
+    """The turns of a fork saved by ``session/fork``, or None."""
+    if not sid.startswith("fork-"):
+        return None
+    try:
+        with open(os.path.join(store_dir(), f"{sid}.json"), encoding="utf-8") as f:
+            turns = json.load(f).get("turns")
+    except (OSError, ValueError):
+        return None
+    return turns if isinstance(turns, list) else None
+
+
+def fork_point(turns: list[dict[str, Any]], point: dict[str, Any]) -> tuple[int, int] | None:
+    """(turn, message) of the fork point: by message id, else by the text
+    fingerprint and its 1-based occurrence, as both adapters do."""
+    places = [(t, m) for t, turn in enumerate(turns) for m in range(len(turn["messages"]))]
+    for t, m in places:
+        if turns[t]["messages"][m]["id"] == point.get("messageId"):
+            return t, m
+    fingerprint = point.get("messageFingerprint")
+    matches = [
+        (t, m) for t, m in places
+        if "sha256:" + hashlib.sha256(turns[t]["messages"][m]["text"].encode("utf-8")).hexdigest() == fingerprint
+    ]
+    occurrence = point.get("messageOccurrence") or 1
+    return matches[occurrence - 1] if isinstance(occurrence, int) and 0 < occurrence <= len(matches) else None
 
 
 def signed_out() -> bool:
@@ -273,6 +317,9 @@ class FakeAgent:
         self.prompt_suggestions = False
         # Sessions whose client holds a suggestion from this process.
         self.suggested: set[str] = set()
+        # The messages of each session this process holds, per turn:
+        # ``{"user": text, "messages": [{"id": messageId, "text": text}]}``.
+        self.history: dict[str, list[dict[str, Any]]] = {}
 
     def send(self, message: dict[str, Any]) -> None:
         data = (json.dumps(message) + "\n").encode("utf-8")
@@ -281,7 +328,62 @@ class FakeAgent:
             sys.stdout.buffer.flush()
 
     def update(self, sid: str, update: dict[str, Any]) -> None:
+        self.record(sid, update)
         self.send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": update}})
+
+    def record(self, sid: str, update: dict[str, Any]) -> None:
+        """Keep the messages a fork copies (a session's own, not a subagent's)."""
+        turns = self.history.get(sid)
+        content = update.get("content")
+        if turns is None or not isinstance(content, dict) or content.get("type") != "text":
+            return
+        kind = update.get("sessionUpdate")
+        if kind == "user_message_chunk":
+            turns.append({"user": content.get("text") or "", "messages": []})
+        elif kind == "agent_message_chunk" and turns:
+            messages = turns[-1]["messages"]
+            mid = update.get("messageId") or ""
+            if messages and messages[-1]["id"] == mid:
+                messages[-1]["text"] += content.get("text") or ""
+            else:
+                messages.append({"id": mid, "text": content.get("text") or ""})
+
+    def fork(self, params: dict[str, Any]) -> dict[str, Any]:
+        source = str(params.get("sessionId"))
+        turns = self.history.get(source)
+        if turns is None:
+            raise _RpcError(-32002, f"Session {source} not found")
+        meta = params.get("_meta")
+        air = meta.get("jetbrains", {}).get("air", {}) if isinstance(meta, dict) else {}
+        point = air.get("fork") if isinstance(air, dict) else None
+        kept = [{"user": t["user"], "messages": list(t["messages"])} for t in turns]
+        if isinstance(point, dict) and point.get("version") == 1 and not self.opencode:
+            at = fork_point(turns, point)
+            if at is None:
+                raise _RpcError(-32602, f"Fork point message {point.get('messageId')} was not found in session {source}")
+            turn, message = at
+            kept = kept[: turn + 1]
+            if not self.codex:
+                kept[turn]["messages"] = kept[turn]["messages"][: message + 1]
+        fork_id = f"fork-{uuid.uuid4().hex}"
+        os.makedirs(store_dir(), exist_ok=True)
+        with open(os.path.join(store_dir(), f"{fork_id}.json"), "w", encoding="utf-8") as f:
+            json.dump({"turns": kept}, f)
+        # Like the real adapters, the fork is open in this process too.
+        self.new_session(params.get("cwd") or os.getcwd(), sid=fork_id)
+        self.history[fork_id] = kept
+        return {"sessionId": fork_id, "configOptions": self.config(fork_id)}
+
+    async def replay_stored(self, sid: str, turns: list[dict[str, Any]]) -> None:
+        for i, turn in enumerate(turns):
+            self.update(sid, {"sessionUpdate": "user_message_chunk", "messageId": f"{sid}-u{i}",
+                              "content": {"type": "text", "text": turn["user"]}})
+            for message in turn["messages"]:
+                self.update(sid, {"sessionUpdate": "agent_message_chunk", "messageId": message["id"],
+                                  "content": {"type": "text", "text": message["text"]}})
+        title = (turns[0]["user"][:40] if turns else "") or "Forked session"
+        self.sessions[sid]["title"] = title
+        self.update(sid, {"sessionUpdate": "session_info_update", "title": title})
 
     async def call(self, method: str, params: dict[str, Any]) -> Any:
         self.next_id += 1
@@ -605,7 +707,7 @@ class FakeAgent:
                 "agentCapabilities": {
                     "loadSession": True,
                     "promptCapabilities": {"image": True, "embeddedContext": True},
-                    "sessionCapabilities": {"list": {}, "close": {}, "delete": {}, "resume": {}, "systemPrompt": {}},
+                    "sessionCapabilities": {"list": {}, "close": {}, "delete": {}, "fork": {}, "resume": {}, "systemPrompt": {}},
                 },
                 "agentInfo": info,
                 "authMethods": [],
@@ -614,6 +716,7 @@ class FakeAgent:
         if method == "session/new":
             # agy works in its own working directory, whatever ``cwd`` says.
             sid = self.new_session(os.getcwd() if self.agy else params.get("cwd") or os.getcwd())
+            self.history[sid] = []
             self.loop.call_later(0.05, self.commands, sid)
             return {"sessionId": sid, "configOptions": self.config(sid), **self.models_block(sid)}
         if method == "session/list" and self.agy:
@@ -646,10 +749,17 @@ class FakeAgent:
                 {"sessionId": "external-2222", "cwd": cwd, "title": titles[1], "updatedAt": now},
             ]
             return {"sessions": [r for r in rows if r["sessionId"] not in self.deleted]}
+        if method == "session/fork" and not (self.agy or self.copilot or self.cursor or self.pi):
+            return self.fork(params)
         if method == "session/load":
             sid = params["sessionId"]
             self.new_session(params.get("cwd") or os.getcwd(), sid=sid, title="Earlier session")
-            await self.replay(sid)
+            self.history[sid] = []
+            stored = load_stored(sid)
+            if stored is not None:
+                await self.replay_stored(sid, stored)
+            else:
+                await self.replay(sid)
             self.commands(sid)
             return {"configOptions": self.config(sid), **self.models_block(sid)}
         if method == "session/resume":
@@ -682,6 +792,9 @@ class FakeAgent:
                 return await self.agy_steer(sid, running, params.get("prompt") or [])
             self.cancelled.discard(sid)
             prompt = params.get("prompt") or []
+            if sid in self.history:
+                text = " ".join(b.get("text", "") for b in prompt if b.get("type") == "text").strip()
+                self.history[sid].append({"user": text, "messages": []})
             self.withdraw_suggestion(sid)
             task = asyncio.ensure_future(self.prompt_turn(sid, prompt))
             self.turns[sid] = task

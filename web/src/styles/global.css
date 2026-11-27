@@ -4943,6 +4943,19 @@ body:has(dialog[open]) {
   cursor: not-allowed;
 }
 
+/* Under an answer the chat can fork at: quiet until pointed at. */
+.chat-fork-button {
+  display: block;
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.25rem;
+  color: var(--text-muted);
+}
+
+.chat-fork-button:hover:not(:disabled),
+.chat-fork-button:focus-visible {
+  color: var(--accent);
+}
+
 .chat-icon-button {
   display: inline-flex;
   align-items: center;

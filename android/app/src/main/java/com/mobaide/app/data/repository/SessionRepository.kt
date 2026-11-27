@@ -81,6 +81,11 @@ class SessionRepository(
         return created
     }
 
+    /** A session the agent created for this client (a forked chat), seeded like [createSession]. */
+    fun noteCreatedSession(session: SessionResponse) {
+        _sessions.update { it.upsert(session) }
+    }
+
     private fun List<SessionResponse>.upsert(session: SessionResponse): List<SessionResponse> =
         if (any { it.session_id == session.session_id }) {
             map { if (it.session_id == session.session_id) session else it }

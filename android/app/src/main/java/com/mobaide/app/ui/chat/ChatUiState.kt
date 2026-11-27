@@ -53,6 +53,10 @@ data class ChatUiState(
     val restarting: Boolean = false,
     /** A `new_conversation` this client sent has no result yet. */
     val startingNew: Boolean = false,
+    /** A `fork` this client sent has no result yet. */
+    val forking: Boolean = false,
+    /** The answer that fork keeps the chat up to; null for the whole chat. */
+    val forkingItemId: String? = null,
     /** Queued messages with a remove or a Send now in flight. */
     val queueBusy: Set<String> = emptySet(),
     /** Subagent id → its card as it was when this client sent Stop; Stop waits while the card is unchanged. */
@@ -80,6 +84,23 @@ data class ChatUiState(
     val canStartNew: Boolean
         get() = offersNewConversation && live && !restarting && !startingNew &&
             state.status in NEW_CONVERSATION_STATUSES
+
+    /** **Fork chat** in the ⋯ menu; [canFork] says whether a fork can be sent now. */
+    val offersForkChat: Boolean
+        get() = state.forkChat && !sessionClosed
+
+    /** **Fork from here** on the answers marked `fork_point`. */
+    val offersForkAtAnswer: Boolean
+        get() = state.forkAtAnswer && !sessionClosed
+
+    /** The agent refuses a fork while a turn runs or the chat starts: the control says so by being disabled. */
+    val canFork: Boolean
+        get() = live && !sessionClosed && !restarting && !startingNew && !forking &&
+            state.status == ChatStatus.READY
+
+    /** A whole-chat fork also needs a conversation to copy. */
+    val canForkChat: Boolean
+        get() = canFork && items.any { it is ChatItem.User || it is ChatItem.Agent }
 
     /**
      * The agent's predicted next prompt, while the chat can take it now: ready,

@@ -1176,12 +1176,14 @@ class _FakeChatSession:
 
     def __init__(
         self, config, plan, *, agent_title, load_session_id=None, attention_dedupe=None,
+        fork_opener=None,
     ) -> None:
         type(self).created += 1
         self.session_id = config.session_id
         self._kind = config.kind
         self.acp_session_id = load_session_id
         self.attention_dedupe = attention_dedupe
+        self.fork_opener = fork_opener
 
     def to_info(self):
         return MagicMock(kind=self._kind)
@@ -1373,6 +1375,97 @@ class TestAgentSideChatLaunch:
             assert plan.env["PATH"] == expected
         finally:
             await mgr.shutdown()
+
+
+class _ForkRecordingChatSession(_FakeChatSession):
+    made: list = []
+
+    def __init__(self, config, plan, **kwargs) -> None:
+        super().__init__(config, plan, **kwargs)
+        self.config, self.plan = config, plan
+        type(self).made.append(self)
+
+    def to_info(self):
+        return MagicMock(session_id=self.session_id, kind=self._kind)
+
+
+class _WorktreeChatSpec:
+    """A chat agent that makes a new worktree when its options ask for one."""
+
+    display_name = "Claude Code"
+
+    def __init__(self, worktree: str) -> None:
+        self.worktree = worktree
+        self.launches: list = []
+
+    async def prepare(self, target, options):
+        from mobaide.acp.agents import ChatLaunchPlan, ConfigIntent
+
+        self.launches.append((target, options))
+        cwd = self.worktree if getattr(options, "worktree", False) else target.path
+        return ChatLaunchPlan(
+            argv=["fake-acp"], env={}, cwd=cwd, trust=object(),  # type: ignore[arg-type]
+            initial_config=[ConfigIntent("smart", option_id="model")],
+        )
+
+
+@pytest.mark.timeout(20)
+class TestChatFork:
+    async def test_a_fork_opens_in_the_worktree_of_its_chat_with_the_settings_in_use(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The fork goes on where its chat works (that worktree, never a new
+        one), on the forked conversation and with the chat's current config
+        in place of the launch choices; the folder needs no trust prompt."""
+        import mobaide.acp.session as acp_session
+        from mobaide.acp.agents import ConfigIntent
+        from mobaide.core.workspaces_config import WorkspaceConfig
+
+        _ForkRecordingChatSession.made = []
+        monkeypatch.setattr(acp_session, "ChatSession", _ForkRecordingChatSession)
+        worktree = str(tmp_path / "wt" / "feature-x")
+        spec = _WorktreeChatSpec(worktree)
+        mgr = SessionManager(
+            chat_agents={"claude": spec},
+            session_dto_factory=lambda info: {"session_id": info.session_id},
+        )
+        in_use = [ConfigIntent("fast", option_id="model", category="model")]
+        try:
+            await mgr.create_session(
+                SessionConfig(
+                    session_id="source",
+                    command=[],
+                    cwd=str(tmp_path),
+                    kind=SessionKind.CLAUDE,
+                    ui="chat",
+                    claude_options=ClaudeOptions(worktree=True, branch_name="feature/x"),
+                    chat_launch_target=WorkspaceConfig(name="app", path=str(tmp_path)),
+                    worktree_branch="feature/x",
+                )
+            )
+            [source] = _ForkRecordingChatSession.made
+
+            row = await source.fork_opener("fork-1", "sha256:abc", in_use)
+
+            [_, fork] = _ForkRecordingChatSession.made
+            assert row == {"session_id": fork.session_id}
+            assert fork.session_id != "source"
+            assert {s.session_id for s in mgr.list_sessions()} == {"source", fork.session_id}
+            target, options = spec.launches[1]
+            assert target.path == worktree
+            assert options.worktree is False
+            assert fork.config.cwd == worktree
+            assert fork.acp_session_id == "fork-1"
+            assert fork.config.chat_fork_answer == "sha256:abc"
+            assert fork.config.chat_title_prefix == "Fork: "
+            assert fork.config.kind == SessionKind.CLAUDE
+            assert fork.config.worktree_branch == "feature/x"
+            assert fork.plan.initial_config == in_use
+            assert fork.plan.trust is None
+            assert source.plan.trust is not None
+        finally:
+            await mgr.shutdown()
+
 
 
 class TestLivenessFinishedCommand:

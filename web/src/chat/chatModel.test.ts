@@ -131,6 +131,7 @@ describe('ChatSessionModel commands', () => {
   it.each([
     { op: 'restart', send: (model: Model) => model.restart(), flag: 'restarting' },
     { op: 'new_conversation', send: (model: Model) => model.newConversation(), flag: 'startingNew' },
+    { op: 'fork', send: (model: Model) => model.fork('m:4'), flag: 'forking' },
   ] as const)('a second $op while one is in flight shares its result', async ({ op, send, flag }) => {
     const { model, socket } = await harness();
 
