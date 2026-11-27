@@ -281,6 +281,10 @@ class ChatLaunchPlan:
     # subagents as child sessions (see :mod:`.subagents`). Only for an agent
     # whose child traffic the chat routes; others keep the flat tool calls.
     subagents: bool = False
+    # The agent takes a message during a turn as a second ``session/prompt``
+    # (it answers the running prompt ``end_turn`` and goes on with the same
+    # reply), though ``initialize`` does not say so. Send now then uses that.
+    steer_by_prompt: bool = False
 
 
 class ChatAgentSpec(Protocol):
@@ -1139,6 +1143,7 @@ class AntigravityChatSpec(_ChatSpecBase):
                 None if fake else self._agy_identity_path(), spec.env, fake=fake
             ),
             wakes_after_turn=True,
+            steer_by_prompt=True,
         )
 
     def _agy_identity_path(self) -> str | None:
