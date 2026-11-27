@@ -91,6 +91,25 @@ check_command() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
+check_macos_version() {
+    # The agent installs binary packages only, and its dependency lock has
+    # them from macOS 11 on. Keep the number in sync with LOCK_MACOS_MINIMUM
+    # in deploy/prod/release_agent.py.
+    [ "$PLATFORM" = "darwin" ] || return 0
+    local version major
+    version="$(sw_vers -productVersion 2>/dev/null || true)"
+    major="${version%%.*}"
+    case "$major" in
+        ''|*[!0-9]*)
+            warn "Could not read the macOS version; continuing."
+            return 0
+            ;;
+    esac
+    if [ "$major" -lt 11 ]; then
+        fail "macOS $version is too old: the Mobaide agent needs macOS 11 or newer."
+    fi
+}
+
 check_python() {
     if ! command -v python3 >/dev/null 2>&1; then
         fail "python3 is required (>= 3.12)."
@@ -1326,6 +1345,7 @@ main() {
     # bootstrap-venv cleanup.
     trap cleanup_on_exit EXIT
     detect_platform
+    check_macos_version
     require_root_when_writing_system_dir
     info "Installing mobaide_agent into $MOBAIDE_AGENT_PREFIX"
     check_command curl

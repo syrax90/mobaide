@@ -146,6 +146,7 @@ def _run_function(
     version: str = "3.12",
     only_stubs_on_path: bool = False,
     epilogue: str = "",
+    platform: str = "linux",
 ) -> subprocess.CompletedProcess[str]:
     assert _BASH is not None
     path = (
@@ -155,7 +156,7 @@ def _run_function(
     )
     harness = (
         "set -euo pipefail\n"
-        "PLATFORM=linux\n"
+        f"PLATFORM={platform}\n"
         f"MOBAIDE_AGENT_PREFIX={shlex.quote(prefix)}\n"
         f"version={version}\n"
         + _LOG_FUNCS
@@ -377,6 +378,40 @@ class TestCheckPython:
         _python3_reporting(stubs, version=version, glibc=glibc)
 
         proc = _run_function("check_python", stubs)
+
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stderr == ""
+
+
+@_POSIX_STUBS
+class TestCheckMacosVersion:
+    """The dependency lock has binary packages from macOS 11 on, and the
+    agent installs from binary packages only. The installer must stop on an
+    older macOS with the cause, not later inside pip."""
+
+    @pytest.mark.parametrize("macos", ["10.13.6", "10.15.7"])
+    def test_refuses_macos_older_than_11(self, tmp_path: Path, macos: str) -> None:
+        stubs = tmp_path / "bin"
+        _stub(stubs, "sw_vers", f"echo {macos}")
+
+        proc = _run_function("check_macos_version", stubs, platform="darwin")
+
+        assert proc.returncode != 0
+        assert f"macOS {macos}" in proc.stderr
+        assert "needs macOS 11 or newer" in proc.stderr
+
+    @pytest.mark.parametrize(
+        "macos, platform",
+        [("11.0.1", "darwin"), ("26.5.2", "darwin"), ("10.15.7", "linux")],
+        ids=["oldest-supported", "current", "not-macos"],
+    )
+    def test_accepts_macos_11_and_newer_and_other_systems(
+        self, tmp_path: Path, macos: str, platform: str
+    ) -> None:
+        stubs = tmp_path / "bin"
+        _stub(stubs, "sw_vers", f"echo {macos}")
+
+        proc = _run_function("check_macos_version", stubs, platform=platform)
 
         assert proc.returncode == 0, proc.stderr
         assert proc.stderr == ""

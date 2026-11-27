@@ -109,6 +109,15 @@ def test_every_installer_reads_the_lock_under_the_name_the_release_tool_writes()
         )
 
 
+def test_install_sh_refuses_the_macos_versions_the_wheel_check_does_not_cover() -> None:
+    """The wheel check asks for macOS wheels from ``LOCK_MACOS_MINIMUM`` on.
+    ``check_macos_version`` must refuse every older macOS."""
+    check = _sh_function_body("check_macos_version")
+    (major,) = re.findall(r'"\$major" -lt (\d+)', check)
+
+    assert ra.LOCK_MACOS_MINIMUM == f"{major}.0"
+
+
 def test_install_sh_refuses_what_the_release_wheel_check_does_not_cover() -> None:
     """For some Python versions on glibc Linux the wheel check asks only for
     a newer glibc (``LOCK_PLATFORM_FOR_PYTHON``). ``check_python`` must refuse an

@@ -147,7 +147,8 @@ def _run_main_until_staging(
     key_line = _SH_KEY_LINE_RE.search(_INSTALL_SH.read_text(encoding="utf-8"))
     assert key_line is not None
     no_ops = (
-        "cleanup_on_exit detect_platform require_root_when_writing_system_dir "
+        "cleanup_on_exit detect_platform check_macos_version "
+        "require_root_when_writing_system_dir "
         "check_command check_python ensure_ensurepip_available "
         "resolve_verifier_python"
     )

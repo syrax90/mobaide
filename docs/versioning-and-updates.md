@@ -126,7 +126,9 @@ Shared helpers live in `deploy/prod/release_common.py`.
    Re-resolves the lock against the public index and stops when a version,
    marker or hash differs. Checks that the lock has a binary wheel for 8
    platforms (macOS, Windows, Linux glibc and musl, each x86_64 and arm64) and
-   Python 3.12 to 3.15 (Python 3.15 on glibc Linux is checked for glibc 2.39).
+   Python 3.12 to 3.15. macOS is checked for macOS 11 (`LOCK_MACOS_MINIMUM`),
+   not for uv's default macOS 13. Python 3.15 on glibc Linux is checked for
+   glibc 2.39.
    Runs a trial install with the same pip flags as the agent. Puts the lock at
    the root of the tarball. A release never selects new dependency versions.
    `uv` ignores the uv settings of the machine.
@@ -985,6 +987,10 @@ the elevation re-launch re-fetches the installer from
 
    On Linux, Python 3.15 or later needs glibc 2.39 or newer. The installer
    stops with a message otherwise (musl is not affected).
+
+   On macOS, the agent needs macOS 11 or newer: the dependency lock has no
+   binary packages for older versions. `install.sh` checks this first and
+   stops with a message.
 
 5. Download tarball + wheel, verify sha256s, extract under
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv. When
