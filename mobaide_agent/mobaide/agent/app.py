@@ -401,22 +401,18 @@ def _resolve_env_file() -> Path | None:
 
     * **Prefix set** — the install layout wins: the prefix env first, then the
       developer-checkout fallback so an editable install with an unpopulated
-      prefix still boots. The POSIX service supervisors export the prefix into
+      prefix still boots. Every service supervisor exports the prefix into
       the agent's environment (systemd ``Environment=``, launchd plist
-      ``EnvironmentVariables``), so the installed agent always takes this branch.
+      ``EnvironmentVariables``, the Windows Scheduled Task supervisor
+      ``deploy/windows_launcher.py``), so the installed agent always takes
+      this branch.
     * **Prefix unset** — an uncontrolled ``python -m mobaide`` from a source
       tree. The checkout's own env wins over the OS-default install prefix, so
       a source-tree agent keeps its own identity instead of silently adopting a
       co-installed agent's ``<os-default-prefix>/mobaide_agent/.env`` — what
-      makes a dev agent valid alongside the script-installed one. The Windows
-      Scheduled Task install also lands here: it passes ``--prefix`` to the
-      launcher but does not export ``MOBAIDE_AGENT_PREFIX`` to the agent
-      process. That stays correct because every non-dev install is wheel-based
-      and ships no ``<site-packages>/.env`` for the developer candidate to
-      match, so resolution falls through to the install prefix exactly as
-      before; only an editable/source checkout has a checkout ``.env`` to
-      prefer. (Empty string counts as unset, mirroring ``default_prefix``'s
-      ``if explicit:`` check.)
+      makes a dev agent valid alongside the script-installed one. (Empty
+      string counts as unset, mirroring ``default_prefix``'s ``if explicit:``
+      check.)
 
     Returning ``None`` when both candidates miss lets pydantic-settings fall
     back to process-environment vars (which is what tests rely on).

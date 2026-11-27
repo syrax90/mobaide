@@ -266,6 +266,12 @@ def _spawn_release_launcher(
     diagnostic vanishes and operators have no way to determine why a
     pairing-pending agent never claimed its credentials.
 
+    The child gets ``MOBAIDE_AGENT_PREFIX`` set to ``prefix``: the Scheduled
+    Task passes the prefix only as ``--prefix`` argv, and without the env var
+    the launcher and agent would fall back to ``%ProgramFiles%\\MobaideAgent``,
+    so a custom-prefix install would read another install's ``.env`` and
+    releases.
+
     ``out_log`` is opened first; if the ``err_log`` open raises (disk
     full, permission denied, mid-supervise rotation race), the already-
     open ``out_log`` is closed before propagating so the supervisor
@@ -284,6 +290,7 @@ def _spawn_release_launcher(
     try:
         return subprocess.Popen(
             [str(release_python), "-m", "mobaide.launcher"],
+            env={**os.environ, "MOBAIDE_AGENT_PREFIX": str(prefix)},
             stdin=subprocess.DEVNULL,
             stdout=out_log,
             stderr=err_log,
