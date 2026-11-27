@@ -29,8 +29,8 @@ import java.io.IOException
  * Answers a chat permission from the Allow or Deny action of its alert
  * ([AttentionNotifier]) with one REST call through the current agent
  * connection. The alert goes at once, so a second tap cannot send a second
- * answer; when the answer fails, an alert says why, unless the alert of
- * another request of the session (the next one) already shows.
+ * answer; when the answer fails, an alert says why. Neither touches the
+ * alert of another request of the session (the next one) when it shows.
  *
  * Allow is refused while the device stays locked, on every Android version.
  * Android 12+ asks for the unlock itself (`setAuthenticationRequired`) but
@@ -89,7 +89,9 @@ class PermissionActionReceiver : BroadcastReceiver() {
             )
             return
         }
-        notifier.cancel(target.sessionId)
+        // A newer request's alert (raised while the unlock went on) stays.
+        val shownNow = notifier.shownRequestId(target.sessionId)
+        if (shownNow == null || shownNow == target.requestId) notifier.cancel(target.sessionId)
         val pending = goAsync()
         scope.launch {
             try {
