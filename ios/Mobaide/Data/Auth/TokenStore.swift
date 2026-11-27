@@ -1,8 +1,8 @@
 import Foundation
 
 /// Mirror of Android `TokenStore` (EncryptedSharedPreferences file
-/// "mobaide_auth"): agent-connection credentials plus the DIRECT/RELAY
-/// connection profile currently in use.
+/// "mobaide_auth"): the credentials of the agent connection currently in
+/// use.
 struct TokenStore: Sendable {
     static let service = "mobaide_auth"
 
@@ -14,6 +14,8 @@ struct TokenStore: Sendable {
     static let keyAgentId = "agent_id"
     static let keyPairingId = "pairing_id"
     static let keyDeviceId = "device_id"
+
+    private static let relayConnectionMode = "relay"
 
     /// How soon before `exp` a token counts as "expiring" (seconds).
     static let expiryLeewaySeconds: Int64 = 60
@@ -35,16 +37,6 @@ struct TokenStore: Sendable {
 
     func getRefreshToken() -> String? { keychain.string(forKey: Self.keyRefreshToken) }
 
-    func saveAgentUrl(_ url: String) {
-        keychain.set(RelayRouting.trimTrailingSlashes(url), forKey: Self.keyAgentUrl)
-    }
-
-    func getAgentUrl() -> String? { keychain.string(forKey: Self.keyAgentUrl) }
-
-    func getConnectionMode() -> ConnectionMode {
-        keychain.string(forKey: Self.keyConnectionMode) == "relay" ? .relay : .direct
-    }
-
     func saveRelayCredentials(
         serverUrl: String,
         agentId: String,
@@ -53,7 +45,7 @@ struct TokenStore: Sendable {
         accessToken: String,
         refreshToken: String
     ) {
-        keychain.set("relay", forKey: Self.keyConnectionMode)
+        keychain.set(Self.relayConnectionMode, forKey: Self.keyConnectionMode)
         keychain.set(RelayRouting.trimTrailingSlashes(serverUrl), forKey: Self.keyRelayServerUrl)
         keychain.set(agentId, forKey: Self.keyAgentId)
         keychain.set(pairingId, forKey: Self.keyPairingId)
@@ -70,34 +62,39 @@ struct TokenStore: Sendable {
 
     func getDeviceId() -> String? { keychain.string(forKey: Self.keyDeviceId) }
 
-    /// Base URL agent-scoped REST calls should use: the agent itself in
-    /// DIRECT mode, the relay's `/proxy/{agentId}` prefix in RELAY mode.
+    /// Base URL agent-scoped REST calls should use: the relay's
+    /// `/proxy/{agentId}` prefix.
     func getEffectiveBaseUrl() -> String? {
         RelayRouting.agentRESTBaseURL(
-            mode: getConnectionMode(),
-            agentURL: getAgentUrl(),
             relayServerURL: getRelayServerUrl(),
             agentId: getAgentId()
         )
     }
 
     /// Identity for per-agent local preference buckets (Android
-    /// `agentScopeKey`). The URL fallback carries DIRECT mode, where no
-    /// agent id is ever issued.
+    /// `agentScopeKey`).
     func getAgentScopeKey() -> String? {
-        getAgentId() ?? getAgentUrl()
+        getAgentId()
     }
 
-    /// Full agent credentials on file for the current mode. RELAY does not
-    /// require pairing/device ids — they only matter for re-pairing.
+    /// Full agent credentials on file. Pairing/device ids are not required —
+    /// they only matter for re-pairing.
     func isLoggedIn() -> Bool {
-        switch getConnectionMode() {
-        case .direct:
-            return getAccessToken() != nil && getRefreshToken() != nil && getAgentUrl() != nil
-        case .relay:
-            return getAccessToken() != nil && getRefreshToken() != nil
-                && getRelayServerUrl() != nil && getAgentId() != nil
-        }
+        isRelayConnection && getAccessToken() != nil && getRefreshToken() != nil
+            && getRelayServerUrl() != nil && getAgentId() != nil
+    }
+
+    /// Credentials stored without a relay connection cannot reach an agent:
+    /// they count as no connection, and this removes them.
+    func clearCredentialsWithoutRelay() {
+        guard !isRelayConnection else { return }
+        let stored = [Self.keyAgentUrl, Self.keyAccessToken, Self.keyRefreshToken]
+        guard stored.contains(where: { keychain.data(forKey: $0) != nil }) else { return }
+        clear()
+    }
+
+    private var isRelayConnection: Bool {
+        keychain.string(forKey: Self.keyConnectionMode) == Self.relayConnectionMode
     }
 
     func clear() {

@@ -89,6 +89,7 @@ Follow [`deploy/prod/bootstrap-mobaide.md`](../deploy/prod/bootstrap-mobaide.md)
    - The Cloudflare dialog pre-fills `mobaide.com, *.mobaide.com`; the wildcard must be deleted.
    - Why: a `*.mobaide.com` SAN matches SNI `app.mobaide.com`, Caddy skips ACME for it, and the SPA serves an Origin CA certificate that every browser rejects. See [TLS certificates](#tls-certificates).
 4. On your workstation: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
+5. Optional: set `RELAY_PAIRING_PRIVATE_KEY` in `/opt/mobaide/.env` (base64 of a 32-byte Ed25519 private key). The relay then serves the public half at `GET /api/v1/agent/pairing_key`; unset, the endpoint answers `{"public_key_b64": null}`. A malformed value stops the relay at start. In this step the pairing push is still signed with the manifest key. `python deploy/prod/release_agent.py --new-relay-pairing-key` prints a new key pair. See [versioning-and-updates.md](versioning-and-updates.md).
 
 ### Deploy
 
@@ -344,7 +345,7 @@ The relay never publishes its OpenAPI schema. `create_app` passes `docs_url=None
 
 Set `ENABLE_API_DOCS=1` in `/opt/mobaide/.env` to get the docs back. They are then **admin-gated**: a request must carry either the `dashboard_token` cookie from `/dashboard/login` or an admin `Authorization: Bearer` token. Everything else — anonymous callers and non-admin users alike — still gets a 404, so the flag cannot re-expose the schema publicly. Browsers work as expected: sign in at `/dashboard/login` first, then open `/docs`. The dashboard, portal, marketing routes and `POST /api/internal/agent_manifest` are excluded from the schema (`include_in_schema=False`).
 
-The agent has the same knob with the same name and the same default. It matters more there than it looks: the agent binds `0.0.0.0` so DIRECT mode works over the LAN, so stock FastAPI docs would hand its whole session/workspace/git surface to anything on the same network. Leave it off outside local development.
+The agent has the same knob with the same name and the same default. The agent listens on `127.0.0.1` only. A `HOST` in its `.env` that is not a loopback address is replaced with `127.0.0.1` (and a stored one is rewritten at start), unless `MOBAIDE_ENV=test`, which keeps the configured address. Leave the docs off outside local development.
 
 ### Security response headers
 
@@ -713,10 +714,12 @@ Then point the Android app (Settings → Add connection) at `https://mobaide.com
 
 The agent (`mobaide_agent/`) runs natively on the user's workstation as a long-lived process that dials OUT to `central-server` over WebSocket. No container, no inbound tunnel, no public hostname, and no port-forwarding are required on the workstation — the relay architecture handles NAT traversal for you.
 
-The Android app never talks to the agent directly; it always goes through `central-server`.
+The mobile and web apps never talk to the agent directly; they always go through `central-server`.
 
 ### Prerequisites
 
+- macOS 11 or newer on a Mac. The agent installs binary packages only, and its dependency lock has none for older macOS versions.
+- 64-bit Python on an x86-64 or ARM64 computer, for the same reason. The install scripts stop on a 32-bit Python or another CPU.
 - Python 3.12+ (the production `install.ps1` flow on Windows auto-installs Python 3.12 via `winget`, with a python.org-installer fallback when `winget` is unavailable; the conda dev path still needs it pre-installed)
 - `git`, `curl`
 - Claude CLI installed on the same machine (the agent spawns `claude` via PTY — see https://claude.ai/code).
@@ -862,7 +865,7 @@ Get-Content "$Prefix\logs\agent.err.log" -Tail 50
 Get-Content "$Prefix\logs\agent.out.log" -Tail 100
 ```
 
-A supervisor installed before the kill-on-close job leaves the launcher and agent running after `Stop-ScheduledTask`. Re-run the installer to replace it; it stops every process running from the prefix first. The `mobaide-agent` verbs that restart the agent (`re-pair`, `pair`, `pair-qr --wait`, `fetch-trust-key`) also stop such leftovers, but skip the restart when run from inside one of the agent's own terminal sessions.
+A supervisor installed before the kill-on-close job leaves the launcher and agent running after `Stop-ScheduledTask`. Re-run the installer to replace it; it stops every process running from the prefix first. The `mobaide-agent` verbs that restart the agent (`re-pair`, `pair`, `pair-qr --wait`) also stop such leftovers, but skip the restart when run from inside one of the agent's own terminal sessions.
 
 The task runs as the installing user (one task per user); no Group Managed Service Account / virtual account configuration is needed or supported.
 

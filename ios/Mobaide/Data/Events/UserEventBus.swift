@@ -213,28 +213,17 @@ actor UserEventBus {
     ) -> @Sendable () async throws -> String? {
         {
             guard let token = userIdentityStore.getUserAccessToken() else { return nil }
-            let base: String?
-            switch tokenStore.getConnectionMode() {
-            case .relay:
-                base = tokenStore.getRelayServerUrl()
-            case .direct:
-                // Single-agent dev fallback: the agent host doubles as the
-                // central server.
-                base = tokenStore.getAgentUrl()
-            }
             // User-events is a user-scoped central-server channel. Before any
-            // agent is connected (userOnly — connection mode still .direct with
-            // no agent URL), fall back to the central server so
+            // agent is connected (userOnly — no relay server URL on file),
+            // fall back to the central server so
             // `agent.status_changed` / `template.*` still arrive; this is what
             // makes first-pair "waiting for online" and userOnly template live
             // sync work (Android parity: the user socket follows the login).
-            let effectiveBase = base ?? AppConfig.centralServerURL
+            let effectiveBase = tokenStore.getRelayServerUrl() ?? AppConfig.centralServerURL
             guard !effectiveBase.isEmpty else { return nil }
-            // mode .direct: the user channel is never relay-path-rewritten.
             let url = RelayRouting.webSocketURLString(
-                baseURL: effectiveBase,
+                relayServerURL: effectiveBase,
                 path: "ws/user-events",
-                mode: .direct,
                 token: token
             )
             // Tells the relay which device this socket delivers to, so an

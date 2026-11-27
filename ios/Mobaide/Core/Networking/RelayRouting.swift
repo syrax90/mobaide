@@ -1,10 +1,5 @@
 import Foundation
 
-enum ConnectionMode: String, Sendable {
-    case direct
-    case relay
-}
-
 /// URL construction ported from Android `WebSocketManager` and
 /// `TokenStore.getEffectiveBaseUrl()`. All pure string manipulation — the
 /// token is appended raw (never percent-encoded), matching the Kotlin
@@ -27,28 +22,33 @@ enum RelayRouting {
         return "relay/\(path)/\(agentId)"
     }
 
-    /// DIRECT: `{ws|wss}://{host}/{path}`. RELAY: same host handling on the
-    /// relay server URL with the path rewritten via `mapToRelayPath`.
-    /// Scheme is `wss` iff the base URL starts with "https". User-scoped
-    /// channels (`ws/user-events`) pass `.direct` with the relay base URL —
-    /// they are never path-rewritten.
+    /// `{ws|wss}://{host}/{path}` on the relay server URL, the path taken as
+    /// given: for the channels the relay hosts itself (`ws/user-events`),
+    /// which are never path-rewritten. Scheme is `wss` iff the URL starts
+    /// with "https".
     static func webSocketURLString(
-        baseURL: String,
+        relayServerURL: String,
         path: String,
-        mode: ConnectionMode,
-        agentId: String? = nil,
         token: String
     ) -> String {
-        let scheme = baseURL.hasPrefix("https") ? "wss" : "ws"
-        let host = stripHTTPScheme(baseURL)
-        let effectivePath: String
-        switch mode {
-        case .direct:
-            effectivePath = path
-        case .relay:
-            effectivePath = mapToRelayPath(path, agentId: agentId ?? "")
-        }
-        return appendToken(to: "\(scheme)://\(host)/\(effectivePath)", token: token)
+        let scheme = relayServerURL.hasPrefix("https") ? "wss" : "ws"
+        let host = stripHTTPScheme(relayServerURL)
+        return appendToken(to: "\(scheme)://\(host)/\(path)", token: token)
+    }
+
+    /// An agent's channel: same host handling, with the path rewritten via
+    /// `mapToRelayPath`.
+    static func agentWebSocketURLString(
+        relayServerURL: String,
+        path: String,
+        agentId: String?,
+        token: String
+    ) -> String {
+        webSocketURLString(
+            relayServerURL: relayServerURL,
+            path: mapToRelayPath(path, agentId: agentId ?? ""),
+            token: token
+        )
     }
 
     /// `?token=` normally, `&token=` when the URL already carries a query.
@@ -64,20 +64,10 @@ enum RelayRouting {
         return "\(url)\(separator)\(name)=\(value)"
     }
 
-    /// Agent REST base: DIRECT → the agent URL; RELAY → `{relay}/proxy/{agentId}`.
-    static func agentRESTBaseURL(
-        mode: ConnectionMode,
-        agentURL: String?,
-        relayServerURL: String?,
-        agentId: String?
-    ) -> String? {
-        switch mode {
-        case .direct:
-            return agentURL
-        case .relay:
-            guard let relayServerURL, let agentId else { return nil }
-            return "\(trimTrailingSlashes(relayServerURL))/proxy/\(agentId)"
-        }
+    /// Agent REST base: `{relay}/proxy/{agentId}`.
+    static func agentRESTBaseURL(relayServerURL: String?, agentId: String?) -> String? {
+        guard let relayServerURL, let agentId else { return nil }
+        return "\(trimTrailingSlashes(relayServerURL))/proxy/\(agentId)"
     }
 
     private static func stripHTTPScheme(_ base: String) -> String {

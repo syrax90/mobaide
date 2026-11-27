@@ -21,16 +21,7 @@ struct RepositoryHarness {
             sessionInvalidator: SessionInvalidatorAdapter(sessionManager: session.sessionManager),
             client: client
         )
-        let agentAPI = AgentAPI(
-            baseURL: { [tokenStore = session.tokenStore] in tokenStore.getEffectiveBaseUrl() },
-            tokens: SessionAgentTokenProvider(
-                tokenStore: session.tokenStore,
-                sessionManager: session.sessionManager
-            ),
-            client: client
-        )
         repository = AuthRepository(
-            agentAPI: agentAPI,
             centralAPI: centralAPI,
             tokenStore: session.tokenStore,
             userIdentityStore: session.userIdentityStore,

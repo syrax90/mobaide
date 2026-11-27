@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from mobaide.agent.config import AgentConfig
+from mobaide.agent._env_writer import parse_env_file
+from mobaide.agent.config import AgentConfig, migrate_stored_host
 
 # All env vars AgentConfig.from_env consults. Auto-scan-related settings
 # live on ``AutoScanConfig`` but are listed here so host-env values never
@@ -293,3 +294,107 @@ class TestAgentConfigOpenCode:
 
         assert cfg.opencode_bin == "/abs/path/to/opencode"
         assert cfg.acp_opencode_command == "opencode-dev acp"
+
+
+class TestAgentConfigListenAddress:
+    """Clients reach the agent through the relay tunnel, so the HTTP listener
+    serves this computer only."""
+
+    @pytest.mark.parametrize("stored", ["0.0.0.0", "192.168.1.20", "::", "agent.lan"])
+    def test_stored_address_that_is_not_loopback_is_replaced(self, monkeypatch, stored):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("HOST", stored)
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.host == "127.0.0.1"
+
+    @pytest.mark.parametrize("stored", ["127.0.0.1", "127.0.0.5", "localhost", "::1"])
+    def test_loopback_address_is_kept(self, monkeypatch, stored):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("HOST", stored)
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.host == stored
+
+    def test_test_stack_may_select_another_address(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("MOBAIDE_ENV", "test")
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(tmp_path))
+        monkeypatch.setenv("HOST", "0.0.0.0")
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.host == "0.0.0.0"
+
+
+class TestMigrateStoredHost:
+    """Installs made before the listener became loopback-only hold
+    ``HOST=0.0.0.0`` in their ``.env``; the first start rewrites it."""
+
+    def test_rewrites_only_the_host_line(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "# agent settings\n"
+            "JWT_SECRET_KEY=keep-me\n"
+            "HOST=0.0.0.0\n"
+            "PORT=8123\n"
+            "RELAY_AGENT_TOKEN=tok\n",
+            encoding="utf-8",
+        )
+
+        assert migrate_stored_host(env_file) is True
+
+        text = env_file.read_text(encoding="utf-8")
+        assert parse_env_file(text) == {
+            "JWT_SECRET_KEY": "keep-me",
+            "HOST": "127.0.0.1",
+            "PORT": "8123",
+            "RELAY_AGENT_TOKEN": "tok",
+        }
+        assert "# agent settings" in text
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "JWT_SECRET_KEY=s\nHOST=127.0.0.1\n",
+            "JWT_SECRET_KEY=s\nHOST=localhost\n",
+            "JWT_SECRET_KEY=s\n",
+        ],
+    )
+    def test_leaves_a_file_without_a_non_loopback_host_untouched(
+        self, tmp_path, content
+    ):
+        env_file = tmp_path / ".env"
+        env_file.write_text(content, encoding="utf-8")
+
+        assert migrate_stored_host(env_file) is False
+        assert env_file.read_text(encoding="utf-8") == content
+
+    def test_missing_file_is_not_an_error(self, tmp_path):
+        assert migrate_stored_host(tmp_path / "absent.env") is False
+
+
+class TestStoredHostMigrationAtStartup:
+    def _start(self, monkeypatch, tmp_path, extra: str = ""):
+        from mobaide.agent.app import create_app
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "JWT_SECRET_KEY=test-secret-for-the-listen-address-tests\n"
+            "HOST=0.0.0.0\n" + extra,
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(tmp_path))
+        monkeypatch.setattr("mobaide.agent.app._resolve_env_file", lambda: env_file)
+        create_app()
+        return parse_env_file(env_file)
+
+    def test_agent_start_rewrites_the_stored_address(self, monkeypatch, tmp_path):
+        assert self._start(monkeypatch, tmp_path)["HOST"] == "127.0.0.1"
+
+    def test_test_stack_keeps_its_stored_address(self, monkeypatch, tmp_path):
+        stored = self._start(monkeypatch, tmp_path, extra="MOBAIDE_ENV=test\n")
+
+        assert stored["HOST"] == "0.0.0.0"

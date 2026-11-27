@@ -121,6 +121,27 @@ def _python3_failing_first_call(directory: Path) -> None:
     )
 
 
+def _python3_reporting(
+    directory: Path, *, version: str, glibc: str, build: str | None = None
+) -> None:
+    """``python3`` stub for ``check_python``: it reports the Python
+    ``version``, the glibc version ``glibc`` (empty: another C library) and,
+    when given, the CPU and pointer size ``build`` (``"armv7l 32"``).
+    Every other call goes to the real interpreter, so the version comparison
+    of the script itself runs."""
+    build_case = f"    *calcsize*) echo '{build}' ;;\n" if build is not None else ""
+    _stub(
+        directory,
+        "python3",
+        'case "$2" in\n'
+        f"    *version_info*) echo {version} ;;\n"
+        f"    *libc_ver*) echo '{glibc}' ;;\n"
+        + build_case
+        + f'    *) exec {shlex.quote(sys.executable)} "$@" ;;\n'
+        "esac",
+    )
+
+
 def _run_function(
     name: str,
     stubs: Path,
@@ -130,6 +151,7 @@ def _run_function(
     version: str = "3.12",
     only_stubs_on_path: bool = False,
     epilogue: str = "",
+    platform: str = "linux",
 ) -> subprocess.CompletedProcess[str]:
     assert _BASH is not None
     path = (
@@ -139,7 +161,7 @@ def _run_function(
     )
     harness = (
         "set -euo pipefail\n"
-        "PLATFORM=linux\n"
+        f"PLATFORM={platform}\n"
         f"MOBAIDE_AGENT_PREFIX={shlex.quote(prefix)}\n"
         f"version={version}\n"
         + _LOG_FUNCS
@@ -323,6 +345,111 @@ class TestEnsureEnsurepipAvailable:
 
         assert proc.returncode != 0
         assert "still fails" in proc.stderr
+
+
+@_POSIX_STUBS
+class TestCheckPython:
+    """One dependency has binary packages for Python 3.15 on glibc Linux
+    only from glibc 2.39, and the agent installs from binary packages only.
+    The installer must stop at the Python check with the cause, not later
+    inside pip."""
+
+    @pytest.mark.parametrize(
+        "version, glibc",
+        [("3.15", "2.35"), ("3.16", "2.38")],
+        ids=["python-3.15", "later-python"],
+    )
+    def test_refuses_a_new_python_on_an_older_glibc(
+        self, tmp_path: Path, version: str, glibc: str
+    ) -> None:
+        stubs = tmp_path / "bin"
+        _python3_reporting(stubs, version=version, glibc=glibc)
+
+        proc = _run_function("check_python", stubs)
+
+        assert proc.returncode != 0
+        assert f"glibc {glibc}" in proc.stderr
+        assert "glibc 2.39" in proc.stderr
+
+    @pytest.mark.parametrize(
+        "version, glibc",
+        [("3.15", "2.39"), ("3.15", "2.41"), ("3.14", "2.35"), ("3.15", "")],
+        ids=["oldest-glibc-with-wheels", "newer-glibc", "older-python", "not-glibc"],
+    )
+    def test_accepts_every_combination_that_has_binary_packages(
+        self, tmp_path: Path, version: str, glibc: str
+    ) -> None:
+        stubs = tmp_path / "bin"
+        _python3_reporting(stubs, version=version, glibc=glibc)
+
+        proc = _run_function("check_python", stubs)
+
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stderr == ""
+
+
+    @pytest.mark.parametrize(
+        "build, refused",
+        [
+            ("armv7l 32", True),
+            ("aarch64 32", True),
+            ("x86_64 32", True),
+            ("s390x 64", True),
+            ("aarch64 64", False),
+            ("arm64 64", False),
+            ("x86_64 64", False),
+        ],
+    )
+    def test_refuses_a_python_that_has_no_binary_packages(
+        self, tmp_path: Path, build: str, refused: bool
+    ) -> None:
+        """The dependency lock has binary packages for 64-bit Python on
+        x86-64 and ARM64 only. A 64-bit kernel can run a 32-bit Python
+        (Raspberry Pi OS), so the Python itself is asked, not ``uname``."""
+        stubs = tmp_path / "bin"
+        _python3_reporting(stubs, version="3.12", glibc="2.39", build=build)
+
+        proc = _run_function("check_python", stubs)
+
+        if refused:
+            assert proc.returncode != 0
+            assert "64-bit Python on an x86-64 or ARM64" in proc.stderr
+        else:
+            assert proc.returncode == 0, proc.stderr
+
+
+@_POSIX_STUBS
+class TestCheckMacosVersion:
+    """The dependency lock has binary packages from macOS 11 on, and the
+    agent installs from binary packages only. The installer must stop on an
+    older macOS with the cause, not later inside pip."""
+
+    @pytest.mark.parametrize("macos", ["10.13.6", "10.15.7"])
+    def test_refuses_macos_older_than_11(self, tmp_path: Path, macos: str) -> None:
+        stubs = tmp_path / "bin"
+        _stub(stubs, "sw_vers", f"echo {macos}")
+
+        proc = _run_function("check_macos_version", stubs, platform="darwin")
+
+        assert proc.returncode != 0
+        assert f"macOS {macos}" in proc.stderr
+        assert "needs macOS 11 or newer" in proc.stderr
+
+    @pytest.mark.parametrize(
+        "macos, platform",
+        [("11.0.1", "darwin"), ("26.5.2", "darwin"), ("10.15.7", "linux")],
+        ids=["oldest-supported", "current", "not-macos"],
+    )
+    def test_accepts_macos_11_and_newer_and_other_systems(
+        self, tmp_path: Path, macos: str, platform: str
+    ) -> None:
+        stubs = tmp_path / "bin"
+        _stub(stubs, "sw_vers", f"echo {macos}")
+
+        proc = _run_function("check_macos_version", stubs, platform=platform)
+
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stderr == ""
 
 
 @_POSIX_STUBS

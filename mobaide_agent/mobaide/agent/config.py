@@ -10,6 +10,7 @@ file; install scripts invoke them via ``python -m mobaide.agent.config``.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import secrets
 import sys
 from importlib.resources import files
@@ -24,6 +25,18 @@ from mobaide.relay.config import RelayConfig
 
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+LOOPBACK_HOST = "127.0.0.1"
+
+
+def is_loopback_host(host: str) -> bool:
+    value = host.strip().strip("[]").lower()
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
 
 
 class AgentConfig(BaseSettings):
@@ -48,12 +61,14 @@ class AgentConfig(BaseSettings):
     jwt_refresh_token_expire_minutes: int = 0
     user_store_path: str = "users.json"
     projects_store_path: str = "projects.json"
-    host: str = "0.0.0.0"
+    # The HTTP listener serves this computer only: clients reach the agent
+    # through the relay tunnel. Outside MOBAIDE_ENV=test a stored address
+    # that is not loopback is replaced by 127.0.0.1 (see _loopback_only).
+    host: str = LOOPBACK_HOST
     port: int = 8000
-    # OpenAPI exposure (ENABLE_API_DOCS). Default-deny, because the agent
-    # binds every interface by default (DIRECT mode needs LAN reachability),
-    # so FastAPI's stock /docs would hand the whole session/workspace/git
-    # surface to anything on the network. Enable only for local development.
+    # OpenAPI exposure (ENABLE_API_DOCS). Default-deny: the schema describes
+    # the whole session/workspace/git surface. Enable only for local
+    # development.
     enable_api_docs: bool = False
     max_sessions: int = 32
     session_disconnect_timeout: int = 300
@@ -223,6 +238,13 @@ class AgentConfig(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _loopback_only(self) -> "AgentConfig":
+        """Keep the listener on loopback; only a test stack may bind elsewhere."""
+        if not self.is_test_mode and not is_loopback_host(self.host):
+            object.__setattr__(self, "host", LOOPBACK_HOST)
+        return self
+
+    @model_validator(mode="after")
     def _anchor_store_paths(self) -> "AgentConfig":
         """Anchor relative store/log paths to the writable state prefix.
 
@@ -291,6 +313,34 @@ class AgentConfig(BaseSettings):
             relay_config=relay,
             auto_scan_config=autoscan,
         )
+
+
+def migrate_stored_host(env_file: Path) -> bool:
+    """Rewrite a stored ``HOST`` that is not loopback to 127.0.0.1.
+
+    Installs made before the listener became loopback-only hold
+    ``HOST=0.0.0.0``. Returns True when the file changed. Never raises: the
+    config validator already forces the effective address.
+    """
+    from mobaide.agent._env_writer import (
+        atomic_write,
+        parse_env_file,
+        render_template,
+        restrict_perms,
+    )
+
+    try:
+        text = env_file.read_text(encoding="utf-8")
+        stored = parse_env_file(text).get("HOST", "")
+        if not stored or is_loopback_host(stored):
+            return False
+        atomic_write(
+            env_file, render_template(text, overrides={"HOST": LOOPBACK_HOST})
+        )
+        restrict_perms(env_file)
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _read_template() -> str:

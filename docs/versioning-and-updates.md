@@ -63,6 +63,7 @@ Both scripts work the same way:
 
 ```bash
 python deploy/prod/release_agent.py [VERSION] [--skip-publish] [--force] [--release-dir DIR]
+python deploy/prod/release_agent.py --update-lock | --upgrade-lock
 python deploy/prod/release_android.py [VERSION] [--skip-upload] [--force] [--release-dir DIR]
 ```
 
@@ -110,22 +111,49 @@ Shared helpers live in `deploy/prod/release_common.py`.
 
 1. Checks that the public half of the local signing key equals
    `GET https://api.mobaide.com/api/v1/agent/trust_key`.
-2. Checks that `mobaide_agent/pyproject.toml` has the tag version.
-3. Builds the wheel and sdist with `uv build --wheel --sdist`. Builds the source
+2. Checks the relay pairing key: the optional local file
+   `agent/relay-pairing-public-key` must equal the key that
+   `GET /api/v1/agent/pairing_key` returns. A relay older than this endpoint
+   (HTTP 404) counts as "no key". Any other failure stops the release.
+3. Checks that `mobaide_agent/pyproject.toml` has the tag version, and that
+   `deploy/install.sh` and `deploy/install.ps1` at the tag contain the public
+   half of the signing key.
+4. Builds the wheel and sdist with `uv build --wheel --sdist`. Builds the source
    tarball with Python `tarfile` (no `__pycache__`, no `*.pyc`, owner
    normalised). Computes SHA-256 values.
-4. Signs the **Ed25519 manifest** (same canonical body as before).
-5. PUTs the tarball and the wheel to `central_server`, which stores them by
+5. Takes the committed dependency lock `mobaide_agent/requirements.lock`.
+   Checks that every line is a pinned version with `sha256` hash lines.
+   Re-resolves the lock against the public index and stops when a version or
+   marker differs, or the lock lists a hash the index does not have. Files the
+   index added later to a pinned version (wheels for a new Python, for
+   example) only print a warning: pip installs only files whose hash the lock
+   lists, so the lock installs as before. Checks that the lock has a binary wheel for 8
+   platforms (macOS, Windows, Linux glibc and musl, each x86_64 and arm64) and
+   Python 3.12 to 3.15. macOS is checked for macOS 11 (`LOCK_MACOS_MINIMUM`),
+   not for uv's default macOS 13. Python 3.15 on glibc Linux is checked for
+   glibc 2.39.
+   Runs a trial install with the same pip flags as the agent. Puts the lock at
+   the root of the tarball. A release never selects new dependency versions.
+   `uv` ignores the uv settings of the machine.
+6. Signs the **Ed25519 manifest** (same canonical body as before, plus the lock
+   hash and the `trust` object).
+7. PUTs the tarball and the wheel to `central_server`, which stores them by
    SHA-256 (details under [Release file hosting](#release-file-hosting)).
-6. Downloads every manifest URL anonymously and checks its SHA-256.
-7. POSTs the manifest to `central_server` with retries.
-8. Reads `/api/v1/agent/manifest.json` back and compares the version.
+8. Downloads every manifest URL anonymously and checks its SHA-256.
+9. POSTs the manifest to `central_server` with retries.
+10. Reads `/api/v1/agent/manifest.json` back and compares the version.
 
 You can run the script again for the same version at any time. The rebuild
 makes new bytes, so the files get new URLs and nothing is overwritten.
 
-`--skip-publish` stops after step 4. The script needs `uv`, `gh`, and the
+To change a dependency version, run `python deploy/prod/release_agent.py --update-lock`
+(keeps the pinned versions) or `--upgrade-lock` (takes newer versions). Open a
+pull request with the new lock, then release from a tag that contains it.
+
+`--skip-publish` stops after step 6. The script needs `uv`, `gh`, and the
 `cryptography` package (`pip install cryptography`).
+`release_agent.py --new-relay-pairing-key` prints a new relay pairing key pair
+and exits. It saves and publishes nothing.
 
 **`server-vX.Y.Z`**
 
@@ -260,7 +288,8 @@ The steps below are for `mobaide_agent`. The same shape works for `android`
    Check first that the tag does not exist and that `pyproject.toml` and the
    manifest agree.
 4. **Run** `python deploy/prod/release_agent.py X.Y.Z`. The script refuses to
-   build if `pyproject.toml` does not match the tag.
+   build if `pyproject.toml` does not match the tag, or if
+   `mobaide_agent/requirements.lock` does not fit `pyproject.toml`.
 
 > [!WARNING]
 > **Pick one path and stay on it.** Either let release-please own the
@@ -379,6 +408,8 @@ Keep a backup of the folder in a password manager.
 | File | Used by | Content |
 |------|---------|---------|
 | `agent/manifest-signing-key` | `release_agent.py` | Ed25519 private key that signs the manifest: base64 of the 32 raw bytes (the old `AGENT_MANIFEST_PRIVATE_KEY` format), or a PEM file. |
+| `agent/relay-pairing-public-key` | `release_agent.py` | Optional. Base64 Ed25519 public key of the relay pairing key. Goes into the signed `trust` object of the manifest. |
+| `agent/next-manifest-public-key` | `release_agent.py` | Optional. Base64 Ed25519 public key of a second release key. Goes into the signed `trust` object, so agents accept it later. |
 | `agent/release-token` | `release_agent.py` | Token for `PUT /api/internal/agent_release/...` and `POST /api/internal/agent_manifest`. |
 | `android/upload.keystore` | `release_android.py` | Play upload key. |
 | `android/signing.properties` | `release_android.py` | `storePassword`, `keyPassword`, `keyAlias`. |
@@ -389,8 +420,10 @@ Keep a backup of the folder in a password manager.
 **Failure modes:**
 
 * Signing key missing, or its public half differs from
-  `/api/v1/agent/trust_key`: the script stops before it creates a release.
-  Nothing changes anywhere.
+  `/api/v1/agent/trust_key`, or the install scripts do not contain its public
+  half: the script stops before it creates a release. Nothing changes anywhere.
+* `agent/relay-pairing-public-key` does not match `GET /api/v1/agent/pairing_key`
+  (or only one side has a key): the script stops before it creates a release.
 * `agent/release-token` missing or wrong: the upload fails with HTTP 401 before
   anything is stored. The previous manifest keeps serving. Fix the token and
   run the script again.
@@ -410,6 +443,7 @@ host (typically `/opt/mobaide/.env`). Keep each pair in sync:
 |--|--|--|
 | `agent/release-token` | `RELEASE_AUTH_TOKEN` | Identical string. The script sends it in the `X-Release-Token` header; the server compares with `hmac.compare_digest`. |
 | `agent/manifest-signing-key` | `MANIFEST_SIGNING_PUBLIC_KEY` | Private and public halves of the same Ed25519 key. The script signs; the server verifies. |
+| `agent/relay-pairing-public-key` | `RELAY_PAIRING_PRIVATE_KEY` | Public and private halves of one Ed25519 key (the variable holds the base64 of the 32 raw private bytes). The relay serves the public half at `GET /api/v1/agent/pairing_key` (`null` when unset). In this step the pairing push is still signed with the manifest key. |
 
 - If `RELEASE_AUTH_TOKEN` is unset on the server,
   `POST /api/internal/agent_manifest` returns **HTTP 503** ("Manifest
@@ -532,7 +566,12 @@ be running. It is a small JSON document:
     "wheel_url": "https://api.mobaide.com/api/v1/agent/releases/c3d4.../mobaide_agent-0.2.0-py3-none-any.whl",
     "wheel_sha256": "c3d4...",
     "released_at": "2026-04-26T10:30:00+00:00",
-    "min_central_server_version": "0.1.0"
+    "min_central_server_version": "0.1.0",
+    "dependency_lock_sha256": "e5f6...",
+    "trust": {
+      "relay_pairing_public_keys": ["<base64 Ed25519 public key>"],
+      "release_public_keys": ["<base64 Ed25519 public key>"]
+    }
   },
   "signature_b64": "<Ed25519 signature over canonical JSON of body>"
 }
@@ -544,7 +583,12 @@ be running. It is a small JSON document:
   * `release_agent.py` signs with the local `agent/manifest-signing-key`.
   * The public half is configured on `central_server` as
     `MANIFEST_SIGNING_PUBLIC_KEY` and pinned on each agent host at
-    `<prefix>/trust/central_server.pub`.
+    `<prefix>/trust/central_server.pub`. It is also a constant in
+    `install.sh` and `install.ps1`.
+* **Signed fields** — `dependency_lock_sha256` is the SHA-256 of the
+  `requirements.lock` inside the tarball. `trust` lists extra release keys
+  and the relay pairing keys. The agent reads them only from a manifest whose
+  signature verified (see [Trust data from the manifest](#trust-data-from-the-manifest)).
 * **Publishing** — `release_agent.py`:
   1. uploads the tarball and the wheel to `central_server` (see
      [Release file hosting](#release-file-hosting));
@@ -615,7 +659,7 @@ release lives in its own directory and a single pointer file selects the
 "current" one. There is no in-process patching.
 
 **HTTP wrapper.** All outbound HTTP calls (manifest polling, tarball/wheel
-downloads, trust-key fetch) go through `mobaide._http`. It sends
+downloads) go through `mobaide._http`. It sends
 `User-Agent: mobaide-agent/<version>` (so Cloudflare does not classify it as
 generic `Python-urllib` bot traffic, error 1010) and pins TLS trust to the
 bundled `certifi` store, so HTTPS fetches verify regardless of the host's
@@ -628,7 +672,8 @@ launcher's `wss://` path).
 <prefix>/                            # /opt/mobaide, /usr/local/mobaide, or %ProgramFiles%\MobaideAgent
 ├── current_version                  # text file: "0.2.0"
 ├── trust/
-│   └── central_server.pub           # base64 Ed25519 public key, pinned at install time
+│   ├── central_server.pub           # base64 Ed25519 public key, pinned at install time
+│   └── manifest_trust.json          # keys from a verified manifest's "trust" object
 ├── mobaide_agent/
 │   └── .env                         # JWT_SECRET_KEY, RELAY_*, etc. (generated by init-env)
 ├── releases/
@@ -637,6 +682,7 @@ launcher's `wss://` path).
 │   │   └── venv/                   # python venv with the wheel installed
 │   └── 0.2.0/
 │       ├── .installed
+│       ├── requirements.lock       # hashed dependency lock, checked against the manifest
 │       └── venv/
 └── bin/                             # launcher wrapper; Windows mobaide-agent.cmd
 ```
@@ -756,12 +802,39 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
   * A failed stage never touches the running release. Leftover `.staging-*` /
     `.old-*` scratch and stale incomplete releases are garbage-collected
     best-effort on the next run.
-* **Forward-only on the auto path**
-  * Auto/poll updates only stage a manifest whose version is **strictly
-    newer** than the running one, so a stale or mismatched manifest can never
-    downgrade an install.
-  * The forced paths — operator "Install now" and 4002 protocol-incompatible
-    recovery — bypass this and apply any version.
+* **Signature first** — the updater verifies the signature before it reads
+  anything else. The keys are the pinned release key plus the extra release
+  keys in the trust store. A bad signature returns `signature_failed`, even
+  for the same version or while sessions run.
+* **Forward-only on every path**
+  * The decision uses the version **inside the signed body**. The unsigned
+    version hint that comes with a manifest selects nothing.
+  * A version that is not strictly newer than the running one returns
+    `no_change` and logs `updater.rollback_refused`. This holds for the auto
+    path, operator "Install now" and 4002 protocol-incompatible recovery, so a
+    stale or mismatched manifest can never downgrade an install.
+  * Only `mobaide-agent update --allow-downgrade` accepts the same or an older
+    version.
+  * To roll back a bad release, release the earlier code under a **higher**
+    version number. Publishing an older manifest again changes nothing:
+    agents refuse it, and `GET /api/version` does not offer it in
+    `latest_agent_version`.
+* **Pinned dependencies** — the signed manifest names the SHA-256 of
+  `requirements.lock` (`dependency_lock_sha256`). The updater requires that
+  file at the root of the extracted tarball and checks its hash. It writes one
+  requirements file: the lock plus the wheel with its `--hash`. The finalize
+  step runs `ensurepip`, then `pip install --require-hashes --only-binary :all:`
+  with that file. It does not upgrade pip and resolves no unpinned
+  dependency. A failed install is reported as `signature_failed` and the agent
+  stays on the current version. The venv, `ensurepip` and pip child processes
+  run with `PYTHONSAFEPATH=1`.
+* **Retry wait after a failed install** — after a failed stage or pointer
+  swap, the agent waits 15 minutes before it tries the same manifest again.
+  The wait doubles after each failure, up to 24 hours. A manifest with a
+  different signature resets the count. The state is in memory only. The
+  attempt returns `signature_failed` while the wait runs. Operator "Install
+  now" and `mobaide-agent update` skip the wait. Relay delivery, the hourly
+  check and 4002 protocol recovery keep it.
 * **Path-component validation** — the signed manifest `version` is checked
   against a safe-path allowlist at the manifest→filesystem boundary (in both
   `updater.py` and `install.sh`) before it is used as a `releases/<v>` path
@@ -792,8 +865,9 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
     (the HTTPS bootstrap below), uvicorn turns it into exit code `3`. In a
     FastAPI background task (the "Install now" route), uvicorn logs it and
     keeps serving. Both left a Windows agent stopped until the next logon.
-  * The `mobaide-agent update` CLI verb has no server, so it still uses
-    `sys.exit`.
+  * The `mobaide-agent update` CLI verb has no server. After an install it
+    prints the installed version and returns exit code `75`, and `main()`
+    ends the process with that code.
 * **Rollback target** — on every boot, `_prune_old_releases` keeps the current
   version plus up to `MOBAIDE_AGENT_KEEP_RELEASES - 1` highest-versioned
   **complete** siblings (default: one previous release). Dirs that are
@@ -816,7 +890,8 @@ unauthenticated over HTTPS at `GET /api/v1/agent/manifest.json`.
   which verifies through the **same** `StagedBinaryUpdater` the relay path
   uses — no second crypto stack, no skip-signature branch.
 - The URL is derived from `RELAY_SERVER_URL` in the agent's `.env` (same
-  hardening as the trust-key fetch: no user-info, no cleartext by default).
+  hardening as the pairing trust refresh: no user-info, no cleartext by
+  default).
 
 The bootstrap fires on three triggers:
 
@@ -854,13 +929,15 @@ MOBAIDE_AGENT_MANIFEST_URL=https://api.mobaide.com/api/v1/agent/manifest.json \
 ```
 
 `mobaide-agent update` skips activity-awareness and applies the manifest if a
-new version is available. Exit codes:
+higher version is available. It prints one line for the outcome. Add
+`--allow-downgrade` to accept the same or an older version. Exit codes:
 
 | Code | Meaning |
 |------|---------|
-| `0` | Manifest applied, or already on this version. |
-| `2` | Signature verification failed (fail-closed). |
-| `3` | Cannot reach the manifest URL or no public key configured. |
+| `0` | Nothing to install: already on this version, or the published version is not higher. |
+| `75` | A release was installed. It starts at the next restart of the agent. |
+| `2` | The signature, hash or install checks failed (fail-closed), or the manifest has no version. |
+| `3` | Cannot read the manifest at the URL, or no public key configured. |
 | `4` | Active sessions; deferred. (Use `--force` is implied via this CLI; this code surfaces only when `force=False` callers invoke the underlying API.) |
 
 ## Installing the agent (end users)
@@ -893,12 +970,11 @@ Both scripts are auto-published from `deploy/` to the root of the
 2. Pull the manifest from
    `https://api.mobaide.com/api/v1/agent/manifest.json` (override via
    `MOBAIDE_AGENT_MANIFEST_URL`).
-3. Bootstrap the manifest-signing public key and pin it at
-   `<prefix>/trust/central_server.pub`: `MOBAIDE_AGENT_TRUST_KEY_B64` if set,
-   otherwise fetch it from `/api/v1/agent/trust_key` on the host derived from
-   `MOBAIDE_AGENT_MANIFEST_URL`. Then verify the manifest signature against the
-   pinned key. The install fails-closed if neither path yields a key — never
-   silently ships an install whose auto-updater can't verify rollouts.
+3. Choose the manifest-signing public key: the constant in the script, or
+   `MOBAIDE_AGENT_TRUST_KEY_B64` if set. Verify the manifest signature against
+   it. Only then pin the key at `<prefix>/trust/central_server.pub`. The install
+   fails-closed if the signature does not verify — never silently ships an
+   install whose auto-updater can't verify rollouts.
 4. **(Linux only, before venv creation)** Verify that `python3 -c 'import ensurepip'`
    succeeds. If it does not (common on stock Debian/Ubuntu), auto-install
    `python${version}-venv` via the detected package manager (`apt-get`,
@@ -916,8 +992,25 @@ require a pre-installed interpreter (CI / locked-down hosts). Under `irm | iex`
 the elevation re-launch re-fetches the installer from
 `MOBAIDE_AGENT_INSTALL_URL`.
 
+   On Linux, Python 3.15 or later needs glibc 2.39 or newer. The installer
+   stops with a message otherwise (musl is not affected).
+
+   The agent needs 64-bit Python on an x86-64 or ARM64 computer: the
+   dependency lock has binary packages for those only. `install.sh` and
+   `install.ps1` ask the Python they found and stop with a message
+   otherwise (a 32-bit Python, also on a 64-bit kernel, or another CPU).
+
+   On macOS, the agent needs macOS 11 or newer: the dependency lock has no
+   binary packages for older versions. `install.sh` checks this first and
+   stops with a message.
+
 5. Download tarball + wheel, verify sha256s, extract under
-   `<prefix>/releases/<version>/`, install the wheel into a fresh venv.
+   `<prefix>/releases/<version>/`, install the wheel into a fresh venv. When
+   the manifest has `dependency_lock_sha256`, the script checks
+   `requirements.lock` from the tarball and installs with
+   `pip install --require-hashes --only-binary :all:`. A manifest from before the
+   lock has no such field: the script keeps the old unpinned install and prints
+   a warning. The agent updater does not accept such a manifest.
    On Windows, reinstalling the installed version first stops the agent and every
    process running from the prefix (Windows cannot move a release dir whose
    executables are running); the previous release is restarted if staging then
@@ -976,56 +1069,55 @@ one-liner is also the operator-driven upgrade path.
 
 ### Trust-key bootstrap
 
-The first install needs the public key that signs every subsequent manifest.
-Three resolution paths, in priority order:
+The first install needs the public key that signs every manifest. Two paths:
 
-1. **Auto-fetch from `central_server` (default):** the install scripts derive
-   `https://<host>/api/v1/agent/trust_key` from the manifest URL host (default
-   `https://api.mobaide.com`) and pin the returned key to
-   `<prefix>/trust/central_server.pub`. No operator-side env vars needed. The
-   endpoint requires `MANIFEST_SIGNING_PUBLIC_KEY` to be set on the
-   central_server (already required for manifest publishing).
-2. **Operator-pinned via env var (airgap / explicit):**
+1. **Built-in key (default):** `install.sh` and `install.ps1` carry the release
+   public key as a constant (`MOBAIDE_RELEASE_PUBLIC_KEY_B64` /
+   `$Script:ReleasePublicKeyB64`). Nothing fetches the key from the server.
+   `release_agent.py` checks that the scripts at the release tag contain the
+   public half of the signing key.
+2. **Operator-pinned via env var (self-hosted release pipeline):**
    ```bash
    MOBAIDE_AGENT_TRUST_KEY_B64=<base64> \
      curl -fsSL https://get.mobaide.com/install.sh | sudo bash
    ```
-   Skips the central_server fetch. Use this when the install host has no
-   network path to your central_server, or for maximum trust isolation between
-   the install channel and the trust root.
-3. **Repair existing install:** if you have an agent that was set up before
-   path #1 existed (or pre-`MOBAIDE_AGENT_TRUST_KEY_B64`), run
-   `mobaide-agent fetch-trust-key` on the agent host. The CLI:
-   - derives `https://<host>/api/v1/agent/trust_key` from `RELAY_SERVER_URL` in
-     the agent's `.env`,
-   - validates the result as base64-Ed25519,
-   - writes `<prefix>/trust/central_server.pub`,
-   - and best-effort restarts the supervisor so the running agent picks up the
-     new updater.
+   The variable overrides the built-in key. Use it when you sign releases with
+   your own key.
 
-   Options:
-   - `--from-url <full-url>` overrides the env-derivation.
-   - `--no-restart` skips the supervisor restart when you'd rather schedule it
-     yourself.
+The script writes `<prefix>/trust/central_server.pub` only **after** the manifest
+signature verified. A key that does not verify the manifest never replaces the
+key of an existing install. If the signature does not verify, the script stops
+and its message names `MOBAIDE_AGENT_TRUST_KEY_B64`. There is no "skip
+signature verification" branch.
 
-**Fail-closed semantics:** if neither the env var nor the central_server
-fetch yields a key, the install script aborts with an actionable error.
-There is no "skip signature verification" branch.
+**Repair.** The `mobaide-agent fetch-trust-key` verb is gone. To restore a
+missing or wrong key file, run the installer again.
 
-**Hardening on the fetch path:**
+Both scripts set `PYTHONSAFEPATH=1` while they run, so Python does not import
+modules from the current directory.
 
-* User-info in the manifest URL (`wss://api.mobaide.com@evil.example/...`)
-  is rejected up front, because `urlparse`'s `netloc` would otherwise smuggle
-  the attacker host into the trust-key URL. Both the install scripts and
-  `mobaide-agent fetch-trust-key` enforce this.
-* Cleartext `ws://` / `http://` is refused by default, since a passive on-path
-  attacker on the install host's LAN could substitute the public key. Set
-  `MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1` to override (only safe on a
-  trusted local network — e.g. a self-host central_server reachable only over
-  loopback / a VPN). The default `https://` and `wss://` paths are unaffected.
-* The fetched value is validated as a 32-byte Ed25519 public key before any
-  file lands on disk, with the same validator applied to env-var-pinned values,
-  so a malformed key fails immediately.
+The installers keep the earlier manifest URL hardening: user-info in the
+manifest URL is rejected, and cleartext `http://` is refused by default. Set
+`MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1` to allow it on a trusted local
+network. The key value is validated as a 32-byte Ed25519 public key before any
+file lands on disk.
+
+### Trust data from the manifest
+
+A manifest whose signature verified can carry a `trust` object. The agent
+stores it at `<prefix>/trust/manifest_trust.json` (in memory when the folder is
+read-only). The updater records it only when the manifest version is not lower
+than the running version.
+
+* `release_public_keys` are add-only (at most 4). The updater accepts a manifest
+  signed by the pinned key or by any of them.
+* `relay_pairing_public_keys` are replaced by the newest manifest, ordered by
+  the signed `released_at`. An older or equal `released_at` is ignored.
+* Before pairing, an agent has no updater. `pair` and `pair-qr --wait`
+  fetch the signed manifest over HTTPS, verify it and record its trust data.
+  The pairing monitor does the same at most every 15 minutes (every 60 seconds
+  after a failed fetch). The agent then accepts a pairing push signed by the
+  pinned release key or by any relay pairing key in the trust data.
 
 ## Android update flows
 
@@ -1050,7 +1142,10 @@ The Android client has four distinct update paths that work together:
 * **Agent-outdated banner** — `AgentVersionMonitor` fetches `GET /api/version`
   from the authenticated agent (proxied through `central_server`) and compares
   `server_version` (running agent) with `latest_agent_version` (manifest
-  pointer the agent received over its relay). Mismatch → `SessionListScreen`
+  pointer the agent received over its relay). The agent reports
+  `latest_agent_version` only when it is higher than the running version
+  (`null` otherwise), because the updater installs only a higher version.
+  Mismatch → `SessionListScreen`
   renders `AgentOutdatedBanner`. Dismissing it only hides the prompt; the
   agent's staged-binary updater still installs silently once idle. The
   banner's "Install now" CTA hits `POST /api/agent/update/force_now` on the

@@ -72,7 +72,7 @@ from .auth.user_store import UserStore
 from .autoscan.router import router as autoscan_router
 from .autoscan.router import ws_router as autoscan_ws_router
 from .codex.router import router as codex_router
-from .config import AgentConfig
+from .config import AgentConfig, migrate_stored_host
 from .git.changes_jobs import job_registry
 from .git.delete_jobs import delete_job_registry
 from .git.changes_models import GIT_CAPABILITIES
@@ -104,6 +104,7 @@ from .update_check import (
     run_https_update_check,
     run_periodic_check_loop,
 )
+from .updater import newer_version
 from .updater_router import router as updater_router
 from .ws.event_fanout import SessionListBroadcaster
 from .ws.events import router as ws_events_router
@@ -400,22 +401,18 @@ def _resolve_env_file() -> Path | None:
 
     * **Prefix set** — the install layout wins: the prefix env first, then the
       developer-checkout fallback so an editable install with an unpopulated
-      prefix still boots. The POSIX service supervisors export the prefix into
+      prefix still boots. Every service supervisor exports the prefix into
       the agent's environment (systemd ``Environment=``, launchd plist
-      ``EnvironmentVariables``), so the installed agent always takes this branch.
+      ``EnvironmentVariables``, the Windows Scheduled Task supervisor
+      ``deploy/windows_launcher.py``), so the installed agent always takes
+      this branch.
     * **Prefix unset** — an uncontrolled ``python -m mobaide`` from a source
       tree. The checkout's own env wins over the OS-default install prefix, so
       a source-tree agent keeps its own identity instead of silently adopting a
       co-installed agent's ``<os-default-prefix>/mobaide_agent/.env`` — what
-      makes a dev agent valid alongside the script-installed one. The Windows
-      Scheduled Task install also lands here: it passes ``--prefix`` to the
-      launcher but does not export ``MOBAIDE_AGENT_PREFIX`` to the agent
-      process. That stays correct because every non-dev install is wheel-based
-      and ships no ``<site-packages>/.env`` for the developer candidate to
-      match, so resolution falls through to the install prefix exactly as
-      before; only an editable/source checkout has a checkout ``.env`` to
-      prefer. (Empty string counts as unset, mirroring ``default_prefix``'s
-      ``if explicit:`` check.)
+      makes a dev agent valid alongside the script-installed one. (Empty
+      string counts as unset, mirroring ``default_prefix``'s ``if explicit:``
+      check.)
 
     Returning ``None`` when both candidates miss lets pydantic-settings fall
     back to process-environment vars (which is what tests rely on).
@@ -438,10 +435,19 @@ def _resolve_env_file() -> Path | None:
 
 def create_app(config: AgentConfig | None = None) -> FastAPI:
     """Build and return the FastAPI application."""
+    migrated_host = False
     if config is None:
-        config = AgentConfig.from_env(env_file=_resolve_env_file())
+        env_file = _resolve_env_file()
+        config = AgentConfig.from_env(env_file=env_file)
+        if env_file is not None and not config.is_test_mode:
+            migrated_host = migrate_stored_host(env_file)
 
     configure_logging(config)
+    if migrated_host:
+        logger.warning(
+            "agent.listen_host_migrated: the stored HOST was not a loopback "
+            "address; the agent now listens on %s only", config.host,
+        )
 
     relay_cfg = config.relay_config
     pairing_pending = relay_cfg is not None and relay_cfg.pairing_pending
@@ -669,9 +675,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         await app.state.agent_settings.shutdown(restarting=restart_requested())
         shutdown_logging()
 
-    # Default-deny on the doc routes: the agent binds every interface, so
-    # FastAPI's stock /docs would publish the full session/workspace/git/codex
-    # surface to the local network. ENABLE_API_DOCS opts a dev box back in.
+    # Default-deny on the doc routes: the stock /docs would publish the
+    # full session/workspace/git/codex surface. ENABLE_API_DOCS opts a dev box
+    # back in.
     docs_enabled = config.enable_api_docs
     app = FastAPI(
         title="Mobaide Agent",
@@ -1089,7 +1095,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 ),
                 "agent_settings": AGENT_SETTINGS_CAPABILITIES,
             },
-            "latest_agent_version": (manifest or {}).get("version"),
+            "latest_agent_version": newer_version(
+                (manifest or {}).get("version"), __version__
+            ),
         }
 
     return app

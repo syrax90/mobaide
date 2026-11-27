@@ -29,25 +29,6 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(tokens.validTokenCallCount, 1)
     }
 
-    func testLoginSkipsAuthAndTrimsTrailingSlashes() async throws {
-        StubURLProtocol.enqueue(status: 200, body: #"{"access_token":"a","refresh_token":"r"}"#)
-        let tokens = FakeAgentTokens()
-        let response = try await makeAPI(tokens: tokens).login(
-            agentUrl: "http://agent.example.com//",
-            username: "u",
-            password: "p"
-        )
-
-        XCTAssertEqual(response.token_type, "bearer")
-        let request = try XCTUnwrap(StubURLProtocol.requests.first)
-        XCTAssertEqual(request.url?.absoluteString, "http://agent.example.com/api/auth/token")
-        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
-        XCTAssertEqual(tokens.validTokenCallCount, 0)
-
-        let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
-        XCTAssertEqual(body, ["username": "u", "password": "p"])
-    }
-
     func testDeadSessionSynthesizes401WithoutNetwork() async {
         let tokens = FakeAgentTokens(token: nil)
         do {

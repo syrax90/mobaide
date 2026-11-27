@@ -123,7 +123,7 @@ The `/api/pairing/initiate` response intentionally omits a `ws_url` field. The a
 
 * `wss://host[:port]` → `wss://host[:port]/ws/pairing/{nonce}`
 * `https://host` → `wss://host/ws/pairing/{nonce}` (scheme upgraded)
-* `ws://` / `http://` are refused unless `MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1` (loopback escape hatch, mirroring the trust-key fetch).
+* `ws://` / `http://` are refused unless `MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1` (loopback escape hatch, the same override as for the manifest URL).
 
 
 ### `relay_url` is persisted at initiate time
@@ -355,6 +355,7 @@ to operate the QR pairing flow:
 |---|---|---|
 | `MANIFEST_SIGNING_PUBLIC_KEY` | trust-key endpoint, manifest verification, QR initiate | `GET /api/v1/agent/trust_key` returns 503; QR initiate returns 503 |
 | `MANIFEST_SIGNING_PRIVATE_KEY` | QR initiate, claim push signing | `POST /api/pairing/initiate` returns 503 |
+| `RELAY_PAIRING_PRIVATE_KEY` | Base64 Ed25519 private key (32 raw bytes) of the relay pairing key. `GET /api/v1/agent/pairing_key` serves its public half | Optional. The endpoint answers `{"public_key_b64": null}`. A malformed value stops the relay at start. The pairing push is still signed with the manifest key in this step; the agent accepts the manifest key, or a relay pairing key that a signed manifest listed |
 | `PAIRING_QR_TOKEN_TTL_SECONDS` | nonce TTL (default `120`; prod sets `600` for cross-device pairing links) | uses default |
 | `PAIRING_INITIATE_IP_HOURLY_CAP` | per-IP `POST /api/pairing/initiate` calls per hour (default `120`; `0` disables). A healthy unpaired agent makes one call per TTL | uses default |
 | `PUBLIC_BASE_URL` | QR `relay_url` field | falls back to request `Host` header |
@@ -371,7 +372,7 @@ to operate the QR pairing flow:
 Rotating `MANIFEST_SIGNING_*` invalidates every account's pin at once, so the rotation itself would lock out every existing account. The intended sequence:
 
 1. Set `TRUST_KEY_PIN_ENFORCED=false` and restart the relay. Mismatching pins are then cleared as accounts pair, rather than refused.
-2. Rotate the keypair; have each agent host re-run `mobaide-agent fetch-trust-key` (the agent's own pin is separate and fail-closed).
+2. Rotate the keypair. Release a new agent version with the new key, and run the Mobaide installer again on each agent host that cannot update itself (the agent's own pin is separate and fail-closed).
 3. Once accounts have re-paired, set `TRUST_KEY_PIN_ENFORCED=true` again.
 
 An account that currently owns **no** agents re-pins automatically even while enforcement is on — the pin protects nothing in that state, so "remove every agent, then pair again" is the self-service recovery for a single account.
@@ -392,8 +393,8 @@ The device-code direction makes this worse. A QR claim's dropped push is recover
 | Symptom | Likely cause | Action |
 |---|---|---|
 | `pair-qr` returns 503 | Server lacks `MANIFEST_SIGNING_PRIVATE_KEY` | Set the env var on the relay; restart |
-| `pair-qr` returns 4 ("trust key not pinned") | Agent never ran `fetch-trust-key` | Run `mobaide-agent fetch-trust-key` |
-| `pair-qr` returns 5 ("fingerprint mismatch") | Server's trust key was rotated since the agent pinned it | Re-fetch the trust key (re-run `fetch-trust-key`); confirm rotation was intentional |
+| `pair-qr` returns 4 ("trust key not pinned") | The install did not pin the key (`<prefix>/trust/central_server.pub` is missing) | Run the Mobaide installer again |
+| `pair-qr` returns 5 ("fingerprint mismatch") | Server's trust key was rotated since the agent pinned it | Run the Mobaide installer again to pin the current key; confirm rotation was intentional |
 | Mobile shows "Pairing code consumed or expired" (HTTP 410) | QR scanned twice, or after TTL | Render a fresh QR via `show-qr` |
 | `show-qr` exits 7 without `--require-pending` | The agent is in pairing mode but did not publish a QR within 60 s — most likely it cannot reach the relay | Check the agent logs; it retries on its own, so run `show-qr` again later |
 | Mobile shows "Trust key changed — possible MITM" | TOFS pin diverges from scanned fingerprint | If you intentionally rotated the relay key, clear the app's data; otherwise treat as a security incident |
@@ -409,7 +410,7 @@ The device-code direction makes this worse. A QR claim's dropped push is recover
 
 Entries too long for a table cell:
 
-- **HTTP 403 (Cloudflare error 1010) on `pair-qr` or `fetch-trust-key`.** Cloudflare Bot Fight Mode blocked the default `Python-urllib` User-Agent. Agent v0.1.3+ sends `User-Agent: mobaide-agent/<version>`, which passes default Bot Fight Mode; older agents must be upgraded. With Super Bot Fight Mode and JA3/JA4 "Block", add a Cloudflare WAF Skip rule: `(http.user_agent wildcard "mobaide-agent/*") and (http.request.uri.path starts_with "/api/")`.
+- **HTTP 403 (Cloudflare error 1010) on `pair-qr`.** Cloudflare Bot Fight Mode blocked the default `Python-urllib` User-Agent. Agent v0.1.3+ sends `User-Agent: mobaide-agent/<version>`, which passes default Bot Fight Mode; older agents must be upgraded. With Super Bot Fight Mode and JA3/JA4 "Block", add a Cloudflare WAF Skip rule: `(http.user_agent wildcard "mobaide-agent/*") and (http.request.uri.path starts_with "/api/")`.
 - **`show-qr` exits 9 ("still paired with the credentials it started with").** The agent on the host booted before `re-pair` blanked `.env`, so it is still paired and no pairing monitor is waiting on any QR. Run `mobaide-agent re-pair` again from a terminal outside Mobaide (its restart also stops any agent process left from the install). On Windows, re-run the installer once to get the supervisor that ends its whole process tree (before it, `schtasks /End` killed only the supervisor, the orphaned agent kept the port, and the restarted one exited).
 - **Browser sits on "waiting for a machine to enter the code" until the code expires.** Causes: nothing redeemed the code; the operator has not answered the agent's `y/N` prompt yet (expected — the request stays `pending` until answered); or the relay runs multiple workers and the confirm landed on a worker without the agent's WS. Check the command actually ran on the agent host and that the relay is single-worker (see "Multi-worker deployments"). All three clients bound this screen with the deadline the relay reported, so it ends in an expiry message even if the poll fails.
 - **QR scan succeeded but the client shows "Waiting for agent…", then after 60 s "Agent not online yet"** (not an error — the claim already succeeded; "Keep waiting" restarts the wait). The agent relay client did not come online in time: the agent process crashed after writing `.env`, a Windows service build older than v0.1.11 hit a `cp1252`/`cp437` `UnicodeEncodeError` in the QR render, or a `relay_url` scheme mismatch made the agent discard its own credentials. Check that the agent service is running, or run `mobaide-agent show-qr` there to restart pairing; upgrade Windows service builds below v0.1.11.

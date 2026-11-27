@@ -74,6 +74,7 @@ from mobaide.agent.git.changes_conflicts import (
     take_session_conflict,
 )
 from mobaide.agent.fs.models import FS_CAPABILITIES
+from mobaide.agent.updater import newer_version
 from mobaide.agent.fs.service import FsListError, list_dirs
 from mobaide.agent.git.changes_jobs import job_registry
 from mobaide.agent.git.changes_models import (
@@ -1838,7 +1839,9 @@ class RelayClient:
                         ),
                         "agent_settings": AGENT_SETTINGS_CAPABILITIES,
                     },
-                    "latest_agent_version": (manifest or {}).get("version"),
+                    "latest_agent_version": newer_version(
+                        (manifest or {}).get("version"), __version__
+                    ),
                 },
             }
 

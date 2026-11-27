@@ -22,16 +22,7 @@ final class SignInServiceTests: XCTestCase {
             sessionInvalidator: SessionInvalidatorAdapter(sessionManager: harness.sessionManager),
             client: client
         )
-        let agentAPI = AgentAPI(
-            baseURL: { [tokenStore = harness.tokenStore] in tokenStore.getEffectiveBaseUrl() },
-            tokens: SessionAgentTokenProvider(
-                tokenStore: harness.tokenStore,
-                sessionManager: harness.sessionManager
-            ),
-            client: client
-        )
         repository = AuthRepository(
-            agentAPI: agentAPI,
             centralAPI: centralAPI,
             tokenStore: harness.tokenStore,
             userIdentityStore: harness.userIdentityStore,

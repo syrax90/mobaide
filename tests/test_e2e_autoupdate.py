@@ -43,6 +43,9 @@ from mobaide.manifest_signing import canonical_json
 
 
 RELEASE_TOKEN = "e2e-release-token-do-not-use-in-prod"
+# Stands in for the hash-pinned dependency lock at the tarball root. The
+# finalizer is stubbed, so pip never reads it.
+DEPENDENCY_LOCK = b"example-dependency==1.0 --hash=sha256:" + b"0" * 64 + b"\n"
 
 
 def _make_signing_pair() -> tuple[Ed25519PrivateKey, str]:
@@ -56,8 +59,8 @@ def _make_signing_pair() -> tuple[Ed25519PrivateKey, str]:
 def _build_tarball_and_wheel(target_dir: Path, version: str) -> tuple[Path, Path]:
     """Build a tarball + minimal wheel placeholder for a synthetic agent release.
 
-    The tarball contains a single ``__init__.py`` that pins ``__version__``;
-    the wheel is a placeholder file (the updater's installer is stubbed in
+    The tarball contains a single ``__init__.py`` that pins ``__version__``
+    and the dependency lock; the wheel is a placeholder file (the updater's installer is stubbed in
     this test, so no real wheel install runs).
     """
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -70,6 +73,9 @@ def _build_tarball_and_wheel(target_dir: Path, version: str) -> tuple[Path, Path
         info = tarfile.TarInfo(name="mobaide/__init__.py")
         info.size = len(payload)
         tar.addfile(info, BytesIO(payload))
+        lock_info = tarfile.TarInfo(name="requirements.lock")
+        lock_info.size = len(DEPENDENCY_LOCK)
+        tar.addfile(lock_info, BytesIO(DEPENDENCY_LOCK))
     tarball_path.write_bytes(buf.getvalue())
     wheel_path.write_bytes(b"PK\x03\x04 placeholder wheel")
     return tarball_path, wheel_path
@@ -109,8 +115,12 @@ def _sign_manifest(
         "tarball_sha256": hashlib.sha256(tarball_path.read_bytes()).hexdigest(),
         "wheel_url": f"file://{wheel_path}",
         "wheel_sha256": hashlib.sha256(wheel_path.read_bytes()).hexdigest(),
+        "dependency_lock_sha256": hashlib.sha256(DEPENDENCY_LOCK).hexdigest(),
         "released_at": "2026-04-27T00:00:00+00:00",
         "min_central_server_version": "0.1.0",
+        # The relay stores and serves these signed fields unchanged; a body
+        # that it altered would not verify at the agent.
+        "trust": {"relay_pairing_public_keys": [], "release_public_keys": []},
     }
     if corrupt_tarball_sha:
         body["tarball_sha256"] = "0" * 64

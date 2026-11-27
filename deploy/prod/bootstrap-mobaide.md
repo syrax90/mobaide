@@ -117,9 +117,11 @@ MANIFEST_SIGNING_PUBLIC_KEY=<base64 Ed25519 public half of agent/manifest-signin
 
 Without `RELEASE_AUTH_TOKEN`, the upload and publish endpoints return HTTP 503 and the script's publish step fails. The values **must match between your machine and the server**: the script sends `agent/release-token` in the `X-Release-Token` header, and the server compares it against `RELEASE_AUTH_TOKEN` byte-for-byte. The local key folder is described in [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md#local-key-folder).
 
-**Trust-key bootstrap.** `MANIFEST_SIGNING_PUBLIC_KEY` is also required for **agent-side trust-key bootstrap**: agent install scripts (`deploy/install.sh`, `deploy/install.ps1`) auto-fetch it from `GET /api/v1/agent/trust_key` to pin `<prefix>/trust/central_server.pub`, so operators need not set `MOBAIDE_AGENT_TRUST_KEY_B64` on every host. Without it, that endpoint returns HTTP 503 and agent installs fail closed (deliberately: agents whose auto-updater cannot verify rollouts must not ship).
+**Trust key.** The agent install scripts (`deploy/install.sh`, `deploy/install.ps1`) carry the release public key as a constant and pin it at `<prefix>/trust/central_server.pub` only after the manifest signature verified. They do not fetch the key from the server. `MOBAIDE_AGENT_TRUST_KEY_B64` overrides the constant for a self-hosted release pipeline. `release_agent.py` checks that the scripts at the release tag contain the public half of the signing key. `MANIFEST_SIGNING_PUBLIC_KEY` is still required on the relay for manifest verification and `GET /api/v1/agent/trust_key` (HTTP 503 when unset).
 
-See [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md) for the local key folder and the trust-key bootstrap flow.
+**Relay pairing key.** `RELAY_PAIRING_PRIVATE_KEY` (optional) is the base64 of a 32-byte Ed25519 private key. The relay serves its public half at `GET /api/v1/agent/pairing_key`. In this step the pairing push is still signed with the manifest key.
+
+See [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md) for the local key folder and the trust-key flow.
 
 All other settings can be left at their `config.py` defaults. That includes the token TTLs, which are finite by default — leave them unset in production:
 

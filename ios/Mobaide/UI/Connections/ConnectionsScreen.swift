@@ -99,7 +99,7 @@ private struct ConnectionsContent: View {
     private func profileRow(_ profile: ConnectionStore.ConnectionProfile) -> some View {
         let isActive = profile.id == model.activeProfileId
         return HStack(spacing: 12) {
-            Image(systemName: profile.mode == "relay" ? "cloud" : "network")
+            Image(systemName: "cloud")
                 .foregroundStyle(colors.textMuted)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
@@ -149,9 +149,7 @@ private struct ConnectionsContent: View {
     }
 
     private func subtitle(for profile: ConnectionStore.ConnectionProfile) -> String {
-        profile.mode == "relay"
-            ? "Relay: \(profile.relayServerUrl ?? "unknown")"
-            : "Direct: \(profile.agentUrl ?? "unknown")"
+        "Relay: \(profile.relayServerUrl ?? "unknown")"
     }
 }
 

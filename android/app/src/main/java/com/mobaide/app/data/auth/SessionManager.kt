@@ -54,7 +54,7 @@ import javax.inject.Singleton
  * This is layered on top of [TokenStore] so that multiple concurrent
  * callers — the REST interceptor, the WebSocket URL provider, the UI —
  * can observe "am I logged in?" reactively and cooperate on a single
- * in-flight `/api/auth/refresh` request.
+ * in-flight `/api/mobile/refresh` request.
  *
  * ### Why single-flight instead of Mutex
  *
@@ -348,16 +348,8 @@ class SessionManager @Inject constructor(
             RefreshRequestDto(refreshToken),
         )
 
-        val refreshUrl = when (tokenStore.getConnectionMode()) {
-            TokenStore.ConnectionMode.DIRECT -> {
-                val agentUrl = tokenStore.getAgentUrl() ?: return terminalAgentOnly()
-                "$agentUrl/api/auth/refresh"
-            }
-            TokenStore.ConnectionMode.RELAY -> {
-                val serverUrl = tokenStore.getRelayServerUrl() ?: return terminalAgentOnly()
-                "$serverUrl/api/mobile/refresh"
-            }
-        }
+        val serverUrl = tokenStore.getRelayServerUrl() ?: return terminalAgentOnly()
+        val refreshUrl = "$serverUrl/api/mobile/refresh"
 
         val request = Request.Builder()
             .url(refreshUrl)

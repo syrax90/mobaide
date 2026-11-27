@@ -32,7 +32,7 @@ final class CreateSessionModelTests: XCTestCase {
 
     /// `SessionHarness(agentConnected: true)` saves an agent URL but no agent
     /// id, so the wizard scopes recents by URL.
-    private let harnessAgentKey = "https://agent.example.com"
+    private let harnessAgentKey = "agent-1"
 
     private func makeModel(
         prefs: PreferencesStore? = nil,

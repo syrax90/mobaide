@@ -158,9 +158,15 @@ struct SessionHarness {
             )
         }
         if agentConnected {
-            tokenStore.saveAgentUrl("https://agent.example.com")
             let exp = accessTokenExp ?? (Int64(now.timeIntervalSince1970) + 3600)
-            tokenStore.saveTokens(accessToken: TestJWT.token(exp: exp), refreshToken: "refresh-1")
+            tokenStore.saveRelayCredentials(
+                serverUrl: "https://relay.example.com",
+                agentId: "agent-1",
+                pairingId: "agent-1",
+                deviceId: "device-1",
+                accessToken: TestJWT.token(exp: exp),
+                refreshToken: "refresh-1"
+            )
         }
         sessionManager = SessionManager(
             tokenStore: tokenStore,

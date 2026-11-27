@@ -188,23 +188,26 @@ final class UserEventBusTests: XCTestCase {
 
     func testStartConnectsWhileUserOnly() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
 
         await harness.bus.start()
 
         let connection = try await harness.transportFactory.connection(1)
         // The device id tells the relay which device this socket delivers to,
         // so an attention push skips it and still reaches the account's others.
+        // No agent is connected, so no relay server URL is on file: the user
+        // channel goes to the central server.
         XCTAssertEqual(
             connection.url.absoluteString,
-            "wss://agent.example.com/ws/user-events?token=user-token"
-                + "&device_id=\(harness.deviceIdentityStore.getOrCreateDeviceId())"
+            RelayRouting.webSocketURLString(
+                relayServerURL: AppConfig.centralServerURL,
+                path: "ws/user-events",
+                token: "user-token"
+            ) + "&device_id=\(harness.deviceIdentityStore.getOrCreateDeviceId())"
         )
     }
 
     func testStartWhileLoggedOutDoesNotConnectThenLoginChangeConnects() async throws {
         let harness = BusHarness(session: SessionHarness())
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
 
         await harness.bus.start()
         let none = await harness.transportFactory.assertNoConnection(beyond: 0)
@@ -225,7 +228,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testStopsOnInvalidationAndIncompatibleServer() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let states = StreamCollector(harness.bus.connectionStates())
 
         await harness.bus.start()
@@ -266,7 +268,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testConnectedTriggersReconcileAndMessagesRouteToHooks() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let states = StreamCollector(harness.bus.connectionStates())
 
         await harness.bus.start()
@@ -293,7 +294,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testFirstAgentPairedRoutesToTheConversionAndConnectReconcilesIt() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let states = StreamCollector(harness.bus.connectionStates())
 
         await harness.bus.start()
@@ -313,7 +313,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testShortcutEventsRouteToHooksAndReconcileRefreshes() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let states = StreamCollector(harness.bus.connectionStates())
 
         await harness.bus.start()
@@ -340,7 +339,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testCustomTypeEventsRouteToHooksAndReconcileRefreshes() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let states = StreamCollector(harness.bus.connectionStates())
 
         await harness.bus.start()
@@ -373,7 +371,6 @@ final class UserEventBusTests: XCTestCase {
         // The purge keys on the type that just died; running it first would
         // let a concurrent upsert-for-that-kind sneak back in between.
         let session = SessionHarness(userLoggedIn: true)
-        session.tokenStore.saveAgentUrl("https://agent.example.com")
         let transportFactory = FakeWebSocketTransportFactory()
         let recorder = OrderedCascadeRecorder()
         let bus = UserEventBus(
@@ -408,7 +405,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testLogoutClearsCustomTypeCache() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
 
         await harness.bus.start()
         let connection = try await harness.transportFactory.connection(1)
@@ -471,7 +467,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testSameAccountReLoginKeepsSocketAndCaches() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let states = StreamCollector(harness.bus.connectionStates())
         await harness.bus.start()
         let connection = try await harness.transportFactory.connection(1)
@@ -498,7 +493,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testTokenRejectedCloseInvalidatesSession() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let events = StreamCollector(harness.session.sessionManager.sessionEvents())
 
         await harness.bus.start()
@@ -515,7 +509,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testAccountRemovedCloseInvalidatesWithAccountRemoved() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let events = StreamCollector(harness.session.sessionManager.sessionEvents())
 
         await harness.bus.start()
@@ -529,7 +522,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testIncompatibleServerCloseMarksTakeoverState() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let states = StreamCollector(harness.session.sessionManager.authStates())
 
         await harness.bus.start()
@@ -561,7 +553,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testSessionModeOrderPushRoutesToHookAndReconcileRefreshes() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let states = StreamCollector(harness.bus.connectionStates())
 
         await harness.bus.start()
@@ -610,7 +601,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testCloudVoiceChangedRoutesToHookAndReconcileRefreshes() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         let states = StreamCollector(harness.bus.connectionStates())
 
         await harness.bus.start()
@@ -639,7 +629,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testSlowCloudVoiceRefreshDoesNotHoldBackLaterEvents() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
         harness.cloudVoiceSync.holdsRefresh = true
         defer { harness.cloudVoiceSync.holdsRefresh = false }
         let states = StreamCollector(harness.bus.connectionStates())
@@ -668,7 +657,6 @@ final class UserEventBusTests: XCTestCase {
 
     func testLogoutClearsCloudVoice() async throws {
         let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
-        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
 
         await harness.bus.start()
         let connection = try await harness.transportFactory.connection(1)

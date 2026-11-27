@@ -213,6 +213,21 @@ class TestSpawnReleaseLauncher:
         assert flags & 0x08000000, "CREATE_NO_WINDOW missing"
         assert not flags & 0x01000000, "CREATE_BREAKAWAY_FROM_JOB set"
 
+    def test_exports_the_install_prefix_to_the_launcher_environment(
+        self, tmp_path: Path, fake_popen, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The task passes the prefix only as argv; without the env var the
+        launcher and agent fall back to ``%ProgramFiles%\\MobaideAgent`` and a
+        custom-prefix install reads another install's ``.env``."""
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", r"C:\Program Files\MobaideAgent")
+        monkeypatch.setenv("MOBAIDE_TEST_INHERITED", "kept")
+
+        windows_launcher._spawn_release_launcher(_FAKE_PYTHON, tmp_path)
+
+        env = fake_popen.calls[0][1]["env"]
+        assert env["MOBAIDE_AGENT_PREFIX"] == str(tmp_path)
+        assert env["MOBAIDE_TEST_INHERITED"] == "kept"
+
     @pytest.mark.parametrize("name", ["agent.out.log", "agent.err.log"])
     def test_rotates_each_oversized_log(
         self, tmp_path: Path, fake_popen, name: str

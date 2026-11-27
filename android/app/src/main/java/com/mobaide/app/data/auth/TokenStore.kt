@@ -10,9 +10,15 @@ import kotlinx.serialization.json.long
 
 class TokenStore(context: Context) {
 
-    enum class ConnectionMode { DIRECT, RELAY }
-
     private val prefs: SharedPreferences = openEncryptedPrefs(context, EncryptedPrefsFiles.AUTH)
+
+    init {
+        clearCredentialsStoredWithoutRelay()
+    }
+
+    private fun clearCredentialsStoredWithoutRelay() {
+        if (prefs.getString(KEY_CONNECTION_MODE, null) != MODE_RELAY && prefs.all.isNotEmpty()) clear()
+    }
 
     fun saveTokens(accessToken: String, refreshToken: String) {
         prefs.edit()
@@ -25,16 +31,6 @@ class TokenStore(context: Context) {
 
     fun getRefreshToken(): String? = prefs.getString(KEY_REFRESH_TOKEN, null)
 
-    fun saveAgentUrl(url: String) {
-        prefs.edit().putString(KEY_AGENT_URL, url.trimEnd('/')).apply()
-    }
-
-    fun getAgentUrl(): String? = prefs.getString(KEY_AGENT_URL, null)
-
-    fun getConnectionMode(): ConnectionMode =
-        if (prefs.getString(KEY_CONNECTION_MODE, null) == "relay") ConnectionMode.RELAY
-        else ConnectionMode.DIRECT
-
     fun saveRelayCredentials(
         serverUrl: String,
         agentId: String,
@@ -44,7 +40,7 @@ class TokenStore(context: Context) {
         refreshToken: String,
     ) {
         prefs.edit()
-            .putString(KEY_CONNECTION_MODE, "relay")
+            .putString(KEY_CONNECTION_MODE, MODE_RELAY)
             .putString(KEY_RELAY_SERVER_URL, serverUrl.trimEnd('/'))
             .putString(KEY_AGENT_ID, agentId)
             .putString(KEY_PAIRING_ID, pairingId)
@@ -63,35 +59,25 @@ class TokenStore(context: Context) {
     fun getDeviceId(): String? = prefs.getString(KEY_DEVICE_ID, null)
 
     /**
-     * Return the base URL for REST API calls, adapting to the active connection mode.
-     * - DIRECT: agent URL (e.g. `https://my-agent.example.com`)
-     * - RELAY:  proxy URL (e.g. `https://relay.example.com/proxy/abc123`)
+     * Return the base URL for REST API calls: the relay's proxy URL for the
+     * connected agent (e.g. `https://relay.example.com/proxy/abc123`), or
+     * `null` when no agent is connected.
      */
-    fun getEffectiveBaseUrl(): String? = when (getConnectionMode()) {
-        ConnectionMode.DIRECT -> getAgentUrl()
-        ConnectionMode.RELAY -> {
-            val server = getRelayServerUrl() ?: return null
-            val agentId = getAgentId() ?: return null
-            "$server/proxy/$agentId"
-        }
+    fun getEffectiveBaseUrl(): String? {
+        val server = getRelayServerUrl() ?: return null
+        val agentId = getAgentId() ?: return null
+        return "$server/proxy/$agentId"
     }
 
     /**
      * Return true only when all values required to silently recover a session
-     * are present for the active connection mode.
+     * are present.
      */
-    fun isLoggedIn(): Boolean = when (getConnectionMode()) {
-        ConnectionMode.DIRECT ->
-            getAccessToken() != null &&
-                getRefreshToken() != null &&
-                getAgentUrl() != null
-
-        ConnectionMode.RELAY ->
-            getAccessToken() != null &&
-                getRefreshToken() != null &&
-                getRelayServerUrl() != null &&
-                getAgentId() != null
-    }
+    fun isLoggedIn(): Boolean =
+        getAccessToken() != null &&
+            getRefreshToken() != null &&
+            getRelayServerUrl() != null &&
+            getAgentId() != null
 
     fun clear() {
         prefs.edit().clear().apply()
@@ -116,8 +102,8 @@ class TokenStore(context: Context) {
     companion object {
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_REFRESH_TOKEN = "refresh_token"
-        private const val KEY_AGENT_URL = "agent_url"
         private const val KEY_CONNECTION_MODE = "connection_mode"
+        private const val MODE_RELAY = "relay"
         private const val KEY_RELAY_SERVER_URL = "relay_server_url"
         private const val KEY_AGENT_ID = "agent_id"
         private const val KEY_PAIRING_ID = "pairing_id"

@@ -1,7 +1,10 @@
 """Tests for CentralServerConfig."""
 from __future__ import annotations
 
+import base64
+
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from central_server.config import CentralServerConfig
 
@@ -331,3 +334,58 @@ def test_cloud_voice_api_key_that_cannot_be_a_header_counts_as_unset(monkeypatch
     config = CentralServerConfig.from_env()
     assert config.cloud_voice_api_key is None
     assert config.cloud_voice_missing == ("CLOUD_VOICE_API_KEY",)
+
+
+def _relay_pairing_keypair_b64() -> tuple[str, str]:
+    """A private/public pair made for one test run."""
+    private = Ed25519PrivateKey.generate()
+    return (
+        base64.b64encode(private.private_bytes_raw()).decode(),
+        base64.b64encode(private.public_key().public_bytes_raw()).decode(),
+    )
+
+
+def test_relay_pairing_key_is_read_and_gives_its_public_half(monkeypatch):
+    private_b64, public_b64 = _relay_pairing_keypair_b64()
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("RELAY_PAIRING_PRIVATE_KEY", f"  {private_b64}\n")
+
+    config = CentralServerConfig.from_env()
+
+    assert config.relay_pairing_private_key_b64 == private_b64
+    assert config.relay_pairing_public_key_b64 == public_b64
+
+
+@pytest.mark.parametrize("raw", [None, "", "   "])
+def test_relay_pairing_key_is_optional(monkeypatch, raw):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    if raw is None:
+        monkeypatch.delenv("RELAY_PAIRING_PRIVATE_KEY", raising=False)
+    else:
+        monkeypatch.setenv("RELAY_PAIRING_PRIVATE_KEY", raw)
+
+    config = CentralServerConfig.from_env()
+
+    assert config.relay_pairing_private_key_b64 is None
+    assert config.relay_pairing_public_key_b64 is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not-base64-!!",
+        # Valid base64, but an Ed25519 private key is exactly 32 raw bytes.
+        base64.b64encode(b"\x07" * 16).decode(),
+        base64.b64encode(b"\x07" * 64).decode(),
+    ],
+)
+def test_malformed_relay_pairing_key_stops_the_start(monkeypatch, raw):
+    """A relay that starts without the key it was given would fail later
+    with no clear cause. The error names the setting and not its value."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("RELAY_PAIRING_PRIVATE_KEY", raw)
+
+    with pytest.raises(ValueError, match="RELAY_PAIRING_PRIVATE_KEY") as failure:
+        CentralServerConfig.from_env()
+
+    assert raw not in str(failure.value)

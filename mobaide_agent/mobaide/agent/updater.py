@@ -37,6 +37,10 @@ State machine
   and defers when any session is non-stopped.
 * Signature verification is fail-closed: a malformed or invalid signature
   rejects the manifest and the agent stays on the current version.
+* Forward-only: the version inside the signed body must be higher than the
+  running version, so a replayed older manifest is refused.
+* Dependencies install only at the versions and hashes of the lock file
+  that the signed manifest names.
 """
 from __future__ import annotations
 
@@ -44,6 +48,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import platform
 import posixpath
 import re
 import shutil
@@ -60,9 +65,13 @@ from typing import Any
 
 import mobaide._http as _http
 from mobaide.agent.install_paths import RELEASE_SENTINEL, is_release_complete
+from mobaide.agent.trust_store import (
+    record_manifest_trust,
+    release_verification_keys,
+)
 from mobaide.manifest_signing import (
     ManifestSignatureError,
-    verify_signature,
+    verify_signature_any,
 )
 
 
@@ -79,6 +88,13 @@ EXIT_RESTART_REQUESTED = 75
 # Minimum interval between "deferred because busy" retry attempts.
 DEFERRED_RETRY_SECONDS = 30 * 60
 
+# A release that failed to install is tried again after this wait, doubled
+# after each further failure up to the maximum. "Install now" and the command
+# at the computer skip the wait. Without it, a release that cannot install on
+# this computer would be downloaded again at every manifest delivery.
+STAGE_RETRY_BASE_SECONDS = 15 * 60
+STAGE_RETRY_MAX_SECONDS = 24 * 60 * 60
+
 # Log a WARN if a single update has been deferred for longer than this.
 LONG_DEFER_WARN_SECONDS = 24 * 60 * 60
 
@@ -94,6 +110,17 @@ _STALE_SCRATCH_SECONDS = 24 * 60 * 60
 # console for the child. ``CREATE_NO_WINDOW`` suppresses that while
 # preserving ``capture_output=True``'s stdio inheritance.
 _WINDOWS_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+# Hash-pinned pip requirements file at the root of the release tarball. The
+# signed manifest names its SHA-256 in ``dependency_lock_sha256``.
+DEPENDENCY_LOCK_NAME = "requirements.lock"
+_SHA256_HEX_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _install_env() -> dict[str, str]:
+    """Environment for the venv and pip children: they must not import
+    modules from the directory the agent or the CLI was started in."""
+    return {**os.environ, "PYTHONSAFEPATH": "1"}
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -127,6 +154,25 @@ def _is_version_newer(candidate: str, current: str) -> bool:
     if not cand or not cur:
         return False
     return cand > cur
+
+
+def version_at_least(candidate: str, current: str) -> bool:
+    """True when both versions parse and ``candidate`` is not older than ``current``."""
+    cand = _version_tuple(candidate)
+    cur = _version_tuple(current)
+    return bool(cand) and bool(cur) and cand >= cur
+
+
+def newer_version(candidate: object, current: str) -> str | None:
+    """``candidate`` when it is a higher version than ``current``, else None.
+
+    The apps offer "Install now" for this version. The updater installs only
+    a higher version, so a published version that is the same or lower (an
+    older manifest published again) must not be offered.
+    """
+    if isinstance(candidate, str) and _is_version_newer(candidate, current):
+        return candidate
+    return None
 
 
 def _release_venv_python(release_dir: Path) -> Path:
@@ -273,6 +319,14 @@ class StagedBinaryUpdater:
         # graceful shutdown after asking for the restart, and a manifest that
         # arrives in that window must not stage the same release again.
         self._staged_version: str | None = None
+        # Signature of the last manifest whose trust data was recorded, so a
+        # manifest that arrives again at every tunnel sign-in costs no file I/O.
+        self._trust_recorded_for: str | None = None
+        # Retry wait after a failed install: the signature of the manifest
+        # that failed, how often, and the earliest time of the next try.
+        self._stage_failed_for: str | None = None
+        self._stage_failures = 0
+        self._stage_retry_at = 0.0
         self._lock = asyncio.Lock()
 
     @property
@@ -287,6 +341,8 @@ class StagedBinaryUpdater:
         *,
         force: bool = False,
         exit_after_stage: bool = True,
+        allow_downgrade: bool = False,
+        ignore_retry_wait: bool = False,
     ) -> str:
         """Apply the manifest if appropriate.
 
@@ -299,62 +355,85 @@ class StagedBinaryUpdater:
             ``"deferred"`` — busy session; will retry later.
             ``"staged"`` — release written + ``current_version`` swapped. When
             ``exit_after_stage`` is ``True`` (the default — used by the relay
-            callback and the standalone CLI) ``self._exit_func`` is invoked
-            with ``EXIT_RESTART_REQUESTED`` before the function returns. HTTP
+            callback) ``self._exit_func`` is invoked with
+            ``EXIT_RESTART_REQUESTED`` before the function returns. HTTP
             wrappers pass ``False`` so they can flush the response and then
-            schedule the exit on the event loop. A manifest for the version
+            schedule the exit on the event loop; the CLI passes ``False`` to
+            print its result line and return the code. A manifest for the version
             this updater already staged returns ``"staged"`` with no new work
             and no second exit call (the restart is still pending).
-            ``"signature_failed"`` — fail-closed; agent stays on current.
+            ``"signature_failed"`` — fail-closed; agent stays on current. Also
+            returned, with no new attempt, while a release that failed to
+            install waits for its next try (``STAGE_RETRY_BASE_SECONDS``).
+
+        ``force`` skips only the wait for idle sessions. ``ignore_retry_wait``
+        skips the wait after a failed install: the paths a person starts
+        ("Install now", the command at the computer) pass it, the automatic
+        ones do not. Every decision uses
+        the version inside the signed body: ``latest_version`` comes from the
+        sender without a signature, so it never selects what is installed.
+        Only ``allow_downgrade`` (the command at the computer) accepts a
+        version that is not higher than the running one.
         """
         if not latest_version:
             return "no_change"
-        if latest_version == self._staged_version:
-            return "staged"
-        if not force and latest_version == self._current_version:
-            self._first_deferred_at = None
-            return "no_change"
-        if not force and not _is_version_newer(latest_version, self._current_version):
-            # Auto/poll updates are forward-only: never stage a non-newer (or
-            # unparseable) version. This is the guard that stops a stale or
-            # mismatched manifest — e.g. a newer dev build seeing an older
-            # published version — from driving a destructive re-stage. Forced
-            # paths (user "install now", 4002 protocol-incompatible recovery)
-            # bypass this so a deliberate same/older reinstall still works.
-            self._first_deferred_at = None
-            logger.info(
-                "updater.forward_only_skipped latest=%s current=%s",
-                latest_version, self._current_version,
+        if not isinstance(manifest_body, dict):
+            logger.error(
+                "updater.signature_failed: manifest body is not a dict (got %s)",
+                type(manifest_body).__name__,
             )
+            return "signature_failed"
+        try:
+            verify_signature_any(
+                manifest_body,
+                signature_b64,
+                release_verification_keys(self._layout, self._public_key_b64),
+            )
+        except ManifestSignatureError as exc:
+            logger.error("updater.signature_failed: %s", exc)
+            return "signature_failed"
+
+        target_version = str(manifest_body.get("version", ""))
+        if not target_version:
+            logger.warning("updater.manifest_missing_version")
+            return "signature_failed"
+
+        if signature_b64 != self._trust_recorded_for and version_at_least(
+            target_version, self._current_version
+        ):
+            # On the event loop on purpose: one small file, and the tunnel
+            # sign-in must not wait for a free thread of the shared pool.
+            record_manifest_trust(self._layout, manifest_body)
+            self._trust_recorded_for = signature_b64
+
+        if target_version == self._staged_version:
+            return "staged"
+        if not allow_downgrade and not _is_version_newer(
+            target_version, self._current_version
+        ):
+            self._first_deferred_at = None
+            if target_version != self._current_version:
+                logger.warning(
+                    "updater.rollback_refused manifest=%s current=%s",
+                    target_version, self._current_version,
+                )
             return "no_change"
 
         async with self._lock:
             # Re-check under the lock: a caller queued behind a stage of the
             # same release must not rebuild it while the restart is pending.
-            if latest_version == self._staged_version:
+            if target_version == self._staged_version:
                 return "staged"
+            if (
+                not ignore_retry_wait
+                and signature_b64 == self._stage_failed_for
+                and time.monotonic() < self._stage_retry_at
+            ):
+                return "signature_failed"
             if not force and not self._is_idle():
                 self._note_deferred()
                 return "deferred"
             self._first_deferred_at = None
-
-            if not isinstance(manifest_body, dict):
-                logger.error(
-                    "updater.signature_failed: manifest body is not a dict (got %s)",
-                    type(manifest_body).__name__,
-                )
-                return "signature_failed"
-
-            try:
-                verify_signature(manifest_body, signature_b64, self._public_key_b64)
-            except ManifestSignatureError as exc:
-                logger.error("updater.signature_failed: %s", exc)
-                return "signature_failed"
-
-            target_version = str(manifest_body.get("version", ""))
-            if not target_version:
-                logger.warning("updater.manifest_missing_version")
-                return "signature_failed"
 
             try:
                 release_dir = await asyncio.to_thread(
@@ -362,6 +441,7 @@ class StagedBinaryUpdater:
                 )
             except Exception as exc:
                 logger.error("updater.stage_failed version=%s: %s", target_version, exc)
+                self._note_stage_failure(signature_b64)
                 return "signature_failed"
 
             try:
@@ -372,6 +452,7 @@ class StagedBinaryUpdater:
                     target_version, release_dir, exc,
                 )
                 shutil.rmtree(release_dir, ignore_errors=True)
+                self._note_stage_failure(signature_b64)
                 return "signature_failed"
 
             logger.info(
@@ -391,13 +472,15 @@ class StagedBinaryUpdater:
         *,
         exit_after_stage: bool = True,
     ) -> str:
-        """User-triggered update — skips activity-awareness."""
+        """User-triggered update: skips the wait for idle sessions and the wait
+        after a failed install, not the version check."""
         return await self.consider_manifest(
             manifest_body,
             signature_b64,
             latest_version,
             force=True,
             exit_after_stage=exit_after_stage,
+            ignore_retry_wait=True,
         )
 
     def _is_idle(self) -> bool:
@@ -420,6 +503,21 @@ class StagedBinaryUpdater:
         state = getattr(session, "state", None)
         value = getattr(state, "value", state)
         return str(value).lower() in {"stopped", "crashed"}
+
+    def _note_stage_failure(self, signature_b64: str) -> None:
+        if signature_b64 != self._stage_failed_for:
+            self._stage_failed_for = signature_b64
+            self._stage_failures = 0
+        self._stage_failures += 1
+        wait = min(
+            STAGE_RETRY_MAX_SECONDS,
+            STAGE_RETRY_BASE_SECONDS * 2 ** min(self._stage_failures - 1, 16),
+        )
+        self._stage_retry_at = time.monotonic() + wait
+        logger.info(
+            "updater.stage_retry_wait automatic retries wait seconds=%d failures=%d",
+            wait, self._stage_failures,
+        )
 
     def _note_deferred(self) -> None:
         now = time.monotonic()
@@ -450,6 +548,9 @@ class StagedBinaryUpdater:
         if not wheel_url or not wheel_sha:
             raise ValueError("manifest missing wheel_url/wheel_sha256")
         wheel_name = _wheel_basename_from_url(wheel_url)
+        lock_sha = str(manifest_body.get("dependency_lock_sha256", "")).lower()
+        if not _SHA256_HEX_RE.fullmatch(lock_sha):
+            raise ValueError("manifest has no dependency lock (dependency_lock_sha256)")
 
         releases_dir = self._layout.releases_dir
         releases_dir.mkdir(parents=True, exist_ok=True)
@@ -490,6 +591,20 @@ class StagedBinaryUpdater:
                     # manifest could otherwise write outside ``staging_dir``.
                     tar.extractall(staging_dir, filter="data")
 
+                lock_path = staging_dir / DEPENDENCY_LOCK_NAME
+                if not lock_path.is_file():
+                    raise ValueError(
+                        f"release tarball has no {DEPENDENCY_LOCK_NAME}"
+                    )
+                self._verify_sha256(lock_path, lock_sha)
+                requirements_path = Path(tmpdir) / "requirements.txt"
+                requirements_path.write_text(
+                    lock_path.read_text(encoding="utf-8")
+                    + f"\nmobaide-agent @ {wheel_path.resolve().as_uri()}"
+                    f" --hash=sha256:{wheel_sha}\n",
+                    encoding="utf-8",
+                )
+
                 # Build the venv WITHOUT pip in staging: only the bin/python
                 # symlinks exist (no console-script shebangs that would bake in
                 # the staging path and break once the dir is moved). pip + the
@@ -514,8 +629,10 @@ class StagedBinaryUpdater:
                 # POST-SWAP: bootstrap pip + install the wheel with the FINAL
                 # interpreter so every shebang points at releases/<v>/venv, not
                 # the (now-gone) staging dir. Still inside the tmpdir context so
-                # ``wheel_path`` is valid.
-                self._finalizer(_release_venv_python(release_dir), wheel_path)
+                # ``requirements_path`` and the wheel it names are valid.
+                self._finalizer(
+                    _release_venv_python(release_dir), requirements_path
+                )
 
             # Fully built at the final path: mark complete. Only now is the
             # release eligible for selection, and only now does
@@ -683,11 +800,18 @@ def _build_venv_without_pip(venv_dir: Path) -> None:
         check=True,
         capture_output=True,
         creationflags=_WINDOWS_NO_WINDOW,
+        env=_install_env(),
     )
 
 
-def _finalize_wheel_install(python: Path, wheel_path: Path) -> None:
-    """Bootstrap pip and install the wheel using ``python`` at its final path.
+def _finalize_wheel_install(python: Path, requirements_path: Path) -> None:
+    """Bootstrap pip and install the release using ``python`` at its final path.
+
+    ``requirements_path`` lists the wheel and every dependency with an exact
+    version and a SHA-256. ``--require-hashes`` makes pip refuse a file whose
+    hash differs and a dependency that the list does not pin.
+    ``--only-binary`` refuses source builds, which would run build tools that
+    no hash covers. pip itself is the copy bundled with the interpreter.
 
     Runs AFTER the venv is swapped into ``releases/<v>`` so every shebang pip
     writes (``pip``, ``mobaide-agent``) points at the final interpreter. pip is
@@ -703,18 +827,38 @@ def _finalize_wheel_install(python: Path, wheel_path: Path) -> None:
         check=True,
         capture_output=True,
         creationflags=_WINDOWS_NO_WINDOW,
+        env=_install_env(),
     )
-    subprocess.run(
-        [str(python), "-m", "pip", "install", "--no-cache-dir", "--upgrade", "pip"],
-        check=True,
-        capture_output=True,
-        creationflags=_WINDOWS_NO_WINDOW,
-    )
-    subprocess.run(
-        [str(python), "-m", "pip", "install", "--no-cache-dir", str(wheel_path)],
-        check=True,
-        capture_output=True,
-        creationflags=_WINDOWS_NO_WINDOW,
+    try:
+        subprocess.run(
+            [
+                str(python), "-m", "pip", "install",
+                "--no-cache-dir",
+                "--disable-pip-version-check",
+                "--no-input",
+                "--require-hashes",
+                "--only-binary", ":all:",
+                "-r", str(requirements_path),
+            ],
+            check=True,
+            capture_output=True,
+            creationflags=_WINDOWS_NO_WINDOW,
+            env=_install_env(),
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"hash-pinned dependency install failed on {_platform_label()} "
+            "(releases have binary packages for 64-bit Python on x86-64 and "
+            f"ARM64 only): {detail[-2000:]}"
+        ) from exc
+
+
+def _platform_label() -> str:
+    bits = 64 if sys.maxsize > 2**32 else 32
+    return (
+        f"{platform.system()} {platform.machine()}, "
+        f"{bits}-bit Python {sys.version_info.major}.{sys.version_info.minor}"
     )
 
 

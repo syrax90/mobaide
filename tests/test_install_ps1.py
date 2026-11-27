@@ -168,6 +168,41 @@ def test_install_ps1_does_not_pass_a_script_variable_to_python_dash_c() -> None:
     assert not matches
 
 
+@pytest.mark.parametrize(
+    "build, refused",
+    [
+        ("AMD64 64", False),
+        ("ARM64 64", False),
+        ("AMD64 32", True),
+        ("x86 32", True),
+        ("", False),
+    ],
+    ids=["x64", "arm64", "32-bit-python-on-x64", "32-bit-windows", "probe-without-answer"],
+)
+def test_assert_supported_python_refuses_a_python_without_binary_packages(
+    tmp_path, build, refused
+) -> None:
+    """The dependency lock has binary packages for 64-bit Python on x86-64
+    and ARM64 only, so a 32-bit Python must stop the install with the cause
+    before anything is staged, not fail later inside pip."""
+    result = _run_ps_file(
+        tmp_path,
+        ("Write-Fail", "Assert-SupportedPython"),
+        "function Invoke-PythonScript { param($PythonExe, $Script, $Arguments) "
+        f"'{_ps_quote(build)}' }}\n"
+        "Assert-SupportedPython -PythonExe 'C:\\Python\\python.exe'\n"
+        "'CHECKED=yes'\n",
+    )
+
+    if refused:
+        assert result.returncode == 1, result.stdout
+        assert "64-bit Python 3.12 or newer" in result.stderr
+        assert "CHECKED" not in _values(result.stdout)
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert _values(result.stdout)["CHECKED"] == "yes"
+
+
 def test_install_release_does_not_download_with_python_urllib() -> None:
     """Python's ``urllib`` on Windows does no AIA chasing, so release
     downloads failed with ``CERTIFICATE_VERIFY_FAILED`` behind corporate

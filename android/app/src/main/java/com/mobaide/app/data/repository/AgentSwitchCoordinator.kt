@@ -128,7 +128,7 @@ class AgentSwitchCoordinator @Inject constructor(
             if (!connected) throw SignedOutException()
 
             val existingProfile = connectionStore.listProfiles()
-                .find { it.agentId == agent.agent_id && it.mode == "relay" }
+                .find { it.agentId == agent.agent_id }
             if (existingProfile != null) {
                 connectionStore.saveProfile(
                     existingProfile.copy(

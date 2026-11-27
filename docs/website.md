@@ -108,23 +108,21 @@ CLA-170), but the website must not repeat them:
 | "32 sessions **per agent type**", or 32 as a hard limit | `max_sessions` (`mobaide_agent/mobaide/core/session_manager.py`) is one global cap over a flat session dict, and it is configurable (`mobaide/agent/config.py`); 32 is the default. | "Up to 32 concurrent sessions on one agent" |
 | "**each** session in its own dedicated Git worktree" | Worktrees are opt-in per launch and Git-only. A `worktree=true` request against a non-Git workspace logs a warning and falls back to the workspace root. | The worktree claim **with both qualifiers**: opt-in per launch, Git workspaces only |
 | any implication that nothing is stored server-side | The relay persists accounts, paired devices, prompt templates, saved shortcuts and custom agent types. | "the relay never persists session traffic" + name what it does persist |
-| "no inbound ports", "nothing listens on your machine" | The agent always starts a listener, however the app reaches it — on `0.0.0.0:8000` by default, or wherever `HOST`/`PORT` point (`mobaide_agent/mobaide/agent/config.py:51`, passed to uvicorn in `mobaide/__main__.py`). | "No public IP or port forwarding", "nothing has to be reachable from the internet" |
+| "no inbound ports", "nothing listens on your machine" | The agent always starts a listener, however the app reaches it — on `127.0.0.1:8000` by default; a non-loopback `HOST` is replaced with `127.0.0.1` outside `MOBAIDE_ENV=test`, and `PORT` can change (`mobaide_agent/mobaide/agent/config.py`, passed to uvicorn in `mobaide/__main__.py`). | "No public IP or port forwarding", "nothing has to be reachable from the internet" |
 | "10,000-line scrollback" replays on reconnect | Two different buffers. The realtime WS path replays byte-exactly from a ring capped at `RING_MAX_BYTES` (4 MiB, `core/session.py`); the 10,000 figure is `scrollback_size`, a deque of read **chunks** that backs the REST `/scrollback` endpoint (see `get_scrollback`'s docstring). | "a rolling buffer of recent output" — state the guarantee, not a line count |
 | "JWT auth on every hop" | Only the app→relay hop is a JWT. Each agent presents an opaque per-agent token verified by SHA-256 `compare_digest` (`auth/service.py` → `db.verify_agent_token`). | name the two mechanisms separately |
 | "every hop is TLS-encrypted" **unqualified** | True for the relay path, which is the only one a client can take. See the note below the table. | scope it ("going through the relay, every hop is…") — without describing a direct mode, see the "direct"/"LAN" row |
 | "no analytics SDKs in the app" (any absolute no-analytics / no-tracking claim about the mobile apps) | Since Phase 2 of the Google Ads rollout both mobile apps carry Google Analytics for Firebase for install-conversion measurement (docs/app-conversion-measurement.md); the privacy policy's Section 3.8 describes it. The *agent* still has none. | "The agent carries no analytics SDK; the mobile apps carry Google's Firebase Analytics for one purpose — telling Google Ads which installs went on to pair an agent" — keep the agent claim, name the single purpose, and say it never sees sessions |
-| a "direct"/"LAN" mode, or "point the app straight at the agent" | No client exposes one. The mode is code, not a feature. See the note below the table. | say nothing about it; describe only the relay path |
+| a "direct"/"LAN" mode, or "point the app straight at the agent" | No client has one: the code was removed. See the note below the table. | say nothing about it; describe only the relay path |
 
 **Notes on two of the rows above:**
 
-- **"every hop is TLS-encrypted" unqualified.** The DIRECT-mode plumbing the clients
-  still carry would build `ws://` unless the agent sits behind HTTPS —
-  `WebSocketManager.kt`: `if (agentUrl.startsWith("https")) "wss" else "ws"` — and
-  the agent's own listener is plain HTTP by default.
-- **A "direct"/"LAN" mode.** `AuthRepository.connectAgent()` (Android and iOS) has
-  no UI caller — the Connections screen's "+" routes to the relay login. The agent's
-  `UserStore.add_user()` has no CLI verb or endpoint, so the user store
-  `POST /api/auth/token` checks is always empty.
+- **"every hop is TLS-encrypted" unqualified.** The agent's own listener is plain
+  HTTP and binds `127.0.0.1`. The relay hop to the agent is the agent's outbound
+  `wss://` connection.
+- **A "direct"/"LAN" mode.** The Android and iOS apps no longer contain a direct
+  connection mode. Stored credentials that do not belong to a relay connection are
+  cleared, and stored non-relay connection profiles are dropped.
 
 The worktree capability itself is broad and true, and the page says so: every
 session kind supports it — Claude Code, Codex CLI, Antigravity CLI, OpenCode,
@@ -519,8 +517,7 @@ answer and the shared footer; the sitemap lists it.
   control only when the including page sets `with_consent_settings` (the landing
   page does).
 - **Same copy rules as the landing page.** No inline style or script, no
-  cross-origin subresource, none of the accuracy-table claims (no direct mode
-  — the clients' direct-connection dictation path is not described), and the
+  cross-origin subresource, none of the accuracy-table claims (no direct mode), and the
   TLS claim scoped with "going through the relay". `TestVoiceInputPage` in
   `test_marketing.py` pins all of it, plus the voice facts the page states.
   The page never says what runs the Mobaide Cloud speech service; it names only

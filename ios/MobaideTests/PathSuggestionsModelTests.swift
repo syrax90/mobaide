@@ -42,7 +42,14 @@ final class PathSuggestionsModelTests: XCTestCase {
             client: client
         )
         let tokenStore = TokenStore(keychain: InMemoryKeychainStore())
-        tokenStore.saveAgentUrl("http://agent.example.com")
+        tokenStore.saveRelayCredentials(
+            serverUrl: "http://relay.example.com",
+            agentId: "agent-1",
+            pairingId: "agent-1",
+            deviceId: "device-1",
+            accessToken: "tok",
+            refreshToken: "refresh"
+        )
         let model = PathSuggestionsModel(
             repository: PathSuggestionRepository(agentAPI: agentAPI, tokenStore: tokenStore),
             sleeper: sleeper

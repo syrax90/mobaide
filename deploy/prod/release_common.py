@@ -13,6 +13,8 @@ Layout:
     <release dir>/
         agent/manifest-signing-key      base64 Ed25519 private key (32 raw bytes) or PEM
         agent/release-token             same string as the relay's RELEASE_AUTH_TOKEN
+        agent/relay-pairing-public-key  optional: public half of the relay's RELAY_PAIRING_PRIVATE_KEY
+        agent/next-manifest-public-key  optional: a second release key that agents will also trust
         android/upload.keystore
         android/signing.properties      storePassword, keyPassword, keyAlias
         android/google-web-client-id

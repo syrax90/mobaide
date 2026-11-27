@@ -3,6 +3,9 @@ emitted by ``/ws/session/<id>``."""
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
+
+import pytest
 
 from mobaide import __version__
 from mobaide.relay.envelope import (
@@ -349,3 +352,24 @@ async def test_get_version_lists_cursor_even_when_it_is_not_installed(
     cli = response.json()["capabilities"]["cli"]
     assert cli["cursor"] == {"available": False}
     assert cli["claude"] == {"available": True}
+
+
+@pytest.mark.parametrize(
+    "published, reported",
+    [("99.0.0", "99.0.0"), (__version__, None), ("0.0.1", None), ("not-a-version", None)],
+    ids=["higher", "same", "lower", "unparseable"],
+)
+async def test_get_version_offers_only_a_higher_published_version(
+    app, client, published, reported
+) -> None:
+    """The apps show "agent outdated" with an "Install now" button whenever
+    ``latest_agent_version`` differs from the running version. The updater
+    installs only a higher version, so after an older manifest is published
+    again the button would do nothing and the banner would never go away."""
+    app.state.relay_client = SimpleNamespace(latest_manifest={"version": published})
+
+    response = await client.get("/api/version")
+
+    assert response.status_code == 200
+    assert response.json()["latest_agent_version"] == reported
+
