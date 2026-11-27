@@ -1045,13 +1045,23 @@ def terminal_meta(update: Mapping[str, Any]) -> tuple[str | None, bool, int | No
     return text, replaces, code if isinstance(code, int) and not isinstance(code, bool) else None, exited
 
 
-def thread_busy(update: Mapping[str, Any]) -> bool | None:
-    """Whether the agent reports its session busy (Codex sends its thread
-    status in ``session_info_update._meta``); None when it says nothing."""
+def _thread_status_kind(update: Mapping[str, Any]) -> Any:
     meta = update.get("_meta")
     codex = meta.get("codex") if isinstance(meta, Mapping) else None
     status = codex.get("threadStatus") if isinstance(codex, Mapping) else None
-    kind = status.get("type") if isinstance(status, Mapping) else None
+    return status.get("type") if isinstance(status, Mapping) else None
+
+
+def thread_idle(update: Mapping[str, Any]) -> bool:
+    """The thread went idle: its turn ended normally (not ``systemError``,
+    and not only ``notLoaded`` on this app-server)."""
+    return _thread_status_kind(update) == "idle"
+
+
+def thread_busy(update: Mapping[str, Any]) -> bool | None:
+    """Whether the agent reports its session busy (Codex sends its thread
+    status in ``session_info_update._meta``); None when it says nothing."""
+    kind = _thread_status_kind(update)
     if kind == "active":
         return True
     if kind in ("idle", "notLoaded", "systemError"):

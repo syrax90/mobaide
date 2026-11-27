@@ -388,6 +388,9 @@ class ChatSession:
         self._forking = False
         # A ``session/fork`` that outlived its command: its copy is closed when it comes.
         self._late_fork: asyncio.Future[Any] | None = None
+        # The answer that ended the chat before a turn it did not send: that
+        # turn has no user message, so it must not mark this one as its own.
+        self._external_floor_id: str | None = None
         # This chat opens a fork: the fingerprint of the answer its replay must end with.
         self._fork_answer: str | None = config.chat_fork_answer
 
@@ -2249,12 +2252,18 @@ class ChatSession:
                 return None
         return None
 
-    def _mark_fork_point(self) -> None:
-        """Offer the answer that ended a turn as a fork point."""
+    def _mark_fork_point(self, *, unless: str | None = None) -> None:
+        """Offer the answer that ended a turn as a fork point; ``unless`` is
+        an answer that ended an earlier turn."""
         if not (self._timeline.state.get("fork") or {}).get("at_answer"):
             return
         item = self._turn_answer()
-        if item is None or item["id"] not in self._acp_message_ids or item.get("fork_point"):
+        if (
+            item is None
+            or item["id"] == unless
+            or item["id"] not in self._acp_message_ids
+            or item.get("fork_point")
+        ):
             return
         item["fork_point"] = True
         self._timeline.touch(item["id"])
@@ -2444,7 +2453,7 @@ class ChatSession:
         if kind == "session_info_update":
             busy = nz.thread_busy(update)
             if busy is not None:
-                self._on_agent_busy(busy)
+                self._on_agent_busy(busy, finished=nz.thread_idle(update))
         if kind == "agent_message_chunk":
             self._append_message("agent", update)
         elif kind == "agent_thought_chunk":
@@ -2522,10 +2531,12 @@ class ChatSession:
                 if item is not None:
                     tl.append_text(item["id"], part["text"])
 
-    def _on_agent_busy(self, busy: bool, *, self_started: bool = False) -> None:
+    def _on_agent_busy(self, busy: bool, *, self_started: bool = False, finished: bool = False) -> None:
         """A turn this session did not start (another client of a shared
         host, or with ``self_started`` the agent itself): show it as running,
-        and hold queued messages until it ends."""
+        and hold queued messages until it ends. ``finished``: the turn ended
+        by itself (not a Stop, an error or a watchdog), so its answer is a
+        fork point."""
         if not self._ready.is_set():
             # Joining a session while another app's turn runs.
             self._busy_before_ready = busy
@@ -2537,6 +2548,8 @@ class ChatSession:
             if not self_started:
                 # The user went on from another app: no continue may follow.
                 self._cancel_limit_wait()
+            before = self._turn_answer()
+            self._external_floor_id = before["id"] if before is not None else None
             self._external_turn = True
             self._self_turn = self_started
             self._close_streaming_items()
@@ -2558,6 +2571,9 @@ class ChatSession:
                 urgent=True,
             )
         elif not busy and self._external_turn:
+            if finished and not tl.state.get("cancelling"):
+                self._mark_fork_point(unless=self._external_floor_id)
+            self._external_floor_id = None
             self._external_turn = False
             self._disarm_cancel_watchdog()
             self._close_streaming_items()
@@ -2612,7 +2628,7 @@ class ChatSession:
         self._foreground_idle = False
         # The next queued message starts now and reports its own end.
         queued = any(not q.steering for q in self._queue)
-        self._on_agent_busy(False)
+        self._on_agent_busy(False, finished=True)
         if not queued and self._timeline.state.get("status") == "ready":
             self._alert_turn_done()
 
@@ -3586,7 +3602,7 @@ class ChatSession:
             return
         gate.handle(kind, payload)
         if kind is HookKind.STOP and self_turn:
-            self._on_agent_busy(False)
+            self._on_agent_busy(False, finished=True)
 
     def _fail_self_turn(self) -> None:
         """A turn the agent started by itself ended on an error (a rate

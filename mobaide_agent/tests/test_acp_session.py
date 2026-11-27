@@ -2685,6 +2685,28 @@ class TestExternalTurns:
         await m.until(lambda: m.status == "ready" and m.state["cancelling"] is False)
         assert "This answer is for a message typed into Codex on the PC." not in m.texts("agent")
 
+    async def test_the_answer_of_the_other_turn_is_a_fork_point_unless_stopped_here(self, open_chat):
+        """The other turn ends by itself (``threadStatus`` idle): its answer
+        is a final one. After Stop in this chat, its answer is not."""
+        m = await open_chat(
+            argv=fake_agent_argv("codex"), fork_opener=_ForkOpener(open_chat), fork_at_answer=True
+        )
+        assert m.state["fork"] == {"chat": True, "at_answer": True}
+        own = "Sure. Watch for a message from your PC next."
+        other = "This answer is for a message typed into Codex on the PC."
+        await self._external_turn_running(m)
+
+        await m.until(lambda: m.status == "ready" and other in m.texts("agent"))
+
+        assert [item["text"] for item in _fork_points(m)] == [own, other]
+
+        await m.command("prompt", text="external")
+        await m.until(lambda: m.status == "running" and len(m.of_type("agent")) == 4)
+        assert (await m.command("cancel"))["data"] == {"cancelled": True}
+        await m.until(lambda: m.status == "ready" and m.state["cancelling"] is False)
+
+        assert [item["text"] for item in _fork_points(m)] == [own, other, own]
+
     async def test_a_stop_the_other_app_never_answers_frees_the_chat(self, open_chat, monkeypatch):
         """Its app-server went away: no idle status ever comes."""
         monkeypatch.setattr(session_mod, "CANCEL_GRACE", 0.5)
