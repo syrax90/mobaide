@@ -828,6 +828,28 @@ function Resolve-Python {
     return $py
 }
 
+# The agent installs binary packages only, and its dependency lock has them for
+# 64-bit Python on x86-64 and ARM64. Keep in sync with LOCK_TARGET_PLATFORMS in
+# deploy/prod/release_agent.py. A probe that does not answer lets the install
+# go on.
+function Assert-SupportedPython {
+    param([Parameter(Mandatory=$true)] $PythonExe)
+    $probe = @'
+import platform, struct
+print(platform.machine(), struct.calcsize("P") * 8)
+'@
+    $build = (Invoke-PythonScript -PythonExe $PythonExe -Script $probe | Out-String).Trim()
+    if (-not $build) { return }
+    $machine, $bits = $build -split '\s+', 2
+    if ($bits -eq '64' -and @('AMD64', 'ARM64', 'x86_64', 'aarch64', 'arm64') -contains $machine) {
+        return
+    }
+    Write-Fail @"
+$PythonExe is a $bits-bit Python for $machine. The Mobaide agent needs 64-bit Python 3.12 or newer on an x86-64 or ARM64 computer: it installs prebuilt packages, and they exist only for those.
+Install 64-bit Python from https://www.python.org/downloads/windows/, make it the first python on PATH, and run the installer again.
+"@
+}
+
 # Trust-key validation and manifest-signature verification (Confirm-TrustKey,
 # Test-ManifestSignature below) import `cryptography` — a PyPI dep that is NOT
 # in stdlib and is NOT present on a freshly-installed python.org / winget
@@ -1828,6 +1850,7 @@ function Main {
     New-Item -ItemType Directory -Path $Script:Prefix -Force | Out-Null
 
     $python = Resolve-Python
+    Assert-SupportedPython -PythonExe $python
     # Resolve the GUI-subsystem counterpart now (alongside python.exe) so a
     # missing pythonw.exe surfaces BEFORE we stage releases / register the
     # task. Failing here is far more debuggable than failing at logon.

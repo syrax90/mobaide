@@ -719,6 +719,7 @@ The mobile and web apps never talk to the agent directly; they always go through
 ### Prerequisites
 
 - macOS 11 or newer on a Mac. The agent installs binary packages only, and its dependency lock has none for older macOS versions.
+- 64-bit Python on an x86-64 or ARM64 computer, for the same reason. The install scripts stop on a 32-bit Python or another CPU.
 - Python 3.12+ (the production `install.ps1` flow on Windows auto-installs Python 3.12 via `winget`, with a python.org-installer fallback when `winget` is unavailable; the conda dev path still needs it pre-installed)
 - `git`, `curl`
 - Claude CLI installed on the same machine (the agent spawns `claude` via PTY — see https://claude.ai/code).

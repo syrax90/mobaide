@@ -104,6 +104,7 @@ from .update_check import (
     run_https_update_check,
     run_periodic_check_loop,
 )
+from .updater import newer_version
 from .updater_router import router as updater_router
 from .ws.event_fanout import SessionListBroadcaster
 from .ws.events import router as ws_events_router
@@ -1098,7 +1099,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 ),
                 "agent_settings": AGENT_SETTINGS_CAPABILITIES,
             },
-            "latest_agent_version": (manifest or {}).get("version"),
+            "latest_agent_version": newer_version(
+                (manifest or {}).get("version"), __version__
+            ),
         }
 
     return app

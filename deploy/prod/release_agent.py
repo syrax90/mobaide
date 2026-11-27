@@ -372,11 +372,26 @@ def recompile_from_pins(agent_dir: Path, text: str, target: Path, python_floor: 
     compile_lock(agent_dir, target, python_floor, upgrade=upgrade)
 
 
+def files_added_on_index(lock_text: str, index_text: str) -> list[str] | None:
+    """Dependencies for which the index has more files than the lock lists,
+    when that is the only difference. None when a version or marker differs,
+    or the lock lists a hash the index does not have.
+
+    The index can add files to a released version (wheels for a new Python,
+    for example). pip installs only files whose hash the lock lists, so the
+    lock installs as before, and the release need not wait for a new lock."""
+    lock, index = lock_entries(lock_text), lock_entries(index_text)
+    if lock.keys() != index.keys() or any(not lock[key] <= index[key] for key in lock):
+        return None
+    return sorted({key[0] for key in lock if index[key] - lock[key]})
+
+
 def load_dependency_lock(agent_dir: Path, out_dir: Path, python_floor: str) -> Path:
     """Take the lock that is committed with the source. Its versions were
     reviewed in a pull request; a release never picks new ones. The lock
     must be what the index gives for those versions and for pyproject.toml:
-    a changed dependency, marker or hash stops the release here."""
+    a changed dependency or marker, or a hash the index does not have, stops
+    the release here. Files the index added later only warn."""
     committed = agent_dir / DEPENDENCY_LOCK_NAME
     if not committed.is_file():
         raise ReleaseError(f"mobaide_agent/{DEPENDENCY_LOCK_NAME} is missing at this tag")
@@ -386,14 +401,22 @@ def load_dependency_lock(agent_dir: Path, out_dir: Path, python_floor: str) -> P
     check_lock_grammar(text)
     fresh = out_dir / "lock-fresh.txt"
     recompile_from_pins(agent_dir, text, fresh, python_floor)
-    difference = lock_difference(text, fresh.read_text(encoding="utf-8"))
+    index_text = fresh.read_text(encoding="utf-8")
     fresh.unlink(missing_ok=True)
-    if difference:
+    added = files_added_on_index(text, index_text)
+    if added is None:
+        difference = lock_difference(text, index_text)
         raise ReleaseError(
             f"mobaide_agent/{DEPENDENCY_LOCK_NAME} is not what the package index gives for "
             "mobaide_agent/pyproject.toml (lock -> index):\n  " + "\n  ".join(difference) + "\n"
             "Run 'python deploy/prod/release_agent.py --update-lock', review the change in a "
             "pull request, and release from a tag that contains it."
+        )
+    if added:
+        warn(
+            f"The package index has files the lock does not list for: {', '.join(added)}. "
+            "The release goes on: pip installs only files whose hash the lock lists. "
+            "To add them, run 'python deploy/prod/release_agent.py --update-lock' in a pull request."
         )
     ok(f"Dependency lock: {len(lock_entries(text))} pinned versions, as committed")
     return lock

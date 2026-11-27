@@ -48,6 +48,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import platform
 import posixpath
 import re
 import shutil
@@ -160,6 +161,18 @@ def version_at_least(candidate: str, current: str) -> bool:
     cand = _version_tuple(candidate)
     cur = _version_tuple(current)
     return bool(cand) and bool(cur) and cand >= cur
+
+
+def newer_version(candidate: object, current: str) -> str | None:
+    """``candidate`` when it is a higher version than ``current``, else None.
+
+    The apps offer "Install now" for this version. The updater installs only
+    a higher version, so a published version that is the same or lower (an
+    older manifest published again) must not be offered.
+    """
+    if isinstance(candidate, str) and _is_version_newer(candidate, current):
+        return candidate
+    return None
 
 
 def _release_venv_python(release_dir: Path) -> Path:
@@ -835,8 +848,18 @@ def _finalize_wheel_install(python: Path, requirements_path: Path) -> None:
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or b"").decode("utf-8", errors="replace").strip()
         raise RuntimeError(
-            f"hash-pinned dependency install failed: {detail[-2000:]}"
+            f"hash-pinned dependency install failed on {_platform_label()} "
+            "(releases have binary packages for 64-bit Python on x86-64 and "
+            f"ARM64 only): {detail[-2000:]}"
         ) from exc
+
+
+def _platform_label() -> str:
+    bits = 64 if sys.maxsize > 2**32 else 32
+    return (
+        f"{platform.system()} {platform.machine()}, "
+        f"{bits}-bit Python {sys.version_info.major}.{sys.version_info.minor}"
+    )
 
 
 def _write_release_sentinel(release_dir: Path) -> None:

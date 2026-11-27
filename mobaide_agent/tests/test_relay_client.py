@@ -3654,6 +3654,26 @@ class TestProxyVersionCapabilities:
             "gpt-5.6-sol",
         ]
 
+    @pytest.mark.parametrize(
+        "published, reported",
+        [("99.0.0", "99.0.0"), ("0.0.1", None)],
+        ids=["higher", "lower"],
+    )
+    async def test_version_offers_only_a_higher_published_version(
+        self, client, mock_app_state, published, reported,
+    ):
+        """Relay mirror of the direct handler: a published version that is
+        not higher than the running one is not offered for "Install now"."""
+        mock_app_state.cli_launchers = {}
+        client._latest_manifest = {"version": published}
+
+        result = await client._dispatch_proxy(
+            "GET", "/api/version", None, None, AsyncMock(),
+        )
+
+        assert result["status"] == 200
+        assert result["body"]["latest_agent_version"] == reported
+
     async def test_capabilities_equal_shared_builder_locks_direct_relay_parity(
         self, client, mock_app_state,
     ):
