@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.35](https://github.com/syrax90/mobaide/compare/server-v0.2.34...server-v0.2.35) (2026-11-27)
+
+
+### Features
+
+* **agent,server,android,ios:** harden the agent update trust chain ([#996](https://github.com/syrax90/mobaide/issues/996)) ([07ffd63](https://github.com/syrax90/mobaide/commit/07ffd633bb54b79a1db62f90683eb662d245d7f0))
+
 ## [0.2.34](https://github.com/syrax90/mobaide/compare/server-v0.2.33...server-v0.2.34) (2026-11-27)
 
 

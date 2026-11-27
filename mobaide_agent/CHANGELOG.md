@@ -1,5 +1,14 @@
 # mobaide_agent Changelog
 
+## [0.3.38](https://github.com/syrax90/mobaide/compare/agent-v0.3.37...agent-v0.3.38) (2026-11-27)
+
+
+### Features
+
+* **agent,android,ios,web:** offer Claude's predicted next prompt as a tap-to-fill chip ([#991](https://github.com/syrax90/mobaide/issues/991)) ([9fdd560](https://github.com/syrax90/mobaide/commit/9fdd5602c0c95a74b904a42b63bff62b953a78d2))
+* **agent,server,android,ios:** harden the agent update trust chain ([#996](https://github.com/syrax90/mobaide/issues/996)) ([07ffd63](https://github.com/syrax90/mobaide/commit/07ffd633bb54b79a1db62f90683eb662d245d7f0))
+* **agent:** offer Send now in Antigravity chats ([#990](https://github.com/syrax90/mobaide/issues/990)) ([5472094](https://github.com/syrax90/mobaide/commit/5472094253bf64c1d973b56ca7adcd9324aa6fa9))
+
 ## [0.3.37](https://github.com/syrax90/mobaide/compare/agent-v0.3.36...agent-v0.3.37) (2026-11-25)
 
 
