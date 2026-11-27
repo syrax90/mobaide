@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.34](https://github.com/syrax90/mobaide/compare/server-v0.2.33...server-v0.2.34) (2026-11-27)
+
+
+### Documentation
+
+* **server:** let the privacy policy cover service emails ([#988](https://github.com/syrax90/mobaide/issues/988)) ([766e3cd](https://github.com/syrax90/mobaide/commit/766e3cd377ff49ad359a48a8aba15b1b1f1a277d))
+
 ## [0.2.33](https://github.com/syrax90/mobaide/compare/server-v0.2.32...server-v0.2.33) (2026-11-25)
 
 
