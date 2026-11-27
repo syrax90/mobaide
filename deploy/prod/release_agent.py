@@ -113,6 +113,10 @@ LOCK_PLATFORM_FOR_PYTHON = {
     ("x86_64-unknown-linux-gnu", "3.15"): "x86_64-manylinux_2_39",
     ("aarch64-unknown-linux-gnu", "3.15"): "aarch64-manylinux_2_39",
 }
+# The oldest macOS the agent installs on; deploy/install.sh refuses older
+# ones. Without it uv checks macOS wheels for macOS 13 and passes a lock that
+# macOS 11 and 12 cannot install.
+LOCK_MACOS_MINIMUM = "11.0"
 PYPI_INDEX = "https://pypi.org/simple"
 INSTALL_SCRIPTS = ("deploy/install.sh", "deploy/install.ps1")
 
@@ -434,6 +438,11 @@ def check_lock_has_wheels(lock: Path, out_dir: Path, python_floor: str) -> None:
     scratch = out_dir / "lock-check.txt"
     missing: list[str] = []
     for platform in LOCK_TARGET_PLATFORMS:
+        env = _uv_env()
+        macos = ""
+        if platform.endswith("-apple-darwin"):
+            env["MACOSX_DEPLOYMENT_TARGET"] = LOCK_MACOS_MINIMUM
+            macos = f" on macOS {LOCK_MACOS_MINIMUM}"
         for version in versions:
             r = subprocess.run(
                 [
@@ -442,14 +451,14 @@ def check_lock_has_wheels(lock: Path, out_dir: Path, python_floor: str) -> None:
                     "--python-version", version, "--default-index", PYPI_INDEX,
                     "--no-build", "--no-deps", "--quiet", "--output-file", str(scratch),
                 ],
-                capture_output=True, text=True, env=_uv_env(),
+                capture_output=True, text=True, env=env,
             )
             if r.returncode != 0:
                 cause = next(
                     (line.split("cause:", 1)[1].strip() for line in r.stderr.splitlines() if "cause:" in line),
                     r.stderr.strip()[-300:],
                 )
-                missing.append(f"  {platform}, Python {version}: {cause}")
+                missing.append(f"  {platform}, Python {version}{macos}: {cause}")
     scratch.unlink(missing_ok=True)
     if missing:
         raise ReleaseError(
@@ -458,7 +467,10 @@ def check_lock_has_wheels(lock: Path, out_dir: Path, python_floor: str) -> None:
             "a platform marker in mobaide_agent/pyproject.toml), or remove the platform from "
             "LOCK_TARGET_PLATFORMS when agents no longer run there."
         )
-    ok(f"The lock has wheels for {len(LOCK_TARGET_PLATFORMS)} platforms x Python {', '.join(versions)}")
+    ok(
+        f"The lock has wheels for {len(LOCK_TARGET_PLATFORMS)} platforms x Python "
+        f"{', '.join(versions)} (macOS {LOCK_MACOS_MINIMUM} and newer)"
+    )
 
 
 def trial_install(lock: Path, wheel: Path, wheel_sha: str, out_dir: Path) -> None:

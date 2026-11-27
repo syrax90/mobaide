@@ -269,6 +269,33 @@ class TestLockHasWheelsEverywhere:
 
         assert commands == []
 
+    def test_macos_wheels_are_checked_for_the_oldest_macos_install_sh_accepts(
+        self, tmp_path, monkeypatch
+    ):
+        """uv checks a macOS platform for macOS 13 by default, and the
+        machine may set another target. A wheel that needs a newer macOS
+        would pass and then fail on the oldest Macs the installer accepts."""
+        monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "14.0")
+        targets: dict[tuple[str, str], str | None] = {}
+
+        def fake_run(cmd, **kwargs):
+            targets[_target(cmd)] = kwargs["env"].get("MACOSX_DEPLOYMENT_TARGET")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(ra.subprocess, "run", fake_run)
+
+        ra.check_lock_has_wheels(
+            tmp_path / ra.DEPENDENCY_LOCK_NAME, tmp_path, ra.LOCK_PYTHON_VERSIONS[0],
+        )
+
+        macos = {
+            target: value
+            for target, value in targets.items()
+            if target[0].endswith("-apple-darwin")
+        }
+        assert len(macos) == 2 * len(ra.LOCK_PYTHON_VERSIONS)
+        assert set(macos.values()) == {ra.LOCK_MACOS_MINIMUM}
+
 
 class TestUvResolvesFromThePublicIndexOnly:
     """The versions and hashes in the lock come from what uv resolves. A uv
