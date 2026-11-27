@@ -193,10 +193,12 @@ final class ChatSessionModel {
     var showsStop: Bool { isRunning && !hasDraft }
 
     /// The agent's predicted next prompt, while the chat can take it now: an
-    /// empty composer, ready, live, with no request card and no queued message.
+    /// empty composer, ready, live, not restarting, with no request card and no
+    /// queued message.
     var promptSuggestion: String? {
         guard let suggestion = state.promptSuggestions.first, suggestion != spentPromptSuggestion,
-              isLive, !sessionClosed, phase == .ready, state.requests.isEmpty, state.queue.isEmpty,
+              isLive, !sessionClosed, !restarting, !startingNew, phase == .ready,
+              state.requests.isEmpty, state.queue.isEmpty,
               composerText.isEmpty, attachments.isEmpty, preparingImages == 0
         else { return nil }
         return suggestion

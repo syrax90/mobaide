@@ -83,11 +83,12 @@ data class ChatUiState(
 
     /**
      * The agent's predicted next prompt, while the chat can take it now: ready,
-     * live, with no request card, no queued message and no picked image.
+     * live, not restarting, with no request card, no queued message and no picked image.
      */
     val promptSuggestion: String?
         get() = state.promptSuggestions.firstOrNull()?.takeIf {
-            live && !sessionClosed && state.status == ChatStatus.READY && state.requests.isEmpty() &&
+            live && !sessionClosed && !restarting && !startingNew && state.status == ChatStatus.READY &&
+                state.requests.isEmpty() &&
                 state.queue.isEmpty() && images.isEmpty() && !imagesLoading
         }
 

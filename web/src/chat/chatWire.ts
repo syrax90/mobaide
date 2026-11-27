@@ -347,7 +347,7 @@ const limitWaitSchema = z
 export type ChatLimitWait = NonNullable<z.infer<typeof limitWaitSchema>>;
 
 /** A prompt the agent predicts the user sends next. */
-const promptSuggestionSchema = z.object({ text: z.string() });
+const promptSuggestionSchema = z.object({ text: z.string().refine((text) => text.trim() !== '') });
 
 const agentInfoSchema = z
   .object({ name: text, title: text, version: text })

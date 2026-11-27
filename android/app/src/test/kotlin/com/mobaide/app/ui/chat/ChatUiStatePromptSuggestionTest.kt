@@ -31,6 +31,8 @@ class ChatUiStatePromptSuggestionTest {
         sessionClosed: Boolean = false,
         images: List<ChatComposerImage> = emptyList(),
         imagesLoading: Boolean = false,
+        restarting: Boolean = false,
+        startingNew: Boolean = false,
     ) = ChatUiState(
         loaded = true,
         state = state,
@@ -38,6 +40,8 @@ class ChatUiStatePromptSuggestionTest {
         sessionClosed = sessionClosed,
         images = images,
         imagesLoading = imagesLoading,
+        restarting = restarting,
+        startingNew = startingNew,
     )
 
     private fun image() = ChatComposerImage(
@@ -65,6 +69,8 @@ class ChatUiStatePromptSuggestionTest {
             "queued message" to ui(state = ready.copy(queue = listOf(ChatQueuedMessage("q:1", "next", 0)))),
             "picked image" to ui(images = listOf(image())),
             "image being read" to ui(imagesLoading = true),
+            "restarting" to ui(restarting = true),
+            "starting a new conversation" to ui(startingNew = true),
         )
 
         for ((case, state) in blocked) {

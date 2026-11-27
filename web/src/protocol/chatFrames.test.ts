@@ -13,6 +13,7 @@ import {
   type ChatFrame,
   type EventsFrame,
   type SnapshotFrame,
+  normalizeStatePatch,
 } from '../chat/chatWire';
 import { INITIAL_CHAT_TIMELINE, applyEvents, applySnapshot, chatOpened } from '../chat/chatTimeline';
 import { subagentTree } from '../chat/focusView';
@@ -384,6 +385,12 @@ describe('chat frame golden fixtures', () => {
     expect(started.seq).toBe(60);
     expect(started.state.status).toBe('running');
     expect(started.state.prompt_suggestions).toEqual([]);
+  });
+
+  it('drops a blank suggested prompt', () => {
+    const patch = normalizeStatePatch({ prompt_suggestions: [{ text: '  ' }, { text: 'Commit it' }] });
+
+    expect(patch.prompt_suggestions).toEqual([{ text: 'Commit it' }]);
   });
 
   it('decodes results', () => {

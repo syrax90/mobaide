@@ -163,14 +163,6 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
   const kindLabel = session === undefined ? 'the agent' : sessionKindLabel(session, new Map());
   const title = state.title !== null && state.title !== '' ? state.title : headerLabel;
   const composerRef = useRef<ComposerHandle>(null);
-  const suggestion =
-    live &&
-    !closed &&
-    state.status === 'ready' &&
-    state.requests.length === 0 &&
-    state.queue.length === 0
-      ? (state.prompt_suggestions[0]?.text ?? null)
-      : null;
 
   const { handOff, toggle: sessionsToggle, rail: sessionsRail } = useSessionsPanelHost({
     agentId: model.agentId,
@@ -198,6 +190,16 @@ function ChatView({ model, session, headerLabel, worktreeShared }: ChatViewProps
     !restarting &&
     !startingNew &&
     (state.status === 'ready' || state.status === 'running' || state.status === 'error');
+  const suggestion =
+    live &&
+    !closed &&
+    !restarting &&
+    !startingNew &&
+    state.status === 'ready' &&
+    state.requests.length === 0 &&
+    state.queue.length === 0
+      ? (state.prompt_suggestions[0]?.text ?? null)
+      : null;
   const focusView = useChatPrefsStore((prefs) => prefs.focusView);
   const setFocusView = useChatPrefsStore((prefs) => prefs.setFocusView);
   const fullscreen = useFullscreen();

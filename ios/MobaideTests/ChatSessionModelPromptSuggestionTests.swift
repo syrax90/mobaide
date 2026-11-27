@@ -145,6 +145,17 @@ final class ChatSessionModelPromptSuggestionTests: XCTestCase {
         XCTAssertNil(live.model.promptSuggestion, "the user started a draft, so the suggestion is spent")
     }
 
+    func testNoSuggestionWhileANewConversationStarts() async throws {
+        let live = try await liveModel(stateJSON: #""status":"ready","new_conversation":true,"# + offered)
+        defer { live.model.disconnect() }
+        XCTAssertEqual(live.model.promptSuggestion, Self.suggested)
+
+        live.model.newConversation()
+
+        XCTAssertTrue(live.model.startingNew)
+        XCTAssertNil(live.model.promptSuggestion, "the old conversation's suggestion must hide at once")
+    }
+
     func testNoSuggestionWhileATurnRunsOrAMessageIsQueued() async throws {
         let live = try await liveModel(stateJSON: #""status":"ready","# + offered)
         defer { live.model.disconnect() }
