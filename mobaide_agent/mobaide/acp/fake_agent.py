@@ -30,7 +30,10 @@ prompt text picks the scenario:
 * ``nomodel`` — the Junie flavor refuses the prompt: no model can take it;
 * ``markdown`` — a long Markdown answer (headings, lists, code, table);
 * ``slow`` — a slow stream, to try Stop, the message queue and Send now
-  (``_session/steering``);
+  (``_session/steering``; the Antigravity flavor takes a second
+  ``session/prompt`` instead, as agy does: the running prompt answers
+  ``end_turn`` at once and the reply goes on under the new one, and while
+  a permission or question waits the new prompt is refused);
 * ``external`` — after the answer, a turn that another app on the PC
   started (thread status ``_meta`` as Codex sends it);
 * ``background`` — work that outlives the answer: the OpenCode flavor starts
@@ -251,6 +254,10 @@ class FakeAgent:
         self.sessions: dict[str, dict[str, Any]] = {}
         self.cancelled: set[str] = set()
         self.turns: dict[str, asyncio.Task[Any]] = {}
+        # agy: the answer of the prompt the running turn goes on under.
+        self.answers: dict[str, asyncio.Future[Any]] = {}
+        # Sessions whose turn waits for the client to answer a request.
+        self.asking: dict[str, int] = {}
         self.tool_seq = 0
         # ``clientCapabilities._meta`` of ``initialize``.
         self.client_meta: dict[str, Any] = {}
@@ -271,8 +278,15 @@ class FakeAgent:
         req_id = self.next_id
         fut: asyncio.Future[Any] = self.loop.create_future()
         self.pending[req_id] = fut
-        self.send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
-        return await fut
+        sid = params.get("sessionId")
+        if isinstance(sid, str):
+            self.asking[sid] = self.asking.get(sid, 0) + 1
+        try:
+            self.send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
+            return await fut
+        finally:
+            if isinstance(sid, str):
+                self.asking[sid] -= 1
 
     def config(self, sid: str) -> list[dict[str, Any]]:
         s = self.sessions[sid]
@@ -649,9 +663,14 @@ class FakeAgent:
             sid = params["sessionId"]
             if sid not in self.sessions:
                 raise _RpcError(-32002, "Unknown session")
+            running = self.turns.get(sid)
+            if self.agy and running is not None and not running.done():
+                return await self.agy_steer(sid, running, params.get("prompt") or [])
             self.cancelled.discard(sid)
             task = asyncio.ensure_future(self.prompt_turn(sid, params.get("prompt") or []))
             self.turns[sid] = task
+            if self.agy:
+                return await self.agy_answer(sid, task)
             return await task
         if method == "session/cancel":
             self.cancelled.add(str(params.get("sessionId")))
@@ -665,6 +684,36 @@ class FakeAgent:
             self.steers.setdefault(sid, []).append(text.strip())
             return {"outcome": "injected"}
         raise _RpcError(-32601, f"Method not found: {method}")
+
+    async def agy_steer(self, sid: str, running: asyncio.Task[Any], prompt: list[dict[str, Any]]) -> Any:
+        """A prompt during a turn steers it, as agy does (no ``_session/steering``)."""
+        if self.asking.get(sid):
+            raise _RpcError(-32603, f"Can't add this prompt to session {sid}: the running prompt is waiting "
+                                    "for a permission or question answer; answer it or send session/cancel, "
+                                    "then send this prompt again")
+        text = " ".join(b.get("text", "") for b in prompt if b.get("type") == "text")
+        self.steers.setdefault(sid, []).append(text.strip())
+        before = self.answers.get(sid)
+        if before is not None and not before.done():
+            before.set_result({"stopReason": "end_turn"})
+        return await self.agy_answer(sid, running)
+
+    async def agy_answer(self, sid: str, task: asyncio.Task[Any]) -> Any:
+        answer: asyncio.Future[Any] = self.loop.create_future()
+        self.answers[sid] = answer
+
+        def settle(t: asyncio.Task[Any]) -> None:
+            if answer.done():
+                return
+            if t.cancelled():
+                answer.cancel()
+            elif t.exception() is not None:
+                answer.set_exception(t.exception())  # type: ignore[arg-type]
+            else:
+                answer.set_result(t.result())
+
+        task.add_done_callback(settle)
+        return await answer
 
     async def replay(self, sid: str) -> None:
         self.update(sid, {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "Can you check the login handler?"}})

@@ -2277,6 +2277,74 @@ class TestSteering:
         await m.until(_turn_done(m, "echo later"))
 
 
+def _statuses(frames: list[dict[str, Any]]) -> list[str]:
+    seen: list[str] = []
+    for frame in frames:
+        if frame["t"] == "snapshot" and "status" in frame["state"]:
+            seen.append(frame["state"]["status"])
+        elif frame["t"] == "events":
+            seen += [
+                ev["patch"]["status"]
+                for ev in frame["events"]
+                if ev["type"] == "state" and "status" in ev["patch"]
+            ]
+    return seen
+
+
+class TestAntigravitySteering:
+    """agy has no ``_session/steering``: Send now is a second ``session/prompt``,
+    which agy takes by answering the running prompt ``end_turn`` at once."""
+
+    async def test_send_now_hands_the_running_turn_over_to_the_new_prompt(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("antigravity"), steer_by_prompt=True)
+        assert m.state["steering"] is True
+        await m.command("prompt", text="slow")
+        await m.until(lambda: m.status == "running" and bool(m.of_type("agent")))
+        queued = await m.command("prompt", text="also check the README")
+        before = len(m.frames)
+
+        steered = await m.command("steer", queue_id=queued["data"]["queue_id"])
+
+        assert steered["data"] == {"steered": True}
+        await m.until(
+            lambda: any("(Noted mid-turn: also check the README)" in t for t in m.texts("agent"))
+        )
+        assert m.state["queue"] == []
+        assert m.texts("user") == ["slow", "also check the README"]
+        # The first prompt's end_turn does not end the turn the user sees.
+        assert m.status == "running"
+        assert m.of_type("turn_end") == []
+        assert "ready" not in _statuses(m.frames[before:])
+
+        await m.command("cancel")
+        await m.until(lambda: m.status == "ready" and bool(m.of_type("turn_end")))
+
+        assert [t["stop_reason"] for t in m.of_type("turn_end")] == ["cancelled"]
+        # Steered, so never sent again as a prompt of its own.
+        assert m.texts("user") == ["slow", "also check the README"]
+        assert not any("You said:" in t for t in m.texts("agent"))
+
+    async def test_send_now_waits_while_a_request_is_open(self, open_chat):
+        m = await open_chat(argv=fake_agent_argv("antigravity"), steer_by_prompt=True)
+        await m.command("prompt", text="permission")
+        await m.until(lambda: bool(m.state.get("requests")))
+        request = m.state["requests"][0]
+        queued = await m.command("prompt", text="later")
+        queue_id = queued["data"]["queue_id"]
+
+        refused = await m.command("steer", queue_id=queue_id)
+
+        assert refused["error"] == "Answer the open request first, then send the message"
+        assert [q["id"] for q in m.state["queue"]] == [queue_id]
+        assert m.state["requests"] == [request]
+
+        await m.command("respond", request_id=request["id"], option_id="allow")
+        await m.until(_turn_done(m, "You said: later"))
+
+        assert m.texts("user") == ["permission", "later"]
+        assert any("The build folder is gone." in t for t in m.texts("agent"))
+
+
 class TestExternalTurns:
     """Codex's shared app-server: a message typed into Codex on the PC runs
     a turn this chat did not start (``threadStatus`` in ``_meta``)."""
