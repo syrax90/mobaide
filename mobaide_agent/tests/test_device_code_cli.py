@@ -32,6 +32,7 @@ from mobaide.agent.pairing_qr import (
     compute_trust_key_fp,
     device_code_fingerprint,
     encode_qr_payload,
+    load_pending_device_code,
     save_pending_device_code,
 )
 from mobaide.agent.pairing_ws import PairingWsError
@@ -39,14 +40,31 @@ from mobaide.agent.trust_store import record_manifest_trust
 from mobaide.agent.updater import InstallLayout
 
 
+def _new_public_key() -> str:
+    return base64.b64encode(
+        Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+    ).decode()
+
+
+def _manifest_naming(pairing_key: str) -> dict:
+    return {
+        "released_at": "2026-06-01T00:00:00+00:00",
+        "trust": {"relay_pairing_public_keys": [pairing_key]},
+    }
+
+
 @pytest.fixture(autouse=True)
-def _no_manifest_fetch(monkeypatch):
+def relay_pairing_key(monkeypatch) -> str:
     """The wait step first refreshes the trust data from the signed manifest
-    of the relay. Keep that fetch off the network."""
-    monkeypatch.setattr(
-        "mobaide.agent.update_check.refresh_manifest_trust",
-        AsyncMock(return_value=False),
-    )
+    of the relay. Keep that fetch off the network: it stores the one relay
+    pairing key that the manifest names."""
+    key = _new_public_key()
+
+    async def _fetch(layout, _relay_server_url):
+        return record_manifest_trust(layout, _manifest_naming(key))
+
+    monkeypatch.setattr("mobaide.agent.update_check.refresh_manifest_trust", _fetch)
+    return key
 
 
 def _ns(**overrides) -> argparse.Namespace:
@@ -83,6 +101,18 @@ def _seed_trust_key(prefix: Path) -> str:
     return pub_b64
 
 
+def _pending_pairing(nonce: str = "nonce-abc") -> PendingPairing:
+    exp = int(time.time()) + 10_000
+    return PendingPairing(
+        nonce=nonce,
+        expires_at="2099-01-01T00:00:00+00:00",
+        trust_key_fp="ff" * 32,
+        ws_url=f"wss://relay.test/ws/pairing/{nonce}",
+        relay_url="https://relay.test",
+        qr_payload=encode_qr_payload("https://relay.test", nonce, "ff" * 32, exp),
+    )
+
+
 def _seed_pending_device_code(
     prefix: Path, *, code: str = "WDJB-MJHT", confirmed: bool
 ) -> None:
@@ -92,22 +122,12 @@ def _seed_pending_device_code(
     a nonce on disk with ``confirmed`` set independently, so a test can drive
     the resume branch without going through a real (mocked) redeem call.
     """
-    nonce = "nonce-abc"
-    exp = int(time.time()) + 10_000
-    pending = PendingPairing(
-        nonce=nonce,
-        expires_at="2099-01-01T00:00:00+00:00",
-        trust_key_fp="ff" * 32,
-        ws_url=f"wss://relay.test/ws/pairing/{nonce}",
-        relay_url="https://relay.test",
-        qr_payload=encode_qr_payload("https://relay.test", nonce, "ff" * 32, exp),
-    )
     save_pending_device_code(
         InstallLayout(prefix=prefix),
         PendingDeviceCode(
             redeemer_id="redeemer-1",
             code_fp=device_code_fingerprint(code),
-            pending=pending,
+            pending=_pending_pairing(),
             account_hint="p***l@g***.com",
             confirmed=confirmed,
         ),
@@ -294,23 +314,13 @@ class TestRunPairResume:
 
 
 class TestRunPairTrustedKeys:
-    def test_the_wait_trusts_the_pinned_key_and_the_relay_pairing_keys(
-        self, tmp_path
+    def test_the_wait_trusts_only_the_relay_pairing_keys(
+        self, tmp_path, relay_pairing_key
     ):
-        # The credential push may be signed with the release key or with a
-        # relay pairing key that a signed manifest listed.
+        # Only a relay pairing key that a signed manifest listed may sign the
+        # credential push; the pinned release key signs releases only.
         _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
-        pinned = _seed_trust_key(tmp_path)
-        pairing_key = base64.b64encode(
-            Ed25519PrivateKey.generate().public_key().public_bytes_raw()
-        ).decode()
-        record_manifest_trust(
-            InstallLayout(prefix=tmp_path),
-            {
-                "released_at": "2026-06-01T00:00:00+00:00",
-                "trust": {"relay_pairing_public_keys": [pairing_key]},
-            },
-        )
+        _seed_trust_key(tmp_path)
         _seed_pending_device_code(tmp_path, confirmed=True)
 
         with patch("sys.stdin.isatty", return_value=True), patch(
@@ -323,7 +333,7 @@ class TestRunPairTrustedKeys:
 
         wait = mock_ws_cls.return_value.wait_for_claim
         assert tuple(wait.await_args.kwargs["trust_pub_keys_b64"]) == (
-            pinned, pairing_key,
+            relay_pairing_key,
         )
 
 
@@ -336,9 +346,9 @@ class TestRunPairTrustedKeys:
         _seed_trust_key(tmp_path)
         order: list[str] = []
 
-        async def _fetch(_layout, _relay_server_url):
+        async def _fetch(layout, _relay_server_url):
             order.append("fetch")
-            return False
+            return record_manifest_trust(layout, _manifest_naming(_new_public_key()))
 
         def _redeem(*_args, **_kwargs):
             order.append("redeem")
@@ -355,6 +365,25 @@ class TestRunPairTrustedKeys:
 
         assert rc == 8
         assert order == ["fetch", "redeem"]
+
+    def test_without_a_relay_pairing_key_the_code_is_not_redeemed(
+        self, tmp_path, monkeypatch
+    ):
+        # Redeeming spends the code, and this agent would refuse the
+        # credentials that it leads to.
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        monkeypatch.setattr(
+            "mobaide.agent.update_check.refresh_manifest_trust",
+            AsyncMock(return_value=None),
+        )
+
+        with patch("mobaide.agent.pairing_monitor.redeem_device_code") as mock_redeem:
+            rc = _run_pair(_ns(prefix=str(tmp_path)))
+
+        assert rc == 7
+        mock_redeem.assert_not_called()
+        assert not (tmp_path / "run" / "pending_device_code.json").exists()
 
 
 class TestRunPairApproval:
@@ -446,6 +475,117 @@ class TestRunPairApproval:
         # means the re-run re-sends the approval without re-prompting.
         assert (tmp_path / "run" / "pending_device_code.json").exists()
         assert "Re-run" in capsys.readouterr().err
+
+
+class _FakeRelayAccept:
+    """Answers each approval with the next outcome: an error to raise, or None."""
+
+    def __init__(self, *outcomes: Exception | None) -> None:
+        self._outcomes = list(outcomes)
+        self.calls = 0
+
+    def __call__(self, _relay_server_url, *, code, redeemer_id) -> None:
+        self.calls += 1
+        if not self._outcomes:
+            raise AssertionError("the approval was sent more often than expected")
+        outcome = self._outcomes.pop(0)
+        if outcome is not None:
+            raise outcome
+
+
+def _throttled(retry_after: float | None = None) -> DeviceCodeRejected:
+    return DeviceCodeRejected(
+        "too many pairing attempts against this relay; retry in 30s",
+        status=429,
+        retry_after=retry_after,
+    )
+
+
+@pytest.fixture
+def slept(monkeypatch) -> list[float]:
+    """Records the CLI's waits instead of sleeping."""
+    waits: list[float] = []
+    monkeypatch.setattr("mobaide.__main__.time.sleep", waits.append)
+    return waits
+
+
+class TestRunPairThrottledApproval:
+    """The relay throttles redeem and accept per address with one bucket.
+
+    With --yes a throttled approval must not drop the record: the redeem
+    already spent the code.
+    """
+
+    @pytest.mark.parametrize(
+        ("retry_after", "expected_wait"),
+        [(2.0, 2.0), (None, 1.0), (120.0, 10.0)],
+        ids=["relay-wait", "no-wait-named", "capped"],
+    )
+    def test_a_throttled_approval_is_sent_once_more_after_a_short_wait(
+        self, tmp_path, capsys, slept, retry_after, expected_wait
+    ):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        _seed_pending_device_code(tmp_path, confirmed=True)
+        accept = _FakeRelayAccept(_throttled(retry_after), None)
+
+        with patch(
+            "mobaide.agent.pairing_monitor.accept_device_code", accept
+        ), patch("mobaide.agent.pairing_ws.PairingWsClient") as mock_ws_cls:
+            mock_ws_cls.return_value.wait_for_claim = AsyncMock(
+                side_effect=PairingWsError("boom")
+            )
+            rc = _run_pair(_ns(prefix=str(tmp_path)))
+
+        # Reaching (and failing) the WS wait proves the retry got through.
+        assert rc == 6
+        assert accept.calls == 2
+        assert slept == [expected_wait]
+
+    def test_a_second_throttle_keeps_the_redemption_and_returns_3(
+        self, tmp_path, capsys, slept
+    ):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        accept = _FakeRelayAccept(_throttled(), _throttled())
+
+        with patch(
+            "mobaide.agent.pairing_monitor.redeem_device_code",
+            return_value=(_pending_pairing(), "p***l@g***.com", False),
+        ), patch(
+            "mobaide.agent.pairing_monitor.accept_device_code", accept
+        ), patch("mobaide.agent.pairing_ws.PairingWsClient"):
+            rc = _run_pair(_ns(prefix=str(tmp_path)))
+
+        assert rc == 3
+        assert accept.calls == 2
+        # A re-run resumes this redemption and sends the approval again
+        # without a second prompt.
+        record = load_pending_device_code(
+            InstallLayout(prefix=tmp_path), device_code_fingerprint("WDJB-MJHT")
+        )
+        assert record is not None
+        assert record.pending is not None
+        assert record.confirmed is True
+        assert "Re-run" in capsys.readouterr().err
+
+    def test_a_refused_approval_is_not_retried_and_clears_the_record(
+        self, tmp_path, capsys, slept
+    ):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        _seed_pending_device_code(tmp_path, confirmed=True)
+        accept = _FakeRelayAccept(
+            DeviceCodeRejected("This pairing request is gone", status=410)
+        )
+
+        with patch("mobaide.agent.pairing_monitor.accept_device_code", accept):
+            rc = _run_pair(_ns(prefix=str(tmp_path)))
+
+        assert rc == 8
+        assert accept.calls == 1
+        assert slept == []
+        assert not (tmp_path / "run" / "pending_device_code.json").exists()
 
 
 class TestConfirmDevicePairing:

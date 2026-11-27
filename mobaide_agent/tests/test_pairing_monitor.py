@@ -46,6 +46,18 @@ from mobaide.agent.pairing_ws import PairingClaim, PairingWsError
 from mobaide.agent.trust_store import record_manifest_trust
 from mobaide.agent.updater import InstallLayout
 
+# The relay pairing key that a verified manifest of an earlier run named.
+_RELAY_PAIRING_KEY = base64.b64encode(
+    Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+).decode()
+
+
+def _manifest_naming(pairing_key: str, released_at: str) -> dict:
+    return {
+        "released_at": released_at,
+        "trust": {"relay_pairing_public_keys": [pairing_key]},
+    }
+
 
 def _make_two_phase_ws_client(claim_or_exc):
     """Build a stub ``PairingWsClient`` honouring the two-phase API.
@@ -455,9 +467,16 @@ class _RunPairingMonitorTestBase:
         monkeypatch.setattr(_pm, "refresh_manifest_trust", _stub_refresh)
 
     def _make_layout(self, tmp_path: Path) -> InstallLayout:
+        """An install that already knows a relay pairing key, so the loop
+        may offer a QR."""
         prefix = tmp_path / "prefix"
         (prefix / "mobaide_agent").mkdir(parents=True, exist_ok=True)
-        return InstallLayout(prefix=prefix)
+        layout = InstallLayout(prefix=prefix)
+        layout.trust_dir.mkdir(parents=True, exist_ok=True)
+        record_manifest_trust(
+            layout, _manifest_naming(_RELAY_PAIRING_KEY, "2026-01-01T00:00:00+00:00"),
+        )
+        return layout
 
     def _make_pending(self) -> PendingPairing:
         # ``exp_unix`` far in the future so ``parse_qr_payload``'s
@@ -544,10 +563,10 @@ class _RunPairingMonitorTestBase:
 
 
 class TestRunPairingMonitorTrustedKeys(_RunPairingMonitorTestBase):
-    """The credential push is checked against the pinned release key and the
-    relay pairing keys that a signed manifest listed."""
+    """The credential push is checked against the relay pairing keys that
+    the newest signed manifest listed, never against the pinned release key."""
 
-    async def test_wait_trusts_the_pinned_key_and_the_relay_pairing_keys(
+    async def test_wait_trusts_only_the_relay_pairing_keys(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -555,16 +574,11 @@ class TestRunPairingMonitorTrustedKeys(_RunPairingMonitorTestBase):
         recorder: dict = {}
         claim = self._make_claim()
         layout = self._make_layout(tmp_path)
-        layout.trust_dir.mkdir(parents=True)
         pairing_key = base64.b64encode(
             Ed25519PrivateKey.generate().public_key().public_bytes_raw()
         ).decode()
         record_manifest_trust(
-            layout,
-            {
-                "released_at": "2026-06-01T00:00:00+00:00",
-                "trust": {"relay_pairing_public_keys": [pairing_key]},
-            },
+            layout, _manifest_naming(pairing_key, "2026-06-01T00:00:00+00:00"),
         )
 
         class _RecordingConn:
@@ -598,7 +612,7 @@ class TestRunPairingMonitorTrustedKeys(_RunPairingMonitorTestBase):
             timeout=5.0,
         )
 
-        assert recorder["trusted_keys"] == ("stub-pub-key", pairing_key)
+        assert recorder["trusted_keys"] == (pairing_key,)
         # The trust data is refreshed before the wait, so a relay pairing
         # key published after the install is already known.
         assert recorder["refreshes_before_wait"] == ["wss://relay.test"]
@@ -1676,7 +1690,7 @@ class TestRunPairingMonitorRetryPacing(_RunPairingMonitorTestBase):
         wait_name: str,
     ) -> None:
         # An agent that boots while the relay is down gets no manifest. Until
-        # a refresh works, it does not know a relay pairing key that the
+        # a refresh works, it may miss a relay pairing key that a newer
         # manifest lists, so that refresh must not wait the full interval.
         mono = [1000.0]
         monkeypatch.setattr(
@@ -1726,6 +1740,156 @@ class TestRunPairingMonitorRetryPacing(_RunPairingMonitorTestBase):
         assert refreshed_at == pytest.approx(
             [1000.0 + wait * n for n in range(int(interval / wait) + 1)]
         )
+
+    async def test_without_a_pairing_key_no_nonce_is_made_and_the_refresh_is_retried(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A QR shown now would pair the account on the relay while this agent
+        # refuses the credentials it is sent. So no nonce is made: the loop
+        # asks the relay for the manifest again after each retry wait.
+        layout = InstallLayout(prefix=tmp_path / "prefix")
+        layout.trust_dir.mkdir(parents=True)
+        recorder: dict = {"initiate_calls": 0, "saved": [], "ws_urls": []}
+        initiates_before_refresh: list[int] = []
+
+        async def _refresh(refreshed_layout, _relay_server_url):
+            initiates_before_refresh.append(recorder["initiate_calls"])
+            if len(initiates_before_refresh) < 3:
+                return None
+            return record_manifest_trust(
+                refreshed_layout,
+                _manifest_naming(_RELAY_PAIRING_KEY, "2026-06-01T00:00:00+00:00"),
+            )
+
+        monkeypatch.setattr(_pm, "refresh_manifest_trust", _refresh)
+        sleeps = self._capture_sleeps(monkeypatch, stop_after=3)
+        pending = self._pending("n1", 2999999999)
+        self._wire(
+            monkeypatch, recorder,
+            initiate=lambda: pending,
+            ws_client_class=self._pre_ready_failing_ws(recorder),
+        )
+
+        with pytest.raises(_StopLoop):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url="wss://relay.test",
+                ),
+                timeout=5.0,
+            )
+
+        assert initiates_before_refresh == [0, 0, 0]
+        floor = _pm._BACKOFF_FLOOR_S
+        # Two waits for a key, then the wait after the failed WS.
+        assert sleeps == pytest.approx([floor, floor * 2, floor])
+        # Once a manifest names a key, the loop makes its nonce.
+        assert recorder["initiate_calls"] == 1
+        assert recorder["ws_urls"] == [pending.ws_url]
+
+    async def test_the_wait_for_a_pairing_key_doubles_up_to_the_retry_interval(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The installer waits about 60 s for the QR of a fresh install. When
+        # the first manifest refresh fails, the next one comes seconds later,
+        # and a relay that stays down is then asked once a minute.
+        monkeypatch.setattr(_pm, "_BACKOFF_FLOOR_S", 2.0)
+        layout = InstallLayout(prefix=tmp_path / "prefix")
+        layout.trust_dir.mkdir(parents=True)
+        refreshes: list[str] = []
+
+        async def _relay_down(_layout, relay_server_url):
+            refreshes.append(relay_server_url)
+            return None
+
+        monkeypatch.setattr(_pm, "refresh_manifest_trust", _relay_down)
+        sleeps = self._capture_sleeps(monkeypatch, stop_after=7)
+        recorder: dict = {"initiate_calls": 0, "saved": [], "ws_urls": []}
+        self._wire(
+            monkeypatch, recorder,
+            initiate=lambda: self._pending("n1", 2999999999),
+            ws_client_class=self._pre_ready_failing_ws(recorder),
+        )
+
+        with pytest.raises(_StopLoop):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url="wss://relay.test",
+                ),
+                timeout=5.0,
+            )
+
+        assert sleeps == pytest.approx([2.0, 4.0, 8.0, 16.0, 32.0, 60.0, 60.0])
+        # The manifest is asked for before each wait; no nonce is made.
+        assert refreshes == ["wss://relay.test"] * 7
+        assert recorder["initiate_calls"] == 0
+
+    async def test_the_wait_for_a_pairing_key_starts_from_the_floor_again_after_a_key_was_known(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A newer manifest can retire the only relay pairing key. The wait
+        # for the next key then starts short again, so a key that the relay
+        # publishes soon after is learned soon.
+        mono = [1000.0]
+        monkeypatch.setattr(
+            _pm,
+            "time",
+            types.SimpleNamespace(time=time.time, monotonic=lambda: mono[0]),
+        )
+
+        def _advance() -> None:
+            # Each wait makes the next trust refresh due.
+            mono[0] += _pm._TRUST_REFRESH_INTERVAL_S + 1
+
+        layout = InstallLayout(prefix=tmp_path / "prefix")
+        layout.trust_dir.mkdir(parents=True)
+        manifests = iter([
+            None,
+            None,
+            _manifest_naming(_RELAY_PAIRING_KEY, "2026-06-01T00:00:00+00:00"),
+            {"released_at": "2026-07-01T00:00:00+00:00", "trust": {}},
+            None,
+        ])
+
+        async def _refresh(refreshed_layout, _relay_server_url):
+            body = next(manifests)
+            if body is None:
+                return None
+            return record_manifest_trust(refreshed_layout, body)
+
+        monkeypatch.setattr(_pm, "refresh_manifest_trust", _refresh)
+        sleeps = self._capture_sleeps(monkeypatch, stop_after=5, on_sleep=_advance)
+        recorder: dict = {"initiate_calls": 0, "saved": [], "ws_urls": []}
+        pending = self._pending("n1", 2999999999)
+        self._wire(
+            monkeypatch, recorder,
+            initiate=lambda: pending,
+            ws_client_class=self._pre_ready_failing_ws(recorder),
+        )
+
+        with pytest.raises(_StopLoop):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url="wss://relay.test",
+                ),
+                timeout=5.0,
+            )
+
+        floor = _pm._BACKOFF_FLOOR_S
+        # Two waits for a key, the wait after the failed WS, then the wait
+        # for a key from the floor again once the key is retired.
+        assert sleeps == pytest.approx([floor, floor * 2, floor, floor, floor * 2])
+        # The QR was offered only while the key was known.
+        assert recorder["initiate_calls"] == 1
+        assert recorder["ws_urls"] == [pending.ws_url]
 
     async def test_rejected_handshake_drops_the_unsaved_nonce_and_backs_off(
         self,

@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
-from test_install_script_trap import _BASH, _LOG_FUNCS, _sh_function
+from test_install_script_trap import _BASH, _LOG_FUNCS, _sh_function, _sh_function_body
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _INSTALL_SH = _REPO_ROOT / "deploy" / "install.sh"
@@ -32,6 +32,7 @@ _INSTALL_PS1 = _REPO_ROOT / "deploy" / "install.ps1"
 
 _SH_KEY_LINE_RE = re.compile(r'^MOBAIDE_RELEASE_PUBLIC_KEY_B64="([^"]+)"$', re.M)
 _PS1_KEY_LINE_RE = re.compile(r'^\$Script:ReleasePublicKeyB64 = "([^"]+)"$', re.M)
+_SH_MINIMUM_LINE_RE = re.compile(r'^MOBAIDE_MINIMUM_AGENT_VERSION="([^"]+)"$', re.M)
 
 _needs_bash = pytest.mark.skipif(
     _BASH is None or sys.platform == "win32",
@@ -115,8 +116,10 @@ def test_install_sh_stops_on_a_malformed_operator_key(operator_key: str) -> None
     assert "not a valid base64 Ed25519 public key" in proc.stderr
 
 
-def _signed_manifest_file(directory: Path, signer: Ed25519PrivateKey) -> Path:
-    body = {"version": "1.2.3"}
+def _signed_manifest_file(
+    directory: Path, signer: Ed25519PrivateKey, version: str = "1.2.3"
+) -> Path:
+    body = {"version": version}
     canonical = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
     manifest = directory / "manifest.json"
     manifest.write_text(
@@ -146,6 +149,8 @@ def _run_main_until_staging(
     key_file = prefix / "trust" / "central_server.pub"
     key_line = _SH_KEY_LINE_RE.search(_INSTALL_SH.read_text(encoding="utf-8"))
     assert key_line is not None
+    minimum_line = _SH_MINIMUM_LINE_RE.search(_INSTALL_SH.read_text(encoding="utf-8"))
+    assert minimum_line is not None
     no_ops = (
         "cleanup_on_exit detect_platform check_macos_version "
         "require_root_when_writing_system_dir "
@@ -160,6 +165,8 @@ def _run_main_until_staging(
         + f"VERIFIER_PYTHON={shlex.quote(sys.executable)}\n"
         + f"MOBAIDE_AGENT_PREFIX={shlex.quote(str(prefix))}\n"
         + key_line.group(0)
+        + "\n"
+        + minimum_line.group(0)
         + "\n"
         + f"MOBAIDE_AGENT_TRUST_KEY_B64={shlex.quote(operator_key)}\n"
         + f'fetch_manifest() {{ cp {shlex.quote(str(manifest))} "$1"; }}\n'
@@ -244,3 +251,68 @@ def test_install_ps1_stores_the_key_after_the_signature_check_and_before_staging
         < body.find("Write-TrustKey")
         < body.find("Install-Release")
     ), body
+
+
+def _offered_version(kind: str) -> str:
+    """A version relative to the minimum that install.sh carries. The newer
+    one has a two-digit part, so a comparison of strings would refuse it."""
+    minimum = _carried_key(_INSTALL_SH, _SH_MINIMUM_LINE_RE)
+    major, minor, patch = (int(part) for part in minimum.split("."))
+    if kind == "below":
+        if patch:
+            return f"{major}.{minor}.{patch - 1}"
+        return f"{major}.{minor - 1}.0" if minor else f"{major - 1}.0.0"
+    if kind == "newer":
+        return f"{major}.{minor + 10}.0"
+    if kind == "not-x.y.z":
+        return f"{minimum}rc1"
+    return minimum
+
+
+@_needs_bash
+@pytest.mark.parametrize(
+    "kind, accepted",
+    [("below", False), ("minimum", True), ("newer", True), ("not-x.y.z", False)],
+)
+def test_install_sh_refuses_a_signed_release_below_its_minimum_version(
+    tmp_path: Path, kind: str, accepted: bool
+) -> None:
+    """Older signed releases pin no dependency by hash. A server that offers
+    one, with a valid signature, must not get it installed or the key stored."""
+    signer = Ed25519PrivateKey.generate()
+    manifest = _signed_manifest_file(tmp_path, signer, _offered_version(kind))
+
+    proc, key_file = _run_main_until_staging(
+        tmp_path, manifest=manifest, operator_key=_public_key_b64(signer),
+    )
+
+    if accepted:
+        assert proc.returncode == 0, proc.stderr
+        assert f"STAGED_WITH_KEY={_public_key_b64(signer)}" in proc.stdout.splitlines()
+    else:
+        assert proc.returncode != 0
+        assert "STAGED_WITH_KEY=" not in proc.stdout
+        assert not key_file.exists()
+
+
+def _embedded_program(text: str, opener: str, closer: str) -> str:
+    start = text.index(opener) + len(opener)
+    return text[start : text.index(closer, start)]
+
+
+def test_install_ps1_checks_the_manifest_like_install_sh() -> None:
+    """install.ps1 runs the same Python check of signature and minimum
+    version, which the install.sh tests above run, with the same arguments."""
+    ps1 = _INSTALL_PS1.read_text(encoding="utf-8")
+    sh_program = _embedded_program(
+        _sh_function_body("verify_manifest_signature"), "<<'PY'\n", "\nPY\n",
+    )
+    test_manifest = re.search(r"^function Test-ManifestSignature \{\n(.*?)^\}", ps1, re.S | re.M)
+    assert test_manifest is not None
+    ps1_program = _embedded_program(test_manifest.group(1), "$verifyScript = @'\n", "\n'@")
+
+    assert ps1_program == sh_program
+    assert (
+        "-Arguments @($ManifestPath, $Script:TrustKeyB64, $Script:MinimumAgentVersion)"
+        in test_manifest.group(1)
+    )

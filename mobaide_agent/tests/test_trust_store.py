@@ -105,20 +105,22 @@ class TestReleaseKeys:
 
 class TestRelayPairingKeys:
     def test_the_newest_manifest_states_the_full_list(self, layout):
-        pinned, retired, current = _new_key(), _new_key(), _new_key()
+        retired, current = _new_key(), _new_key()
 
         record_manifest_trust(layout, _manifest(EARLIER, pairing=[retired]))
         record_manifest_trust(layout, _manifest(LATER, pairing=[current]))
 
-        assert pairing_verification_keys(layout, pinned) == (pinned, current)
+        assert pairing_verification_keys(layout) == (current,)
 
     def test_release_keys_do_not_sign_the_credential_push(self, layout):
-        pinned, added_release_key = _new_key(), _new_key()
+        # The release keys sign releases only. Until a manifest names a relay
+        # pairing key, no key may sign the push.
+        added_release_key = _new_key()
         record_manifest_trust(
             layout, _manifest(EARLIER, release=[added_release_key]),
         )
 
-        assert pairing_verification_keys(layout, pinned) == (pinned,)
+        assert pairing_verification_keys(layout) == ()
 
 
 class TestManifestOrder:
@@ -205,4 +207,4 @@ class TestStorage:
 
         assert load_manifest_trust(layout) == ManifestTrust()
         assert release_verification_keys(layout, pinned) == (pinned,)
-        assert pairing_verification_keys(layout, pinned) == (pinned,)
+        assert pairing_verification_keys(layout) == ()

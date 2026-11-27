@@ -1,8 +1,8 @@
 """Pins the parts of ``deploy/prod/release_agent.py`` that decide what a
 signed manifest tells agents to trust: the signed body (dependency lock and
-key lists), the check that the install scripts carry the signing key, the
-committed dependency lock, and the comparison of the relay pairing key with
-the relay. No network, no build.
+key lists), the checks on the install scripts (signing key, minimum version,
+pinned signature library), the committed dependency lock, and the checks
+against the relay (pairing key, central_server version). No network, no build.
 
 Keys are made at test run time.
 """
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import re
 import subprocess
@@ -76,7 +77,7 @@ class TestSignManifest:
         layout.trust_dir.mkdir(parents=True)
         assert record_manifest_trust(layout, body)
         assert release_verification_keys(layout, pinned) == (pinned, next_release_key)
-        assert pairing_verification_keys(layout, pinned) == (pinned, pairing_key)
+        assert pairing_verification_keys(layout) == (pairing_key,)
 
     def test_without_optional_keys_the_manifest_lists_none(self):
         record = _sign(Ed25519PrivateKey.generate())
@@ -89,15 +90,24 @@ class TestSignManifest:
 
 class TestCheckInstallScripts:
     @staticmethod
-    def _checkout(tmp_path: Path, *, sh_key: str, ps1_key: str) -> Path:
+    def _checkout(
+        tmp_path: Path,
+        *,
+        sh_key: str,
+        ps1_key: str,
+        sh_minimum: str | None = "1.2.0",
+        ps1_minimum: str | None = "1.2.0",
+    ) -> Path:
         deploy = tmp_path / "deploy"
         deploy.mkdir()
-        (deploy / "install.sh").write_text(
-            f'MOBAIDE_RELEASE_PUBLIC_KEY_B64="{sh_key}"\n', encoding="utf-8",
-        )
-        (deploy / "install.ps1").write_text(
-            f'$Script:ReleasePublicKeyB64 = "{ps1_key}"\n', encoding="utf-8",
-        )
+        sh = f'MOBAIDE_RELEASE_PUBLIC_KEY_B64="{sh_key}"\n'
+        if sh_minimum is not None:
+            sh += f'MOBAIDE_MINIMUM_AGENT_VERSION="{sh_minimum}"\n'
+        ps1 = f'$Script:ReleasePublicKeyB64 = "{ps1_key}"\n'
+        if ps1_minimum is not None:
+            ps1 += f'$Script:MinimumAgentVersion = "{ps1_minimum}"\n'
+        (deploy / "install.sh").write_text(sh, encoding="utf-8")
+        (deploy / "install.ps1").write_text(ps1, encoding="utf-8")
         return tmp_path
 
     def test_passes_when_both_scripts_carry_the_signing_key(self, tmp_path):
@@ -105,7 +115,12 @@ class TestCheckInstallScripts:
         public = ra.public_key_b64(key)
 
         ra.check_install_scripts(
-            self._checkout(tmp_path, sh_key=public, ps1_key=public), key,
+            self._checkout(
+                tmp_path, sh_key=public, ps1_key=public,
+                sh_minimum="1.2.3", ps1_minimum="1.2.3",
+            ),
+            key,
+            "1.2.3",
         )
 
     @pytest.mark.parametrize("stale", ["install.sh", "install.ps1"])
@@ -122,7 +137,56 @@ class TestCheckInstallScripts:
         )
 
         with pytest.raises(ReleaseError, match=f"deploy/{stale}"):
-            ra.check_install_scripts(src, key)
+            ra.check_install_scripts(src, key, "1.2.3")
+
+    @pytest.mark.parametrize("minimum", ["1.2.4", "1.10.0", "2.0.0"])
+    def test_stops_the_release_when_the_scripts_would_refuse_it(
+        self, tmp_path, minimum
+    ):
+        """The scripts refuse a signed release below their minimum. Published
+        with this release, they would refuse every new install of it."""
+        key = Ed25519PrivateKey.generate()
+        public = ra.public_key_b64(key)
+        src = self._checkout(
+            tmp_path, sh_key=public, ps1_key=public,
+            sh_minimum=minimum, ps1_minimum=minimum,
+        )
+
+        with pytest.raises(ReleaseError, match="must not be above the release"):
+            ra.check_install_scripts(src, key, "1.2.3")
+
+    @pytest.mark.parametrize(
+        "sh_minimum, ps1_minimum, error",
+        [
+            ("1.2.0", "1.1.0", "different minimum agent versions"),
+            (None, "1.2.0", "different minimum agent versions: deploy/install.sh none"),
+            ("1.2.0", "next", "deploy/install.ps1 has a minimum agent version that is not X.Y.Z"),
+        ],
+        ids=["scripts-differ", "missing", "not-a-version"],
+    )
+    def test_stops_the_release_when_the_scripts_do_not_name_one_minimum(
+        self, tmp_path, sh_minimum, ps1_minimum, error
+    ):
+        key = Ed25519PrivateKey.generate()
+        public = ra.public_key_b64(key)
+        src = self._checkout(
+            tmp_path, sh_key=public, ps1_key=public,
+            sh_minimum=sh_minimum, ps1_minimum=ps1_minimum,
+        )
+
+        with pytest.raises(ReleaseError, match=re.escape(error)):
+            ra.check_install_scripts(src, key, "1.2.3")
+
+    def test_scripts_from_before_the_minimum_do_not_stop_the_release(self, tmp_path):
+        """An older tag has install scripts with no minimum version. A
+        release from it is still possible: there is no minimum to compare."""
+        key = Ed25519PrivateKey.generate()
+        public = ra.public_key_b64(key)
+        src = self._checkout(
+            tmp_path, sh_key=public, ps1_key=public, sh_minimum=None, ps1_minimum=None,
+        )
+
+        ra.check_install_scripts(src, key, "0.0.1")
 
 
 class TestDependencyLockPythonFloor:
@@ -945,26 +1009,6 @@ class TestCheckRelayPairingKey:
         ra.check_relay_pairing_key(key, SERVER_URL)
 
     @pytest.mark.parametrize("answer", [404, None])
-    def test_passes_when_neither_side_has_a_key(self, monkeypatch, answer):
-        # 404: a relay from before the endpoint. None: the relay answers 200
-        # with a null key because RELAY_PAIRING_PRIVATE_KEY is not set.
-        _relay_answers(monkeypatch, answer)
-
-        ra.check_relay_pairing_key(None, SERVER_URL)
-
-    def test_stops_when_the_relay_has_a_key_that_the_release_dir_lacks(
-        self, monkeypatch
-    ):
-        relay_key = _new_public_key()
-        _relay_answers(monkeypatch, relay_key)
-
-        with pytest.raises(ReleaseError, match="is missing") as failure:
-            ra.check_relay_pairing_key(None, SERVER_URL)
-
-        # The operator needs the key to put it into the release dir.
-        assert relay_key in str(failure.value)
-
-    @pytest.mark.parametrize("answer", [404, None])
     def test_stops_when_the_relay_serves_no_key_for_a_local_one(
         self, monkeypatch, answer
     ):
@@ -984,7 +1028,7 @@ class TestCheckRelayPairingKey:
         _relay_answers(monkeypatch, status)
 
         with pytest.raises(ReleaseError, match=f"HTTP {status}"):
-            ra.check_relay_pairing_key(None, SERVER_URL)
+            ra.check_relay_pairing_key(_new_public_key(), SERVER_URL)
 
 
 class TestReadOptionalPublicKey:
@@ -1031,3 +1075,380 @@ class TestReadOptionalPublicKey:
 
         with pytest.raises(ReleaseError, match="not a base64 Ed25519 public key"):
             ra.read_optional_public_key(release_dir, ra.RELAY_PAIRING_PUBLIC_KEY_FILE)
+
+
+class TestReadRelayPairingKey:
+    def test_a_release_dir_without_the_key_stops_the_release(self, tmp_path):
+        """Agents accept the pairing push only from a relay pairing key that
+        the signed manifest names. A manifest without one would leave every
+        agent of the release unable to pair."""
+        release_dir = TestReadOptionalPublicKey._release_dir(tmp_path, None)
+
+        with pytest.raises(ReleaseError, match="--new-relay-pairing-key"):
+            ra.read_relay_pairing_key(release_dir)
+
+
+class _RelayAsked(Exception):
+    """Ends a release run at its first request to the relay."""
+
+
+class TestReleaseKeyAsRelayPairingKey:
+    """The relay holds the private half of its pairing key. A release key in
+    the pairing key file would put a key that signs agent releases back on
+    the relay, so the release stops before it asks the relay anything."""
+
+    @staticmethod
+    def _release_dir(tmp_path: Path, signing_key, *, relay_pairing_key: str, next_signing_key: str) -> Path:
+        release_dir = TestReadOptionalPublicKey._release_dir(tmp_path, relay_pairing_key)
+        files = {
+            ra.SIGNING_KEY_FILE: base64.b64encode(signing_key.private_bytes_raw()).decode(),
+            ra.NEXT_SIGNING_PUBLIC_KEY_FILE: next_signing_key,
+        }
+        for rel, content in files.items():
+            path = release_dir / rel
+            path.write_text(content + "\n", encoding="utf-8")
+            if os.name != "nt":
+                os.chmod(path, 0o600)
+        if os.name != "nt":
+            os.chmod(release_dir, 0o700)
+        return release_dir
+
+    @staticmethod
+    def _run(monkeypatch, release_dir: Path) -> list[str]:
+        """Run a release until its first request to the relay. Returns the
+        URLs that were asked."""
+        asked: list[str] = []
+
+        def http_json(url, **_kwargs):
+            asked.append(url)
+            raise _RelayAsked
+
+        monkeypatch.setattr(ra, "http_json", http_json)
+        monkeypatch.setattr(ra, "require_tools", lambda *_tools: None)
+        args = ra.build_parser().parse_args([
+            "--skip-publish", "--force",
+            "--release-dir", str(release_dir), "--server-url", SERVER_URL,
+        ])
+        try:
+            ra.run(args)
+        except _RelayAsked:
+            pass
+        return asked
+
+    @pytest.mark.parametrize("release_key", ["signing", "next"])
+    def test_a_release_key_in_the_pairing_key_file_stops_the_release(
+        self, tmp_path, monkeypatch, release_key
+    ):
+        signing_key = Ed25519PrivateKey.generate()
+        next_signing_key = _new_public_key()
+        release_dir = self._release_dir(
+            tmp_path,
+            signing_key,
+            relay_pairing_key=(
+                ra.public_key_b64(signing_key) if release_key == "signing" else next_signing_key
+            ),
+            next_signing_key=next_signing_key,
+        )
+
+        with pytest.raises(ReleaseError, match="holds a release key") as failure:
+            self._run(monkeypatch, release_dir)
+
+        assert "--new-relay-pairing-key" in str(failure.value)
+
+    def test_a_separate_pairing_key_goes_on_to_the_relay_checks(self, tmp_path, monkeypatch):
+        release_dir = self._release_dir(
+            tmp_path,
+            Ed25519PrivateKey.generate(),
+            relay_pairing_key=_new_public_key(),
+            next_signing_key=_new_public_key(),
+        )
+
+        assert self._run(monkeypatch, release_dir) == [f"{SERVER_URL}/api/v1/agent/trust_key"]
+
+
+def _relay_runs(monkeypatch, server_version) -> list[str]:
+    """Make the relay answer ``GET /api/version`` with ``server_version``.
+    Retries do not sleep. Returns the URLs that were asked."""
+    monkeypatch.setattr(release_common.time, "sleep", lambda _seconds: None)
+    asked: list[str] = []
+
+    def http_json(url, **_kwargs):
+        asked.append(url)
+        return {"server_version": server_version}
+
+    monkeypatch.setattr(ra, "http_json", http_json)
+    return asked
+
+
+class TestCheckRelayVersion:
+    """Agents of a release may rely on any relay change up to the
+    central_server version of the same tag, such as the key that signs the
+    pairing push. So the relay must run that version or a newer one first."""
+
+    @staticmethod
+    def _tag(tmp_path: Path, central_server: str | None) -> Path:
+        if central_server is not None:
+            (tmp_path / ".release-please-manifest.json").write_text(
+                json.dumps({"mobaide_agent": "1.2.3", "central_server": central_server}),
+                encoding="utf-8",
+            )
+        return tmp_path
+
+    @pytest.mark.parametrize("served", ["0.2.35", "0.2.36", "0.10.0"])
+    def test_passes_when_the_relay_runs_the_tag_version_or_a_newer_one(
+        self, tmp_path, monkeypatch, served
+    ):
+        asked = _relay_runs(monkeypatch, served)
+
+        ra.check_relay_version(self._tag(tmp_path, "0.2.35"), SERVER_URL)
+
+        assert asked == [f"{SERVER_URL}/api/version"]
+
+    @pytest.mark.parametrize("served", ["0.2.34", "0.1.99", None, "dev"])
+    def test_stops_the_release_when_the_relay_is_behind_the_tag(
+        self, tmp_path, monkeypatch, served
+    ):
+        _relay_runs(monkeypatch, served)
+
+        with pytest.raises(ReleaseError, match="Deploy central_server first"):
+            ra.check_relay_version(self._tag(tmp_path, "0.2.35"), SERVER_URL)
+
+    def test_a_tag_without_a_central_server_version_is_not_compared(
+        self, tmp_path, monkeypatch
+    ):
+        asked = _relay_runs(monkeypatch, "0.0.1")
+
+        ra.check_relay_version(self._tag(tmp_path, None), SERVER_URL)
+
+        assert asked == []
+
+
+def _install_scripts(root: Path, sh_pin: str, ps1_pin: str | None = None) -> None:
+    """Install scripts that hold a verifier pin between the lines that the
+    release tool looks for, with other script text around it."""
+    for rel, pin in (
+        ("deploy/install.sh", sh_pin),
+        ("deploy/install.ps1", sh_pin if ps1_pin is None else ps1_pin),
+    ):
+        start, end = ra.VERIFIER_PIN_BLOCKS[rel]
+        script = root / rel
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text(f"before the pin\n{start}\n{pin}{end}\nafter the pin\n", encoding="utf-8")
+
+
+_CFFI = "cffi==2.1.1 ; platform_python_implementation != 'PyPy'"
+_CRYPTOGRAPHY = "cryptography==46.0.3"
+
+
+def _verifier_pin(*hashes: str, extra: tuple[str, ...] = ()) -> str:
+    return _lock_text(_CFFI, _CRYPTOGRAPHY, *extra, hashes={_CRYPTOGRAPHY: hashes})
+
+
+def _uv_resolves_the_verifier_pin(
+    monkeypatch, fresh: str, *, wheels_everywhere: bool = True, watch: Path | None = None
+) -> list[dict]:
+    """uv resolves the verifier pin to ``fresh``, and the wheel check passes
+    or fails for every platform. Collects each command with the file it read,
+    the text its output file held before uv ran, and the text of ``watch``."""
+    calls: list[dict] = []
+
+    def fake_run(cmd, **_kwargs):
+        output = Path(cmd[cmd.index("--output-file") + 1])
+        calls.append({
+            "cmd": list(cmd),
+            "input": Path(cmd[cmd.index("compile") + 1]).read_text(encoding="utf-8"),
+            "held": output.read_text(encoding="utf-8") if output.exists() else None,
+            "watched": watch.read_text(encoding="utf-8") if watch is not None else None,
+        })
+        if "--python-platform" in cmd:
+            return subprocess.CompletedProcess(
+                cmd, 0 if wheels_everywhere else 1, stdout="",
+                stderr="cryptography==46.0.3 has no usable wheel\n",
+            )
+        output.write_text(fresh, encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ra.subprocess, "run", fake_run)
+    return calls
+
+
+class TestCheckVerifierPin:
+    """A new install checks the manifest signature with the library that
+    both install scripts pin by version and hash. The pin must be the same in
+    both, be what the index gives, and install on every platform."""
+
+    def test_a_pin_the_index_gives_is_checked_on_every_platform(
+        self, tmp_path, monkeypatch
+    ):
+        pin = _verifier_pin("a" * 64, "b" * 64)
+        _install_scripts(tmp_path, pin)
+        calls = _uv_resolves_the_verifier_pin(monkeypatch, pin)
+
+        ra.check_verifier_pin(tmp_path, tmp_path, ra.LOCK_PYTHON_VERSIONS[0])
+
+        resolve, *wheel_checks = calls
+        # uv resolves the pinned version, binary files only, and keeps the
+        # dependency versions that the pin holds.
+        assert resolve["input"] == f"{_CRYPTOGRAPHY}\n"
+        assert resolve["held"].splitlines() == [_CFFI, _CRYPTOGRAPHY]
+        assert resolve["cmd"][resolve["cmd"].index("--only-binary") + 1] == ":all:"
+        assert len(wheel_checks) == len(ra.LOCK_TARGET_PLATFORMS) * len(ra.LOCK_PYTHON_VERSIONS)
+        assert all(check["input"] == pin for check in wheel_checks)
+
+    @pytest.mark.parametrize(
+        "fresh",
+        [
+            _verifier_pin("a" * 64, "c" * 64),
+            _lock_text(_CFFI, "cryptography==46.0.4", hashes={"cryptography==46.0.4": ("a" * 64,)}),
+            _verifier_pin("a" * 64, "b" * 64, extra=("new-dependency==1.0",)),
+        ],
+        ids=["hash-the-index-lacks", "other-version", "dependency-added"],
+    )
+    def test_a_pin_the_index_does_not_give_stops_the_release(
+        self, tmp_path, monkeypatch, fresh
+    ):
+        _install_scripts(tmp_path, _verifier_pin("a" * 64, "b" * 64))
+        calls = _uv_resolves_the_verifier_pin(monkeypatch, fresh)
+
+        with pytest.raises(ReleaseError, match="--update-verifier-pin"):
+            ra.check_verifier_pin(tmp_path, tmp_path, ra.LOCK_PYTHON_VERSIONS[0])
+
+        assert [call for call in calls if "--python-platform" in call["cmd"]] == []
+
+    def test_scripts_with_different_pins_stop_the_release(self, tmp_path, monkeypatch):
+        _install_scripts(
+            tmp_path, _verifier_pin("a" * 64, "b" * 64), ps1_pin=_verifier_pin("a" * 64),
+        )
+        calls = _uv_resolves_the_verifier_pin(monkeypatch, _verifier_pin("a" * 64, "b" * 64))
+
+        with pytest.raises(ReleaseError, match="pin different verifier requirements"):
+            ra.check_verifier_pin(tmp_path, tmp_path, ra.LOCK_PYTHON_VERSIONS[0])
+
+        assert calls == []
+
+    def test_a_line_that_is_not_a_hashed_pin_stops_the_release_before_uv_runs(
+        self, tmp_path, monkeypatch
+    ):
+        """pip acts on such a line, but the comparison with the index reads
+        pinned versions and their hashes only."""
+        pin = "--extra-index-url https://index.example/simple\n" + _verifier_pin("a" * 64)
+        _install_scripts(tmp_path, pin)
+        calls = _uv_resolves_the_verifier_pin(monkeypatch, _verifier_pin("a" * 64))
+
+        with pytest.raises(ReleaseError, match=r"verifier pin .*line 1\b"):
+            ra.check_verifier_pin(tmp_path, tmp_path, ra.LOCK_PYTHON_VERSIONS[0])
+
+        assert calls == []
+
+    def test_scripts_from_before_the_pin_are_not_checked(self, tmp_path, monkeypatch):
+        """An older tag has install scripts with no pin. A release from it is
+        still possible, and uv has no pin to resolve."""
+        for rel in ra.INSTALL_SCRIPTS:
+            script = tmp_path / rel
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text("no pin in this script\n", encoding="utf-8")
+        calls = _uv_resolves_the_verifier_pin(monkeypatch, _verifier_pin("a" * 64))
+
+        ra.check_verifier_pin(tmp_path, tmp_path, ra.LOCK_PYTHON_VERSIONS[0])
+
+        assert calls == []
+
+    @pytest.mark.parametrize("without", ra.INSTALL_SCRIPTS)
+    def test_a_pin_in_one_script_only_stops_the_release(self, tmp_path, monkeypatch, without):
+        _install_scripts(tmp_path, _verifier_pin("a" * 64))
+        (tmp_path / without).write_text("no pin in this script\n", encoding="utf-8")
+        calls = _uv_resolves_the_verifier_pin(monkeypatch, _verifier_pin("a" * 64))
+
+        with pytest.raises(ReleaseError, match="pin different verifier requirements"):
+            ra.check_verifier_pin(tmp_path, tmp_path, ra.LOCK_PYTHON_VERSIONS[0])
+
+        assert calls == []
+
+
+class TestUpdateVerifierPinCommand:
+    """``--update-verifier-pin`` writes the pin into both install scripts of
+    the checkout for a pull request. It runs in a temporary checkout here."""
+
+    @staticmethod
+    def _checkout(tmp_path: Path, monkeypatch, pin: str) -> dict[str, str]:
+        agent_dir = tmp_path / "mobaide_agent"
+        agent_dir.mkdir()
+        (agent_dir / "pyproject.toml").write_text(
+            '[project]\nrequires-python = ">=3.12"\n', encoding="utf-8",
+        )
+        _install_scripts(tmp_path, pin)
+        monkeypatch.setattr(ra, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(ra, "require_tools", lambda *_tools: None)
+        monkeypatch.setattr(
+            ra, "run", lambda _args: pytest.fail("a pin update must not start a release"),
+        )
+        return {rel: (tmp_path / rel).read_text(encoding="utf-8") for rel in ra.INSTALL_SCRIPTS}
+
+    def test_writes_the_same_new_pin_into_both_scripts_after_the_wheel_check(
+        self, tmp_path, monkeypatch
+    ):
+        old, new = _verifier_pin("a" * 64), _verifier_pin("a" * 64, "b" * 64)
+        before = self._checkout(tmp_path, monkeypatch, old)
+        calls = _uv_resolves_the_verifier_pin(
+            monkeypatch, new, watch=tmp_path / "deploy" / "install.sh",
+        )
+
+        assert ra.main(["--update-verifier-pin"]) == 0
+
+        for rel in ra.INSTALL_SCRIPTS:
+            assert (tmp_path / rel).read_text(encoding="utf-8") == before[rel].replace(old, new)
+        resolve, *wheel_checks = calls
+        # The cryptography version stays the one that install.sh names.
+        assert resolve["input"] == f"{_CRYPTOGRAPHY}\n"
+        assert wheel_checks
+        for check in wheel_checks:
+            # The check reads the new pin while the scripts still hold the old one.
+            assert check["input"] == new
+            assert check["watched"] == before["deploy/install.sh"]
+
+    def test_a_failed_wheel_check_leaves_both_scripts_as_they_were(
+        self, tmp_path, monkeypatch
+    ):
+        before = self._checkout(tmp_path, monkeypatch, _verifier_pin("a" * 64))
+        _uv_resolves_the_verifier_pin(
+            monkeypatch, _verifier_pin("a" * 64, "b" * 64), wheels_everywhere=False,
+        )
+
+        assert ra.main(["--update-verifier-pin"]) == 1
+
+        for rel in ra.INSTALL_SCRIPTS:
+            assert (tmp_path / rel).read_text(encoding="utf-8") == before[rel]
+
+    def test_a_script_without_the_pin_is_not_written(self, tmp_path, monkeypatch):
+        """Unlike a release from an older tag, the command needs the pin in
+        both scripts: it rewrites the pin in place."""
+        self._checkout(tmp_path, monkeypatch, _verifier_pin("a" * 64))
+        (tmp_path / "deploy" / "install.ps1").write_text("no pin in this script\n", encoding="utf-8")
+        before = {rel: (tmp_path / rel).read_text(encoding="utf-8") for rel in ra.INSTALL_SCRIPTS}
+        calls = _uv_resolves_the_verifier_pin(monkeypatch, _verifier_pin("a" * 64, "b" * 64))
+
+        assert ra.main(["--update-verifier-pin"]) == 1
+
+        assert calls == []
+        for rel in ra.INSTALL_SCRIPTS:
+            assert (tmp_path / rel).read_text(encoding="utf-8") == before[rel]
+
+
+class TestCommittedInstallScripts:
+    """``deploy/install.sh`` and ``deploy/install.ps1`` as committed. A merge
+    to main publishes them at once, so the release checks that need no
+    network run here as well."""
+
+    def test_the_minimum_version_is_not_above_the_released_agent(self):
+        minimum = ra.read_minimum_version(_REPO_ROOT)
+        released = json.loads(
+            (_REPO_ROOT / ".release-please-manifest.json").read_text(encoding="utf-8")
+        )["mobaide_agent"]
+
+        assert release_common.version_key(minimum) <= release_common.version_key(released)
+
+    def test_the_verifier_pin_is_one_hash_pinned_cryptography_version(self):
+        pin = ra.read_verifier_pin(_REPO_ROOT)
+
+        ra.check_lock_grammar(pin, "the verifier pin", "--update-verifier-pin")
+        assert len(ra.lock_pins(pin)[ra.VERIFIER_PACKAGE]) == 1

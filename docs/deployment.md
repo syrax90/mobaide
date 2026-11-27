@@ -89,7 +89,7 @@ Follow [`deploy/prod/bootstrap-mobaide.md`](../deploy/prod/bootstrap-mobaide.md)
    - The Cloudflare dialog pre-fills `mobaide.com, *.mobaide.com`; the wildcard must be deleted.
    - Why: a `*.mobaide.com` SAN matches SNI `app.mobaide.com`, Caddy skips ACME for it, and the SPA serves an Origin CA certificate that every browser rejects. See [TLS certificates](#tls-certificates).
 4. On your workstation: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
-5. Optional: set `RELAY_PAIRING_PRIVATE_KEY` in `/opt/mobaide/.env` (base64 of a 32-byte Ed25519 private key). The relay then serves the public half at `GET /api/v1/agent/pairing_key`; unset, the endpoint answers `{"public_key_b64": null}`. A malformed value stops the relay at start. In this step the pairing push is still signed with the manifest key. `python deploy/prod/release_agent.py --new-relay-pairing-key` prints a new key pair. See [versioning-and-updates.md](versioning-and-updates.md).
+5. Set `RELAY_PAIRING_PRIVATE_KEY` in `/opt/mobaide/.env` (base64 of a 32-byte Ed25519 private key). The relay signs the pairing push with it and serves the public half at `GET /api/v1/agent/pairing_key`. A malformed value stops the relay at start; unset, pairing returns 503. Do not put `MANIFEST_SIGNING_PRIVATE_KEY` on the relay: `deploy_central.py` refuses a deploy while it is there. `python deploy/prod/release_agent.py --new-relay-pairing-key` prints a new key pair. See [versioning-and-updates.md](versioning-and-updates.md).
 
 ### Deploy
 

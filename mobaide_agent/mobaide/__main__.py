@@ -57,9 +57,17 @@ _LOCAL_HEALTH_TIMEOUT_S = 3.0
 # Matches install.ps1 / install.sh's wait for the service's pending file.
 _SERVICE_PENDING_TIMEOUT_S = 60.0
 _SERVICE_PENDING_POLL_S = 0.5
+# Longest wait before the one retry of a throttled device-code approval.
+_ACCEPT_RETRY_MAX_WAIT_S = 10.0
 
 # The install scripts carry the release public key and write it on every run.
 _TRUST_KEY_REPAIR_HINT = "Run the Mobaide installer again to restore it."
+_NO_PAIRING_KEY_HINT = (
+    "this agent knows no relay pairing key, so it could not accept a pairing. "
+    "It learns the key from the signed release data on the relay. Check that "
+    "this computer can reach the relay and try again. If it keeps failing, "
+    "run the Mobaide installer again."
+)
 
 # Set ``creationflags=_WINDOWS_NO_WINDOW`` on every subprocess invocation
 # on Windows. The agent runs under ``pythonw.exe`` via the Scheduled Task
@@ -604,6 +612,7 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
         4   trust key not pinned (run the installer again).
         5   trust-key fingerprint mismatch with the relay's current key.
         6   pairing WebSocket failed (signature, transport, TTL).
+        7   no relay pairing key known; no QR was shown.
     """
     from mobaide.agent._env_writer import (
         env_path_for_prefix,
@@ -659,10 +668,13 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
         )
         return 4
     pinned_fp = compute_trust_key_fp(pinned_pub_key)
-    # Before the QR is shown: the wait must start as soon as it is on screen.
-    pairing_keys = (
-        _pairing_keys(layout, relay_server_url, pinned_pub_key) if args.wait else ()
-    )
+    # Before the QR is shown: the wait must start as soon as it is on screen,
+    # and a scan that neither this command nor the service could accept must
+    # not be offered.
+    pairing_keys = _pairing_keys(layout, relay_server_url)
+    if not pairing_keys:
+        sys.stderr.write(f"mobaide-agent pair-qr: {_NO_PAIRING_KEY_HINT}\n")
+        return 7
 
     pending = load_pending_pairing(layout)
     if pending is None or pending.trust_key_fp != pinned_fp:
@@ -746,13 +758,22 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
     return _try_restart_service(prefix)
 
 
-def _pairing_keys(layout, relay_server_url: str, pinned_pub_key: str) -> tuple[str, ...]:
+def _agent_log_hint(prefix: Path) -> str:
+    """Where the service writes the agent's log lines, as the installers set it up."""
+    if sys.platform == "win32":
+        return str(prefix / "logs" / "agent.out.log")
+    if sys.platform == "darwin":
+        return str(prefix / "agent.out.log")
+    return "journalctl -u mobaide-agent"
+
+
+def _pairing_keys(layout, relay_server_url: str) -> tuple[str, ...]:
     """Keys that may sign the credential push, after a refresh from the signed manifest."""
     from mobaide.agent.trust_store import pairing_verification_keys
     from mobaide.agent.update_check import refresh_manifest_trust
 
     asyncio.run(refresh_manifest_trust(layout, relay_server_url))
-    return pairing_verification_keys(layout, pinned_pub_key)
+    return pairing_verification_keys(layout)
 
 
 def _confirm_device_pairing(account_hint: str, hostname: str) -> bool:
@@ -787,11 +808,14 @@ def _run_pair(args: argparse.Namespace) -> int:
     Returns:
         0   paired.
         2   ``.env`` missing or RELAY_SERVER_URL unset.
-        3   network error talking to the central server.
+        3   network error talking to the central server, or the relay
+            throttled the approval twice; the redemption stays on file.
         4   trust key not pinned (run the installer again).
         5   trust-key fingerprint mismatch with the relay's current key.
         6   pairing WebSocket failed (signature, transport, TTL); the
             redemption stays on file so a re-run can reconnect to it.
+        7   no relay pairing key known; stopped before the redeem and the
+            approval.
         8   the relay refused the code (unknown, expired, already used).
         9   refused locally: already paired, or the operator declined.
     """
@@ -874,7 +898,11 @@ def _run_pair(args: argparse.Namespace) -> int:
         )
         return 4
     pinned_fp = compute_trust_key_fp(pinned_pub_key)
-    pairing_keys = _pairing_keys(layout, relay_server_url, pinned_pub_key)
+    # Before the redeem: redeeming spends the code.
+    pairing_keys = _pairing_keys(layout, relay_server_url)
+    if not pairing_keys:
+        sys.stderr.write(f"mobaide-agent pair: {_NO_PAIRING_KEY_HINT}\n")
+        return 7
 
     # Resume a redemption this host already won: the relay hands the nonce
     # out exactly once, so a run interrupted between redeem and claim can
@@ -960,11 +988,29 @@ def _run_pair(args: argparse.Namespace) -> int:
     # before the wait: until the relay has it the request still polls as
     # pending, so the account holder's confirm button does not exist and
     # nothing can be registered or rotated behind this operator's back.
+    resume_cmd = f"mobaide-agent pair {args.code}" + (" --yes" if args.yes else "")
+    # The relay throttles redeem and accept per address with one bucket, so an
+    # accept right after the redeem (--yes) is refused once with a short wait.
     try:
-        accept_device_code(
-            relay_server_url, code=args.code, redeemer_id=record.redeemer_id
-        )
+        try:
+            accept_device_code(
+                relay_server_url, code=args.code, redeemer_id=record.redeemer_id
+            )
+        except DeviceCodeRejected as exc:
+            if exc.status != 429:
+                raise
+            time.sleep(min(_ACCEPT_RETRY_MAX_WAIT_S, exc.retry_after or 1.0))
+            accept_device_code(
+                relay_server_url, code=args.code, redeemer_id=record.redeemer_id
+            )
     except DeviceCodeRejected as exc:
+        if exc.status == 429:
+            sys.stderr.write(
+                f"mobaide-agent pair: {exc}\n"
+                f"mobaide-agent pair: the approval was not recorded. Re-run "
+                f"'{resume_cmd}' to resume — it will not ask again.\n"
+            )
+            return 3
         sys.stderr.write(f"mobaide-agent pair: {exc}\n")
         clear_pending_device_code(layout)
         return 8
@@ -972,8 +1018,7 @@ def _run_pair(args: argparse.Namespace) -> int:
         sys.stderr.write(
             f"mobaide-agent pair: cannot reach central server: {exc}\n"
             f"mobaide-agent pair: the approval was not recorded. Re-run "
-            f"'mobaide-agent pair {args.code}' to resume — it will not ask "
-            "again.\n"
+            f"'{resume_cmd}' to resume — it will not ask again.\n"
         )
         return 3
 
@@ -1134,9 +1179,12 @@ def _run_show_qr(args: argparse.Namespace) -> int:
                 sys.stderr.write(
                     "mobaide-agent show-qr: the agent is waiting to pair but "
                     f"has not published a pairing QR within "
-                    f"{_SERVICE_PENDING_TIMEOUT_S:.0f}s; it most likely cannot "
-                    "reach the relay and keeps retrying on its own. Check the "
-                    "agent logs, then run 'mobaide-agent show-qr' again.\n"
+                    f"{_SERVICE_PENDING_TIMEOUT_S:.0f}s. Either it cannot reach "
+                    "the relay, or the relay's signed release data names no "
+                    "pairing key (the agent log then shows "
+                    "pairing_monitor.no_pairing_key). It keeps retrying on its "
+                    f"own. Check the agent log ({_agent_log_hint(layout.prefix)}), "
+                    "then run 'mobaide-agent show-qr' again.\n"
                 )
                 return 7
 

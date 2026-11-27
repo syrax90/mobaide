@@ -389,19 +389,13 @@ class CentralServerConfig:
     # Release / manifest publishing
     release_auth_token: str | None = None
     manifest_signing_public_key_b64: str | None = None
-    # Optional Ed25519 private key paired with ``manifest_signing_public_key_b64``.
-    # Required for the QR pairing flow: the central server signs the
-    # WS-push payload that delivers ``agent_id``/``agent_token`` to the agent,
-    # and the agent verifies with its pinned public key. When this is unset,
-    # ``POST /api/pairing/initiate`` returns 503 — the trust-key endpoint at
-    # ``/api/v1/agent/trust_key`` follows the same fail-closed pattern.
-    # Manifest publishing itself remains driven by the external release
-    # pipeline and does NOT consume this private key.
-    manifest_signing_private_key_b64: str | None = None
-    # The relay's own Ed25519 key for the pairing push (RELAY_PAIRING_PRIVATE_KEY);
-    # agents learn its public half from the signed manifest. The push is still
-    # signed with the manifest key until every agent trusts this one.
+    # The relay's own Ed25519 key for the pairing credential push
+    # (RELAY_PAIRING_PRIVATE_KEY); agents learn its public half from the
+    # signed manifest. Pairing answers 503 without it.
     relay_pairing_private_key_b64: str | None = None
+    # The release signing private key no longer belongs on the relay; when the
+    # old MANIFEST_SIGNING_PRIVATE_KEY is still set, startup warns the operator.
+    release_private_key_left_in_env: bool = False
     manifest_store_path: str = "data/agent_manifest.json"
     # Content-addressed agent release files the manifest URLs point at.
     agent_release_dir: str = "data/agent_releases"
@@ -546,7 +540,7 @@ class CentralServerConfig:
                 test_storage.append(tempfile.mkdtemp(prefix="mobaide-test-"))
             return os.path.join(test_storage[0], test_name)
 
-        return cls(
+        config = cls(
             jwt_secret_key=secret,
             env=env,
             enable_api_docs=_env_bool("ENABLE_API_DOCS", False),
@@ -697,11 +691,11 @@ class CentralServerConfig:
             manifest_signing_public_key_b64=(
                 os.getenv("MANIFEST_SIGNING_PUBLIC_KEY") or None
             ),
-            manifest_signing_private_key_b64=(
-                os.getenv("MANIFEST_SIGNING_PRIVATE_KEY") or None
-            ),
             relay_pairing_private_key_b64=_env_ed25519_private_key(
                 "RELAY_PAIRING_PRIVATE_KEY"
+            ),
+            release_private_key_left_in_env=bool(
+                (os.getenv("MANIFEST_SIGNING_PRIVATE_KEY") or "").strip()
             ),
             manifest_store_path=_storage_path(
                 "MANIFEST_STORE_PATH",
@@ -754,3 +748,13 @@ class CentralServerConfig:
             ),
             cloud_voice_allowed_emails=_env_email_list("CLOUD_VOICE_ALLOWED_EMAILS"),
         )
+        if (
+            config.relay_pairing_private_key_b64
+            and config.relay_pairing_public_key_b64 == config.manifest_signing_public_key_b64
+        ):
+            # The release key would then be back on the relay under a new name.
+            raise ValueError(
+                "RELAY_PAIRING_PRIVATE_KEY is the release signing key. Make a separate "
+                "key with 'python deploy/prod/release_agent.py --new-relay-pairing-key'."
+            )
+        return config

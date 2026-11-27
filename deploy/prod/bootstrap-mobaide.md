@@ -119,7 +119,7 @@ Without `RELEASE_AUTH_TOKEN`, the upload and publish endpoints return HTTP 503 a
 
 **Trust key.** The agent install scripts (`deploy/install.sh`, `deploy/install.ps1`) carry the release public key as a constant and pin it at `<prefix>/trust/central_server.pub` only after the manifest signature verified. They do not fetch the key from the server. `MOBAIDE_AGENT_TRUST_KEY_B64` overrides the constant for a self-hosted release pipeline. `release_agent.py` checks that the scripts at the release tag contain the public half of the signing key. `MANIFEST_SIGNING_PUBLIC_KEY` is still required on the relay for manifest verification and `GET /api/v1/agent/trust_key` (HTTP 503 when unset).
 
-**Relay pairing key.** `RELAY_PAIRING_PRIVATE_KEY` (optional) is the base64 of a 32-byte Ed25519 private key. The relay serves its public half at `GET /api/v1/agent/pairing_key`. In this step the pairing push is still signed with the manifest key.
+**Relay pairing key.** `RELAY_PAIRING_PRIVATE_KEY` (required) is the base64 of a 32-byte Ed25519 private key. The relay signs the pairing push with it and serves its public half at `GET /api/v1/agent/pairing_key`. The release signing private key must not be on the relay.
 
 See [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md) for the local key folder and the trust-key flow.
 

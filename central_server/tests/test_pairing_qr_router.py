@@ -4,8 +4,9 @@
 The router uses three pieces of app state that the default
 ``conftest.py`` ``app`` fixture does not configure:
 
-* ``app.state.config`` must carry the manifest signing keypair for the
-  503 fail-closed pattern; we substitute a per-test config.
+* ``app.state.config`` must carry the release public key (its fingerprint
+  goes into the QR) and the relay pairing key (it signs the credential
+  push) for the 503 fail-closed pattern; we substitute a per-test config.
 * ``app.state.pairing_ws_registry`` is a ``PairingWsRegistry`` —
   required because the claim handler dispatches the signed push into it.
 
@@ -21,12 +22,12 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
-from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
 from httpx import ASGITransport, AsyncClient
+from starlette.testclient import TestClient
 
 from central_server.auth.dependencies import DEVICE_REVOKED_DETAIL
 from central_server.auth.rate_limit import ResendRateLimiter
@@ -64,18 +65,33 @@ def _override_config(app, **changes) -> None:
 @pytest.fixture
 async def qr_app(app):
     """Wrap the conftest ``app`` with QR-pairing-specific state."""
-    priv_b64, pub_b64 = _ed25519_keypair_b64()
+    _release_priv_b64, pub_b64 = _ed25519_keypair_b64()
+    pairing_priv_b64, pairing_pub_b64 = _ed25519_keypair_b64()
     _override_config(
         app,
         manifest_signing_public_key_b64=pub_b64,
-        manifest_signing_private_key_b64=priv_b64,
+        relay_pairing_private_key_b64=pairing_priv_b64,
         public_base_url="https://relay.test",
     )
     app.state.pairing_ws_registry = PairingWsRegistry()
-    # Stash the pub/priv so tests can verify or sign payloads.
-    app.state._test_priv_b64 = priv_b64
+    # The release key's fingerprint goes into the QR; the relay pairing key
+    # signs the credential push.
     app.state._test_pub_b64 = pub_b64
+    app.state._test_pairing_pub_b64 = pairing_pub_b64
     yield app
+
+
+def _verify_with_the_relay_pairing_key(app, push: dict) -> None:
+    """Raise unless the push verifies under the relay pairing key: agents
+    accept the credential push from no other key."""
+    canonical = json.dumps(
+        {k: v for k, v in push.items() if k != "signature_b64"},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    Ed25519PublicKey.from_public_bytes(
+        base64.b64decode(app.state._test_pairing_pub_b64)
+    ).verify(base64.b64decode(push["signature_b64"]), canonical)
 
 
 class TestInitiate:
@@ -110,17 +126,17 @@ class TestInitiate:
         # exp_unix is integer-parseable.
         assert int(parts[4]) > 0
 
-    async def test_returns_503_when_private_key_missing(
+    async def test_returns_503_when_the_relay_pairing_key_is_missing(
         self, client, qr_app
     ):
-        _override_config(qr_app, manifest_signing_private_key_b64=None)
+        _override_config(qr_app, relay_pairing_private_key_b64=None)
 
         resp = await client.post(
             "/api/pairing/initiate", json={"hostname": "alpha"},
         )
 
         assert resp.status_code == 503
-        assert "MANIFEST_SIGNING" in resp.json()["detail"]
+        assert "RELAY_PAIRING_PRIVATE_KEY" in resp.json()["detail"]
 
     async def test_metadata_persisted_for_claim_handler(
         self, client, qr_app
@@ -317,7 +333,7 @@ class TestClaim:
     ):
         nonce = await self._initiate_nonce(client)
         fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
-        _override_config(qr_app, manifest_signing_private_key_b64=None)
+        _override_config(qr_app, relay_pairing_private_key_b64=None)
 
         resp = await client.post(
             "/api/pairing/claim",
@@ -493,7 +509,7 @@ class TestClaimWsDispatch:
         self, client, qr_app, api_auth_headers
     ):
         # Pre-register a waiter, then run the claim. The signed payload
-        # must land on the queue and verify under the configured public key.
+        # must land on the queue and verify under the relay pairing key.
         nonce = await TestClaim._initiate_nonce(self, client)
         fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
         queue = await qr_app.state.pairing_ws_registry.register_waiter(
@@ -524,30 +540,15 @@ class TestClaimWsDispatch:
         assert push["agent_id"] == resp.json()["agent_id"]
         assert push["agent_token"]
         assert push["signature_b64"]
-        # Verify the signature with the configured public key.
-        pub = Ed25519PublicKey.from_public_bytes(
-            base64.b64decode(qr_app.state._test_pub_b64)
-        )
-        unsigned = {k: v for k, v in push.items() if k != "signature_b64"}
-        canonical = json.dumps(
-            unsigned, sort_keys=True, separators=(",", ":"),
-        ).encode("utf-8")
-        # Does not raise = signature valid.
-        pub.verify(base64.b64decode(push["signature_b64"]), canonical)
+        _verify_with_the_relay_pairing_key(qr_app, push)
 
-    async def test_push_is_signed_with_the_manifest_key_when_a_pairing_key_is_set(
+    async def test_a_reconnect_gets_the_staged_push_signed_with_the_relay_pairing_key(
         self, client, qr_app, api_auth_headers
     ):
-        # Agents in the field trust only the release (manifest) key until a
-        # signed manifest lists the relay pairing key. A relay that has the
-        # pairing key configured must therefore keep signing with the old key.
-        pairing_priv_b64, pairing_pub_b64 = _ed25519_keypair_b64()
-        _override_config(qr_app, relay_pairing_private_key_b64=pairing_priv_b64)
+        # No agent waits at claim time, so the credentials are staged. The
+        # agent's next connect gets them from the WS recovery branch, which
+        # signs the push again.
         nonce = await TestClaim._initiate_nonce(self, client)
-        queue = await qr_app.state.pairing_ws_registry.register_waiter(
-            hash_pairing_nonce(nonce)
-        )
-
         resp = await client.post(
             "/api/pairing/claim",
             json={
@@ -557,23 +558,15 @@ class TestClaimWsDispatch:
             },
             headers=api_auth_headers,
         )
-
         assert resp.status_code == 200
-        push = json.loads((await queue.get()).decode("utf-8"))
-        signature = base64.b64decode(push["signature_b64"])
-        canonical = json.dumps(
-            {k: v for k, v in push.items() if k != "signature_b64"},
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        # Does not raise = signed with the manifest key.
-        Ed25519PublicKey.from_public_bytes(
-            base64.b64decode(qr_app.state._test_pub_b64)
-        ).verify(signature, canonical)
-        with pytest.raises(InvalidSignature):
-            Ed25519PublicKey.from_public_bytes(
-                base64.b64decode(pairing_pub_b64)
-            ).verify(signature, canonical)
+        assert resp.json()["ws_delivered"] is False
+
+        with TestClient(qr_app).websocket_connect(f"/ws/pairing/{nonce}") as ws:
+            assert ws.receive_json() == {"type": "ready"}
+            push = json.loads(ws.receive_bytes())
+
+        assert push["agent_id"] == resp.json()["agent_id"]
+        _verify_with_the_relay_pairing_key(qr_app, push)
 
     async def test_claim_relay_url_matches_persisted_value(
         self, client, qr_app, api_auth_headers

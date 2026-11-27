@@ -116,14 +116,13 @@ def release_verification_keys(layout, pinned_key_b64: str) -> tuple[str, ...]:
     return (pinned_key_b64, *(key for key in extra if key != pinned_key_b64))
 
 
-def pairing_verification_keys(layout, pinned_key_b64: str) -> tuple[str, ...]:
+def pairing_verification_keys(layout) -> tuple[str, ...]:
     """Keys that may sign the pairing credential push.
 
-    The pinned release key stays in the list while relays still sign the
-    push with it.
+    Only the relay pairing keys of the newest verified manifest: the release
+    key signs releases, never a pairing. Empty until a manifest names one.
     """
-    pairing = load_manifest_trust(layout).relay_pairing_public_keys
-    return (pinned_key_b64, *(key for key in pairing if key != pinned_key_b64))
+    return load_manifest_trust(layout).relay_pairing_public_keys
 
 
 def record_manifest_trust(layout, manifest_body: dict[str, Any]) -> bool:

@@ -9,6 +9,10 @@ The release wheel check and ``deploy/install.sh`` must also name the same
 Python and glibc versions: the check proves one side of that line, and the
 script refuses the other side.
 
+The verification venvs of the two install scripts install the library that
+checks the manifest signature, from the list that both scripts pin. They
+must give pip the same options too.
+
 The checks on the install scripts read the script text, so they run without
 bash and without PowerShell.
 """
@@ -71,6 +75,30 @@ def _script_hash_pinned_install(script: Path) -> list[str]:
     return shlex.split(line)
 
 
+def _ps1_function_body(name: str) -> str:
+    found = re.search(
+        rf"^function {name} \{{\n(.*?)^\}}", _INSTALL_PS1.read_text(encoding="utf-8"), re.S | re.M,
+    )
+    assert found is not None, f"function {name} not found in {_INSTALL_PS1}"
+    return found.group(1)
+
+
+def _script_verifier_install(script: Path) -> list[str]:
+    """The one ``pip install`` in an install script that installs from the
+    pinned verifier requirements."""
+    code = "\n".join(
+        line
+        for line in script.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    (line,) = [
+        line
+        for line in code.splitlines()
+        if " install " in line and " -r " in line and "verifier" in line.lower()
+    ]
+    return shlex.split(line)
+
+
 @pytest.fixture
 def updater_options(tmp_path, monkeypatch) -> list[str]:
     commands = _recorded_commands(monkeypatch)
@@ -99,6 +127,43 @@ def test_the_install_script_uses_the_updater_options(
     script: Path, updater_options
 ) -> None:
     assert _pip_options(_script_hash_pinned_install(script)) == updater_options
+
+
+def test_both_install_scripts_install_the_signature_library_alike() -> None:
+    """A changed copy of this library could pass a forged manifest. Both
+    scripts install it by hash, from binary packages only, from the public
+    index, with the pip settings of the computer ignored."""
+    sh_options, ps1_options = (
+        _pip_options(_script_verifier_install(script)) for script in (_INSTALL_SH, _INSTALL_PS1)
+    )
+
+    assert sh_options == ps1_options
+    assert {
+        "--isolated", "--require-hashes", "--only-binary", ":all:",
+        "--index-url", "https://pypi.org/simple",
+    } <= set(sh_options)
+
+
+@pytest.mark.parametrize(
+    "script, body",
+    [
+        ("install.sh", lambda: _sh_function_body("stage_release")),
+        ("install.ps1", lambda: _ps1_function_body("Install-Release")),
+    ],
+    ids=["install.sh", "install.ps1"],
+)
+def test_the_release_install_has_no_pip_step_without_hash_checks(script, body) -> None:
+    """A release whose signed data pins no dependency is refused. It must
+    not fall back to a pip step that installs without hashes."""
+    code = "\n".join(
+        line for line in body().splitlines() if not line.lstrip().startswith("#")
+    ).replace("\\\n", " ")
+    pip_steps = [
+        line for line in code.splitlines() if "pip" in line.lower() and " install " in line
+    ]
+
+    assert len(pip_steps) == 1, pip_steps
+    assert "--require-hashes" in pip_steps[0]
 
 
 def test_every_installer_reads_the_lock_under_the_name_the_release_tool_writes() -> None:

@@ -5,8 +5,8 @@ ordinary pairing nonce, and the account holder confirms — rejoining the QR
 flow's signed-credential push at the same WebSocket registry.
 
 Like ``test_pairing_qr_router.py`` this suite wires its own app fixture:
-the shared ``conftest.py`` configures neither the manifest signing keypair
-nor ``app.state.pairing_ws_registry``, and both are required here. The
+the shared ``conftest.py`` configures neither the pairing keys nor
+``app.state.pairing_ws_registry``, and both are required here. The
 three device-code rate limiters are deliberately left unwired — the
 dependencies fall open in that state, matching ``_require_reset_ip_quota``.
 """
@@ -18,7 +18,10 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 
 from central_server.auth.rate_limit import ResendRateLimiter
 from central_server.config import CentralServerConfig
@@ -50,15 +53,17 @@ def _override_config(app, **changes) -> None:
 @pytest.fixture
 async def dc_app(app):
     """Wrap the conftest ``app`` with device-code-pairing state."""
-    priv_b64, pub_b64 = _ed25519_keypair_b64()
+    _release_priv_b64, pub_b64 = _ed25519_keypair_b64()
+    pairing_priv_b64, pairing_pub_b64 = _ed25519_keypair_b64()
     _override_config(
         app,
         manifest_signing_public_key_b64=pub_b64,
-        manifest_signing_private_key_b64=priv_b64,
+        relay_pairing_private_key_b64=pairing_priv_b64,
         public_base_url="https://relay.test",
     )
     app.state.pairing_ws_registry = PairingWsRegistry()
     app.state._test_pub_b64 = pub_b64
+    app.state._test_pairing_pub_b64 = pairing_pub_b64
     yield app
 
 
@@ -174,7 +179,7 @@ class TestMintAndRedeem:
         self, client, dc_app, api_auth_headers
     ):
         minted = await _mint(client, api_auth_headers)
-        _override_config(dc_app, manifest_signing_private_key_b64=None)
+        _override_config(dc_app, relay_pairing_private_key_b64=None)
 
         resp = await _redeem(client, minted["code"], "redeemer-keyless")
 
@@ -202,6 +207,30 @@ class TestConfirm:
         assert resp.status_code == 200, resp.text
         assert resp.json()["ws_delivered"] is True, resp.text
         assert not queue.empty(), "signed credential push never reached the waiter"
+
+    async def test_the_confirm_push_is_signed_with_the_relay_pairing_key(
+        self, client, dc_app, api_auth_headers
+    ):
+        # Agents accept the credential push only from a relay pairing key
+        # that a signed manifest names, never from the release key.
+        minted = await _mint(client, api_auth_headers)
+        redeemed = (await _redeem_and_accept(client, minted["code"], "redeemer-sig")).json()
+        queue = await dc_app.state.pairing_ws_registry.register_waiter(
+            hash_pairing_nonce(redeemed["nonce"])
+        )
+
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+
+        assert resp.status_code == 200, resp.text
+        push = json.loads((await queue.get()).decode("utf-8"))
+        canonical = json.dumps(
+            {k: v for k, v in push.items() if k != "signature_b64"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        Ed25519PublicKey.from_public_bytes(
+            base64.b64decode(dc_app.state._test_pairing_pub_b64)
+        ).verify(base64.b64decode(push["signature_b64"]), canonical)
 
     async def test_confirm_pins_the_relay_key_to_the_account(
         self, client, dc_app, api_auth_headers

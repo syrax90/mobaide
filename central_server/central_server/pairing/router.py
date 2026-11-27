@@ -105,22 +105,22 @@ def _resolve_public_base_url(request: Request) -> str:
 
 
 def _server_keys_or_503(request: Request) -> tuple[str, str]:
-    """Return ``(public_key_b64, private_key_b64)`` or raise 503.
+    """Return ``(trust_public_key_b64, pairing_private_key_b64)`` or raise 503.
 
-    The QR pairing flow can only operate when the relay holds the
-    manifest signing private key. The trust-key endpoint follows the
-    same fail-closed pattern when only the public half is set.
+    The QR carries the fingerprint of the release public key, which phones
+    pin, so it stays the same. The credential push is signed with the
+    relay's own pairing key, which agents learn from the signed manifest.
     """
     config = request.app.state.config
     pub = config.manifest_signing_public_key_b64
-    priv = config.manifest_signing_private_key_b64
+    priv = config.relay_pairing_private_key_b64
     if not pub or not priv:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
                 "QR pairing not configured — set "
                 "MANIFEST_SIGNING_PUBLIC_KEY and "
-                "MANIFEST_SIGNING_PRIVATE_KEY"
+                "RELAY_PAIRING_PRIVATE_KEY"
             ),
         )
     return pub, priv
@@ -1141,11 +1141,11 @@ async def pairing_ws(websocket: WebSocket, nonce: str) -> None:
         await websocket.accept()
         await websocket.send_json({"type": "ready"})
 
-        priv_key_b64 = config.manifest_signing_private_key_b64
+        priv_key_b64 = config.relay_pairing_private_key_b64
         consumed = None
         if priv_key_b64:
             # Recovery only fires when we can re-sign. If the operator
-            # blanked MANIFEST_SIGNING_PRIVATE_KEY between claim time and
+            # blanked RELAY_PAIRING_PRIVATE_KEY between claim time and
             # this reconnect, leave ``claimed_token_raw`` in place so a
             # future reconnect (after the key is restored) can still
             # deliver — single-flight is preserved by the next call to
