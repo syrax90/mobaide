@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
@@ -428,8 +429,23 @@ async def _handle_control_json(
 # able to forge server-originated kinds (agent.status_changed, template.*).
 _AGENT_USER_EVENT_KINDS = frozenset({"session.attention"})
 
-# Optional attention payload fields relayed verbatim when present.
-_ATTENTION_OPTIONAL_FIELDS = ("title", "project_name", "exit_reason", "kind", "kind_label")
+# Optional attention payload fields relayed when present (verbatim, except the
+# pattern-checked ones below).
+_ATTENTION_OPTIONAL_FIELDS = (
+    "title",
+    "project_name",
+    "exit_reason",
+    "kind",
+    "kind_label",
+    "request_id",
+    "request_tool_kind",
+)
+# The chat request a notification can answer (proto-v7, 2026-11-27). Both go
+# into the APNs payload, so a value of any other shape is dropped.
+_ATTENTION_FIELD_PATTERNS = {
+    "request_id": re.compile(r"[A-Za-z0-9._:-]{1,64}"),
+    "request_tool_kind": re.compile(r"[a-z_]{1,32}"),
+}
 
 
 def _handle_user_event(websocket, agent_id, ctrl, routing) -> None:
@@ -467,8 +483,12 @@ def _handle_user_event(websocket, agent_id, ctrl, routing) -> None:
     payload: dict = {"session_id": session_id, "reason": reason}
     for field in _ATTENTION_OPTIONAL_FIELDS:
         value = raw.get(field)
-        if isinstance(value, str):
-            payload[field] = value
+        if not isinstance(value, str):
+            continue
+        pattern = _ATTENTION_FIELD_PATTERNS.get(field)
+        if pattern is not None and pattern.fullmatch(value) is None:
+            continue
+        payload[field] = value
     # Stamped from the authenticated tunnel — an agent-supplied agent_id is
     # never trusted.
     payload["agent_id"] = agent_id

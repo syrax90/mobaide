@@ -25,6 +25,7 @@ import asyncio
 import functools
 import itertools
 import os
+import re
 import sys
 import threading
 from collections.abc import Awaitable, Iterator
@@ -1483,6 +1484,184 @@ class TestAgentCancelsRequest:
         agent_text = "".join(m.texts("agent"))
         assert "900 -32800" in agent_text
         assert '"optionId": "allow"' not in agent_text
+
+
+# A prompt asks a permission (id 900); a second one (id 901) follows once the
+# file ``<argv[1]>`` exists. Each answer is shown as agent text,
+# "<id> <optionId>"; the turn ends once both are answered.
+TWO_PERMISSIONS_AGENT = r"""
+import json, os, sys, threading, time
+release = sys.argv[1]
+lock = threading.Lock()
+prompt = None
+answered = set()
+
+def send(message):
+    with lock:
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+        sys.stdout.flush()
+
+def ask(req_id, tool, title):
+    send({"id": req_id, "method": "session/request_permission", "params": {
+        "sessionId": "two",
+        "toolCall": {"toolCallId": tool, "title": title, "kind": "execute"},
+        "options": [
+            {"optionId": "allow", "name": "Allow once", "kind": "allow_once"},
+            {"optionId": "always", "name": "Always allow", "kind": "allow_always"},
+            {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+        ]}})
+
+def ask_again_when_released():
+    while not os.path.exists(release):
+        time.sleep(0.02)
+    ask(901, "t2", "npm test")
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None:
+        outcome = (msg.get("result") or {}).get("outcome") or {}
+        send({"method": "session/update", "params": {"sessionId": "two", "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": f"{msg['id']} {outcome.get('optionId')}\n"}}}})
+        answered.add(msg["id"])
+        if answered == {900, 901}:
+            send({"id": prompt, "result": {"stopReason": "end_turn"}})
+        continue
+    if "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "two"}
+    elif method == "session/prompt":
+        prompt = msg["id"]
+        ask(900, "t1", "git push")
+        threading.Thread(target=ask_again_when_released, daemon=True).start()
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _two_permissions_agent(release) -> list[str]:
+    return [sys.executable, "-c", TWO_PERMISSIONS_AGENT, str(release)]
+
+
+# Like Claude's ExitPlanMode: a prompt asks to switch out of plan mode, with a
+# one-time allow and reject among its options, and waits for the answer.
+PLAN_APPROVAL_AGENT = r"""
+import json, sys
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None or "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "plan"}
+    elif method == "session/prompt":
+        send({"id": 900, "method": "session/request_permission", "params": {
+            "sessionId": "plan",
+            "toolCall": {"toolCallId": "exit-plan", "title": "Ready to code?", "kind": "switch_mode",
+                         "rawInput": {"plan": "1. Write it"}},
+            "options": [
+                {"optionId": "acceptEdits", "name": "Yes, and auto-accept edits", "kind": "allow_always"},
+                {"optionId": "default", "name": "Yes, and manually approve edits", "kind": "allow_once"},
+                {"optionId": "plan", "name": "No, keep planning", "kind": "reject_once"},
+            ]}})
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+PLAN_APPROVAL_AGENT_ARGV = [sys.executable, "-c", PLAN_APPROVAL_AGENT]
+
+
+class TestNotificationAnswer:
+    """The one plain tool permission a notification's Allow or Deny can
+    answer (``attention_request`` on the session row), and ``answer_request``,
+    which ``POST /api/sessions/{id}/chat/respond`` calls."""
+
+    async def test_the_request_left_after_an_answer_gets_an_alert_of_its_own(
+        self, open_chat, tmp_path
+    ):
+        release = tmp_path / "release"
+        m = await open_chat(argv=_two_permissions_agent(release))
+        await m.command("prompt", text="go")
+        await m.until(lambda: "awaiting_permission" in m.attention)
+        (first,) = m.state["requests"]
+
+        # The random part keeps a late action from naming a later request.
+        assert re.fullmatch(r"r:\d+:[0-9a-f]{6}", first["id"])
+        assert m.session.to_info().attention_request == {
+            "id": first["id"],
+            "title": "git push",
+            "tool_kind": "execute",
+            "choices": ["allow_once", "reject_once"],
+        }
+
+        release.touch()
+        await m.until(lambda: len(m.state.get("requests") or []) == 2)
+        await m.until(lambda: "requests" in m.session_events)
+
+        # Two open requests: the row drops the actions, and no new alert rings.
+        assert m.session.to_info().attention_request is None
+        assert m.attention == ["awaiting_permission"]
+        (second,) = [r for r in m.state["requests"] if r["id"] != first["id"]]
+
+        answered = await m.command("respond", request_id=first["id"], option_id="reject")
+        assert answered["ok"] is True
+        await m.until(lambda: m.attention.count("awaiting_permission") == 2)
+
+        assert m.session.to_info().attention_request["id"] == second["id"]
+        with pytest.raises(session_mod.RequestGoneError):
+            m.session.answer_request(first["id"], "allow_once")
+
+        m.session.answer_request(second["id"], "allow_once")
+        await m.until(lambda: m.status == "ready" and "901" in "".join(m.texts("agent")))
+
+        assert "".join(m.texts("agent")) == "900 reject\n901 allow\n"
+        assert m.state["requests"] == []
+        assert m.attention.count("awaiting_permission") == 2
+        assert m.session.to_info().attention_request is None
+        with pytest.raises(session_mod.RequestGoneError):
+            m.session.answer_request(second["id"], "reject_once")
+
+    @pytest.mark.parametrize("case", ["folder_trust", "form", "plan_decision", "plan_approval"])
+    async def test_a_request_that_is_not_a_plain_tool_permission_gets_no_actions(
+        self, open_chat, case
+    ):
+        if case == "folder_trust":
+            m = await open_chat(trust=FakeTrust())
+        elif case == "form":
+            m = await open_chat()
+            await m.command("prompt", text="question")
+        elif case == "plan_decision":
+            # Cursor's plan card: one allow_once and one reject_once, but the
+            # choice is the user's own.
+            m = await open_chat(argv=fake_agent_argv("cursor"))
+            await m.command("prompt", text="plan")
+        else:
+            # Claude's plan approval: a mode switch, not a tool to run.
+            m = await open_chat(argv=PLAN_APPROVAL_AGENT_ARGV)
+            await m.command("prompt", text="go")
+        await m.until(lambda: "awaiting_permission" in m.attention)
+        (request,) = m.state["requests"]
+
+        assert m.session.to_info().attention_request is None
+        with pytest.raises(session_mod.ChatCommandError) as refused:
+            m.session.answer_request(request["id"], "allow_once")
+        assert not isinstance(refused.value, session_mod.RequestGoneError)
 
 
 # Asks one permission whose only options are ``allow_always`` and

@@ -1,6 +1,11 @@
 """Tests for session REST endpoints."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
+from mobaide.acp.session import ChatCommandError, RequestGoneError
 from mobaide.core import ClaudeBinaryNotFoundError
 
 
@@ -1016,6 +1021,67 @@ class TestScrollback:
         assert data["session_id"] == sid
         assert isinstance(data["lines"], list)
         assert isinstance(data["total"], int)
+
+
+class FakeChatSession:
+    """A chat session whose ``answer_request`` raises ``error``, or records
+    the answer."""
+
+    is_chat = True
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.answers: list[tuple[str, str]] = []
+
+    def answer_request(self, request_id: str, choice: str) -> None:
+        if self.error is not None:
+            raise self.error
+        self.answers.append((request_id, choice))
+
+
+class TestChatRespond:
+    """``POST /api/sessions/{id}/chat/respond``: a notification's Allow or
+    Deny. The status tells the phone why an answer did not go through."""
+
+    @pytest.mark.parametrize(
+        ("found", "error", "choice", "status"),
+        [
+            pytest.param("chat", None, "allow_once", 200, id="answered"),
+            pytest.param(
+                "chat", RequestGoneError("This request was already answered"), "allow_once", 409,
+                id="already-answered",
+            ),
+            pytest.param(
+                "chat", ChatCommandError("This request cannot be answered from a notification"),
+                "reject_once", 422, id="not-answerable",
+            ),
+            pytest.param("terminal", None, "allow_once", 404, id="terminal-session"),
+            pytest.param(None, None, "allow_once", 404, id="no-session"),
+            # A notification answers only with Allow once or Deny.
+            pytest.param("chat", None, "allow_always", 422, id="allow-always-refused"),
+        ],
+    )
+    async def test_status_per_outcome(
+        self, app, client, auth_headers, monkeypatch, found, error, choice, status,
+    ):
+        chat = FakeChatSession(error)
+        sessions = {"chat": chat, "terminal": SimpleNamespace()}
+
+        async def get_session(session_id):
+            return sessions.get(found)
+
+        monkeypatch.setattr(app.state.session_manager, "get_session", get_session)
+
+        resp = await client.post(
+            "/api/sessions/s1/chat/respond",
+            headers=auth_headers,
+            json={"request_id": "r:3:a1b2c3", "choice": choice},
+        )
+
+        assert resp.status_code == status
+        if status == 200:
+            assert resp.json() == {"answered": True}
+        assert chat.answers == ([("r:3:a1b2c3", choice)] if status == 200 else [])
 
 
 class TestHealth:

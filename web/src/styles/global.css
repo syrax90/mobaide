@@ -292,6 +292,11 @@ a {
 
 .toast-message {
   flex: 1;
+  /* A long path in an attention toast must wrap, not push the dismiss
+     button out of the toast; its second line holds the request title. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .toast-dismiss {

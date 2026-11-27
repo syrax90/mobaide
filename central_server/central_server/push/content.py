@@ -5,9 +5,11 @@ Port of the iOS ``AttentionContent.swift`` map (itself a port of Android's
 local notification the app would have posted foregrounded, so the strings
 below mirror the clients byte-for-byte.
 
-One deliberate exception: a custom agent type is named "Agent session" here,
-never by its user-chosen name. This text goes to Apple, and the privacy policy
-names only the CLI's title and the workspace name as what an alert carries.
+Two deliberate exceptions, both because this text goes to Apple and the
+privacy policy names only the CLI's title, the workspace name and the kind of
+action as what an alert carries: a custom agent type is named "Agent session"
+here, never by its user-chosen name; and a chat permission alert names only
+the kind of action, while the local alert also shows the request's title.
 """
 from __future__ import annotations
 
@@ -27,6 +29,21 @@ _KIND_FALLBACK_LABELS = {
     "auto_scan": "Auto Scan session",
     "shell": "Terminal session",
 }
+
+
+# What a chat request a notification can answer asks for, by its ACP tool
+# kind. The alert names only the kind of action, never the request's title:
+# that can hold the command itself, and this text goes to Apple.
+_PERMISSION_PHRASES = {
+    "execute": "wants to run a command",
+    "edit": "wants to edit files",
+    "delete": "wants to delete files",
+    "move": "wants to move files",
+    "read": "wants to read files",
+    "search": "wants to search files",
+    "fetch": "wants to fetch from the web",
+}
+_PERMISSION_DEFAULT = "is waiting for your approval"
 
 
 def _fallback_label(kind: str | None) -> str:
@@ -49,13 +66,16 @@ def attention_content(
     workspace_name: str | None,
     exit_reason: str | None,
     kind: str | None = None,
+    request_tool_kind: str | None = None,
 ) -> tuple[str, str] | None:
     """Return ``(title, body)`` for an attention reason, or ``None`` when the
     reason is absent/unrecognized — in which case no push is sent (parity
-    with the clients posting no notification)."""
+    with the clients posting no notification). ``request_tool_kind``: the
+    kind of the chat request the alert can answer, if any."""
     label = _label(title, workspace_name, kind)
     if reason == "awaiting_permission":
-        return ("Permission needed", f"{label} is waiting for your approval")
+        phrase = _PERMISSION_PHRASES.get(request_tool_kind or "", _PERMISSION_DEFAULT)
+        return ("Permission needed", f"{label} {phrase}")
     if reason == "awaiting_os_permission":
         return (
             "Action needed on your Mac",

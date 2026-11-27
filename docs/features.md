@@ -422,6 +422,8 @@ The central server exposes `GET /api/devices` and `DELETE /api/devices/{device_i
 
 The apps raise a notification whenever an agent session needs attention. This covers chat sessions and every terminal session kind. Tapping it opens the relevant session.
 
+On Android and iOS, a chat permission alert has **Allow** and **Deny** buttons when one plain tool request is open. A form, the folder trust, a plan approval or a second open request gets no buttons. The buttons answer in the background. Allow needs an unlocked phone. Deny also works on the lock screen, and a paired Apple Watch shows the iOS buttons. The local alert names the kind of action and shows the request title. APNs pushes name only the kind of action, never the title. If an answer fails, the alert becomes "Could not answer" with the reason. The web alert shows the title but has no buttons, because a browser cannot add them.
+
 | Reason | When |
 |---|---|
 | `awaiting_permission` | A permission prompt is waiting |

@@ -310,6 +310,21 @@ final class AppContainer {
             }
         )
         self.notificationService = notificationService
+        notificationService.registerCategories()
+        let permissionAnswerSender = PermissionAnswerSender(
+            agentAPI: agentAPI,
+            centralAPI: centralAPI,
+            tokenStore: tokenStore,
+            userIdentityStore: userIdentityStore,
+            deviceIdentityStore: deviceIdentityStore
+        )
+        let permissionActionHandler = PermissionActionHandler(
+            send: { action in try await permissionAnswerSender.send(action) },
+            presenter: notificationService
+        )
+        notificationService.setOnAction { action in
+            await permissionActionHandler.handle(action)
+        }
         let attentionCoordinator = AttentionCoordinator(
             eventStream: { agentEventBus.events() },
             authStates: { sessionManager.authStates() },

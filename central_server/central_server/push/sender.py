@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 SANDBOX = "sandbox"
 PRODUCTION = "production"
 
+# The iOS notification category with the Allow and Deny actions. Set only
+# when the alert names a chat request (``request_id``) those actions answer.
+CHAT_PERMISSION_CATEGORY = "CHAT_PERMISSION"
+
 # APNs reasons that mean the token is permanently dead and must be dropped.
 _UNREGISTERED_STATUS = "410"
 _UNREGISTERED_REASONS = frozenset({"Unregistered", "BadDeviceToken"})
@@ -39,6 +43,7 @@ class ApnsSending(Protocol):
         session_id: str,
         agent_id: str,
         environment: str,
+        request_id: str | None = None,
     ) -> PushResult: ...
 
     def close(self) -> None: ...
@@ -86,20 +91,26 @@ class AioapnsSender:
         session_id: str,
         agent_id: str,
         environment: str,
+        request_id: str | None = None,
     ) -> PushResult:
         from aioapns import NotificationRequest, PushType
 
+        aps: dict[str, Any] = {
+            "alert": {"title": title, "body": body},
+            "sound": "default",
+            "thread-id": session_id,
+        }
+        message: dict[str, Any] = {
+            "aps": aps,
+            "session_id": session_id,
+            "agent_id": agent_id,
+        }
+        if request_id:
+            aps["category"] = CHAT_PERMISSION_CATEGORY
+            message["request_id"] = request_id
         request = NotificationRequest(
             device_token=token,
-            message={
-                "aps": {
-                    "alert": {"title": title, "body": body},
-                    "sound": "default",
-                    "thread-id": session_id,
-                },
-                "session_id": session_id,
-                "agent_id": agent_id,
-            },
+            message=message,
             collapse_key=session_id,
             push_type=PushType.ALERT,
         )

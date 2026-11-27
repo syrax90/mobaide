@@ -1,8 +1,8 @@
 /**
  * Attention reason → notification copy.
  *
- * A cross-client contract, not a web string table: the same five pairs are
- * spelled in `ios/Mobaide/Notifications/AttentionContent.swift`,
+ * A cross-client contract, not a web string table: the same five pairs, and
+ * the permission phrases by tool kind, are spelled in `ios/Mobaide/Notifications/AttentionContent.swift`,
  * `android/.../notifications/AttentionNotifier.kt` and
  * `central_server/central_server/push/content.py` (which is what an iPhone gets
  * over APNs). A phone and a browser watching the same session must say the same
@@ -39,6 +39,35 @@ export interface AttentionSource {
   exit_reason?: string;
   kind?: string;
   kind_label?: string;
+  /** The ACP tool kind of the chat request the alert is about. */
+  request_tool_kind?: string;
+  /** That request's own title, when this client knows it. */
+  request_title?: string;
+}
+
+/** What a chat request asks for, by its ACP tool kind. */
+const PERMISSION_PHRASES: Readonly<Record<string, string>> = {
+  execute: 'wants to run a command',
+  edit: 'wants to edit files',
+  delete: 'wants to delete files',
+  move: 'wants to move files',
+  read: 'wants to read files',
+  search: 'wants to search files',
+  fetch: 'wants to fetch from the web',
+};
+
+/**
+ * "<label> wants to run a command", then the request's own title on a second
+ * line when it is known. No request: the plain approval text.
+ */
+function permissionBody(label: string, source: AttentionSource): string {
+  const kind = source.request_tool_kind;
+  if (kind === undefined || kind === '') return `${label} is waiting for your approval`;
+  const phrase = Object.hasOwn(PERMISSION_PHRASES, kind)
+    ? PERMISSION_PHRASES[kind]
+    : 'is waiting for your approval';
+  const title = source.request_title?.trim() ?? '';
+  return title === '' ? `${label} ${phrase}` : `${label} ${phrase}\n${title}`;
 }
 
 /** The label for a session with neither a title nor a workspace. */
@@ -70,7 +99,7 @@ export function attentionContent(source: AttentionSource): AttentionNotification
   const label = attentionLabel(source);
   switch (source.reason) {
     case 'awaiting_permission':
-      return { title: 'Permission needed', body: `${label} is waiting for your approval` };
+      return { title: 'Permission needed', body: permissionBody(label, source) };
     case 'awaiting_os_permission':
       return {
         title: 'Action needed on your Mac',

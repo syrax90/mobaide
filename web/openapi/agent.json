@@ -113,6 +113,38 @@
         "title": "AntigravityScanOptionsModel",
         "type": "object"
       },
+      "AttentionRequest": {
+        "description": "The open chat request a notification can answer with Allow or Deny\n(see ``ChatSession._attention_request``).",
+        "properties": {
+          "choices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "tool_kind": {
+            "title": "Tool Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "tool_kind",
+          "choices"
+        ],
+        "title": "AttentionRequest",
+        "type": "object"
+      },
       "AutoScanFilterDraftModel": {
         "description": "A Linear filter as a template keeps it: the fields of\n:class:`AutoScanFilterModel`, any of which may still be empty.",
         "properties": {
@@ -806,6 +838,44 @@
           "templates"
         ],
         "title": "AutoScanTemplatesResponse",
+        "type": "object"
+      },
+      "ChatRespondRequest": {
+        "description": "``POST /api/sessions/{id}/chat/respond``: answer the request\n``attention_request`` names, as a notification action does.",
+        "properties": {
+          "choice": {
+            "enum": [
+              "allow_once",
+              "reject_once"
+            ],
+            "title": "Choice",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "choice"
+        ],
+        "title": "ChatRespondRequest",
+        "type": "object"
+      },
+      "ChatRespondResponse": {
+        "properties": {
+          "answered": {
+            "title": "Answered",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "answered"
+        ],
+        "title": "ChatRespondResponse",
         "type": "object"
       },
       "ChatStoredSession": {
@@ -4053,6 +4123,16 @@
             ],
             "title": "Attention"
           },
+          "attention_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttentionRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "command": {
             "items": {
               "type": "string"
@@ -6889,6 +6969,58 @@
           }
         },
         "summary": "Stop Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/chat/respond": {
+      "post": {
+        "description": "Answer the chat request that a session's ``attention_request`` names\nwith its ``allow_once`` or ``reject_once`` option, as a notification's\nAllow or Deny does. The first answer wins.",
+        "operationId": "respond_to_chat_request_api_sessions__session_id__chat_respond_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRespondRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatRespondResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No chat session with this id"
+          },
+          "409": {
+            "description": "The request is not pending: answered, cancelled or old"
+          },
+          "422": {
+            "description": "A notification cannot answer this request"
+          }
+        },
+        "summary": "Respond To Chat Request",
         "tags": [
           "sessions"
         ]

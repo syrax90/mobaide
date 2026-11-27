@@ -85,6 +85,9 @@ struct SessionResponse: Codable, Equatable, Sendable {
     /// Local branch of the worktree the agent made for this session; nil when
     /// the session does not run in one.
     let worktree_branch: String?
+    /// Chat sessions: the one open request a notification can answer, while
+    /// `attention` is `awaiting_permission`; nil otherwise.
+    let attention_request: AttentionRequest?
 
     var isChat: Bool { ui == "chat" }
 
@@ -104,6 +107,7 @@ struct SessionResponse: Codable, Equatable, Sendable {
         case ui
         case activity
         case worktree_branch
+        case attention_request
     }
 
     init(
@@ -121,7 +125,8 @@ struct SessionResponse: Codable, Equatable, Sendable {
         exit_reason: String?,
         ui: String? = nil,
         activity: String? = nil,
-        worktree_branch: String? = nil
+        worktree_branch: String? = nil,
+        attention_request: AttentionRequest? = nil
     ) {
         self.session_id = session_id
         self.state = state
@@ -138,7 +143,43 @@ struct SessionResponse: Codable, Equatable, Sendable {
         self.ui = ui
         self.activity = activity
         self.worktree_branch = worktree_branch
+        self.attention_request = attention_request
     }
+}
+
+/// The open chat request a notification can answer with Allow or Deny
+/// (`POST /api/sessions/{id}/chat/respond`).
+struct AttentionRequest: Codable, Equatable, Sendable {
+    let id: String
+    /// One line, at most 120 characters: what the agent asks to do.
+    let title: String
+    /// The ACP tool kind (`execute`, `edit`, …), or `other`.
+    let tool_kind: String
+    /// The answers the route takes: `allow_once` and `reject_once`.
+    let choices: [String]
+
+    /// Both actions are answerable. A newer agent that offers other choices
+    /// gets a plain alert from this build.
+    var isAnswerable: Bool {
+        choices.contains(ChatPermissionChoice.allow.rawValue)
+            && choices.contains(ChatPermissionChoice.deny.rawValue)
+    }
+}
+
+/// The answer a notification action sends.
+enum ChatPermissionChoice: String, Codable, Sendable {
+    case allow = "allow_once"
+    case deny = "reject_once"
+}
+
+/// `POST /api/sessions/{id}/chat/respond` body.
+struct ChatRespondRequest: Codable, Equatable, Sendable {
+    let request_id: String
+    let choice: ChatPermissionChoice
+}
+
+struct ChatRespondResponse: Codable, Equatable, Sendable {
+    let answered: Bool
 }
 
 extension SessionResponse {
@@ -161,6 +202,9 @@ extension SessionResponse {
         ui = try container.decodeIfPresent(String.self, forKey: .ui)
         activity = try container.decodeIfPresent(String.self, forKey: .activity)
         worktree_branch = try container.decodeIfPresent(String.self, forKey: .worktree_branch)
+        // A malformed value must not drop the whole session row: the alert
+        // just goes without actions.
+        attention_request = try? container.decodeIfPresent(AttentionRequest.self, forKey: .attention_request)
     }
 }
 

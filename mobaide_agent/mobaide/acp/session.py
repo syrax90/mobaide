@@ -16,6 +16,7 @@ import collections
 import logging
 import math
 import os
+import secrets
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -150,6 +151,9 @@ class _PendingRequest:
     fields: list[dict[str, Any]] = field(default_factory=list)
     # The child session that asked (see :mod:`.subagents`).
     subagent_id: str | None = None
+    # A plain tool permission a notification can answer: the option id for
+    # each of ``nz.QUICK_CHOICES`` (see ``nz.quick_choices``). None otherwise.
+    quick: dict[str, str] | None = None
 
 
 @dataclass
@@ -182,6 +186,10 @@ class _Console:
 
 class ChatCommandError(Exception):
     """A client command that cannot be applied; the text goes to the client."""
+
+
+class RequestGoneError(ChatCommandError):
+    """The request is not pending: answered, cancelled, or never sent."""
 
 
 class ChatSession:
@@ -268,6 +276,9 @@ class ChatSession:
         self._timeline.state["cwd"] = plan.cwd
         self._title: str | None = plan.title
         self._attention: str | None = None
+        # The request a notification could answer when the attention was last
+        # raised: a different one raises it again (_follow_attention_request).
+        self._alerted_request: str | None = None
         self._exit_reason: str | None = None
         self._conn: AcpConnection | None = None
         self._acp_session_id: str | None = None
@@ -429,6 +440,7 @@ class ChatSession:
             kind=self._config.kind,
             kind_label=self._config.kind_label,
             attention=self._attention,
+            attention_request=self._attention_request(),
             exit_reason=self._exit_reason,
             ui="chat",
             activity=self._activity if self._state == SessionState.RUNNING else None,
@@ -1562,22 +1574,38 @@ class ChatSession:
             options = pending.public.get("options") or []
             if not isinstance(option_id, str) or option_id not in {o["id"] for o in options}:
                 raise ChatCommandError("Unknown option")
-            pending.future.set_result(
-                {"outcome": {"outcome": "selected", "optionId": option_id}}
-            )
+            self._select_option(pending, option_id)
+            return {}
+        action = cmd.get("action")
+        if action == "accept":
+            content, error = nz.coerce_form_values(pending.fields, cmd.get("values"))
+            if error is not None:
+                raise ChatCommandError(error)
+            pending.future.set_result({"action": "accept", "content": content})
+        elif action in ("decline", "cancel"):
+            pending.future.set_result({"action": action})
         else:
-            action = cmd.get("action")
-            if action == "accept":
-                content, error = nz.coerce_form_values(pending.fields, cmd.get("values"))
-                if error is not None:
-                    raise ChatCommandError(error)
-                pending.future.set_result({"action": "accept", "content": content})
-            elif action in ("decline", "cancel"):
-                pending.future.set_result({"action": action})
-            else:
-                raise ChatCommandError("Unknown action")
+            raise ChatCommandError("Unknown action")
         self._drop_request(pending.key)
         return {}
+
+    def answer_request(self, request_id: str, choice: str) -> None:
+        """Answer a plain tool permission with its option of kind ``choice``.
+
+        Raises :class:`RequestGoneError` when the request is not pending, and
+        :class:`ChatCommandError` when a notification cannot answer it.
+        """
+        pending = self._requests.get(request_id)
+        if pending is None or pending.future.done():
+            raise RequestGoneError("This request was already answered")
+        option_id = pending.quick.get(choice) if pending.quick is not None else None
+        if option_id is None:
+            raise ChatCommandError("This request cannot be answered from a notification")
+        self._select_option(pending, option_id)
+
+    def _select_option(self, pending: _PendingRequest, option_id: str) -> None:
+        pending.future.set_result({"outcome": {"outcome": "selected", "optionId": option_id}})
+        self._drop_request(pending.key)
 
     def _cmd_dequeue(self, cmd: dict[str, Any]) -> dict[str, Any]:
         key = cmd.get("queue_id")
@@ -3073,8 +3101,13 @@ class ChatSession:
             "content": [] if decision else item["content"][:3],
             "options": options,
         }
+        # Only a plain tool permission: not the user's own decision (a plan,
+        # or a mode switch such as Claude's plan approval), and not a request
+        # with no tool call (the folder trust).
+        plain = not (decision or decision_tool or not tool_id or item["kind"] == "switch_mode")
+        quick = nz.quick_choices(params.get("options")) if plain else None
         return await self._await_request(
-            "permission", public, tool_id, subagent=subagent
+            "permission", public, tool_id, subagent=subagent, quick=quick
         )
 
     async def _elicitation_request(
@@ -3105,8 +3138,12 @@ class ChatSession:
         *,
         fields: list[dict[str, Any]] | None = None,
         subagent: sa.Subagent | None = None,
+        quick: dict[str, str] | None = None,
     ) -> Any:
-        key = self._next_id("r")
+        # The random part keeps an id from ever naming a later request: a
+        # notification action can arrive long after its request ended, and
+        # a restarted agent counts from 1 again.
+        key = f"{self._next_id('r')}:{secrets.token_hex(3)}"
         public = {"id": key, **public}
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         pending = _PendingRequest(
@@ -3117,6 +3154,7 @@ class ChatSession:
             tool_id,
             fields or [],
             subagent.child_id if subagent is not None else None,
+            quick,
         )
         self._requests[key] = pending
         self._publish_requests()
@@ -3148,6 +3186,51 @@ class ChatSession:
 
     def _publish_requests(self) -> None:
         self._timeline.patch_state(requests=self._public_requests(), urgent=True)
+        self._follow_attention_request()
+
+    def _attention_request(self) -> dict[str, Any] | None:
+        """The only open request, when a notification can answer it with Allow or Deny.
+
+        None for a form, the folder trust, a plan decision, a sign-in, or two
+        or more requests.
+        """
+        if (
+            self._attention != "awaiting_permission"
+            or len(self._requests) != 1
+            or self._sign_in.public is not None
+        ):
+            return None
+        pending = next(iter(self._requests.values()))
+        if pending.quick is None or pending.future.done():
+            return None
+        return {
+            "id": pending.key,
+            "title": nz.alert_title(str(pending.public.get("title") or "")),
+            "tool_kind": pending.public.get("tool_kind") or "other",
+            "choices": list(nz.QUICK_CHOICES),
+        }
+
+    def _attention_request_id(self) -> str | None:
+        request = self._attention_request()
+        return request["id"] if request is not None else None
+
+    def _follow_attention_request(self) -> None:
+        """Raise the attention again when the request a notification can
+        answer changes while the session keeps waiting, so the request left
+        after an answer gets an alert of its own. A change to none only
+        refreshes the session row: clients drop the stale actions."""
+        if self._attention != "awaiting_permission" or not self._requests:
+            return
+        key = self._attention_request_id()
+        if key == self._alerted_request:
+            return
+        self._alerted_request = key
+        if key is None:
+            self._put_event(SessionEvent("requests", self.session_id))
+        else:
+            self._put_event(
+                SessionEvent("attention", self.session_id, attention="awaiting_permission")
+            )
 
     def _drop_request(self, key: str) -> None:
         if self._requests.pop(key, None) is None:
@@ -3361,6 +3444,7 @@ class ChatSession:
         if exit_reason is not None:
             self._exit_reason = exit_reason
         if changed:
+            self._alerted_request = self._attention_request_id()
             self._put_event(SessionEvent("attention", self.session_id, attention=attention))
 
     def _admit_attention(self, attention: str) -> bool:
@@ -3391,6 +3475,7 @@ class ChatSession:
         if self._attention is None:
             return
         self._attention = None
+        self._alerted_request = None
         self._put_event(SessionEvent("attention", self.session_id, attention=None))
 
     def _emit_frame(self, payload: bytes) -> None:

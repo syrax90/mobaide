@@ -41,6 +41,7 @@ from mobaide.relay.envelope import (
     decode,
     encode,
 )
+from mobaide.acp.session import RequestGoneError
 from mobaide.agent.events.bus import AgentEvent
 from mobaide.agent.git.changes_service import (
     GitBadRequestError,
@@ -564,6 +565,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.ui = "terminal"
         sess_info.activity = None
         sess_info.worktree_branch = None
+        sess_info.attention_request = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -595,6 +597,7 @@ class TestHandleRequestEventsSnapshot:
                     "ui": "terminal",
                     "activity": None,
                     "worktree_branch": None,
+                    "attention_request": None,
                 },
             ],
         }
@@ -655,6 +658,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.ui = "terminal"
         sess_info.activity = None
         sess_info.worktree_branch = None
+        sess_info.attention_request = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -689,6 +693,7 @@ class TestHandleRequestEventsSnapshot:
                 "ui": "terminal",
                 "activity": None,
                 "worktree_branch": None,
+                "attention_request": None,
             },
         ]
 
@@ -1719,6 +1724,30 @@ class TestAttentionUserEvent:
                 "kind": "custom_0123456789ab",
                 "kind_label": "My Linter",
             },
+        }
+
+    def test_names_the_request_a_notification_answers_but_never_its_title(self):
+        # The title can hold the command itself, and an APNs alert is built
+        # from this payload.
+        session = _attention_session_wire(
+            ui="chat",
+            attention_request={
+                "id": "r:3:a1b2c3",
+                "title": "curl -H 'Authorization: Bearer secret' https://api.example",
+                "tool_kind": "execute",
+                "choices": ["allow_once", "reject_once"],
+            },
+        )
+        ctrl = _attention_user_event({"session": session})
+
+        assert ctrl["payload"] == {
+            "session_id": "s1",
+            "reason": "awaiting_permission",
+            "title": "Fix the bug",
+            "project_name": "proj",
+            "kind": "claude",
+            "request_id": "r:3:a1b2c3",
+            "request_tool_kind": "execute",
         }
 
     @pytest.mark.parametrize(
@@ -3070,6 +3099,7 @@ class TestProxySessionsWireShape:
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
             "kind_label", "attention", "exit_reason", "ui", "activity", "worktree_branch",
+            "attention_request",
         }
         assert set(a.keys()) == expected_keys
         assert set(b.keys()) == expected_keys
@@ -3130,6 +3160,7 @@ class TestProxySessionsWireShape:
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
             "kind_label", "attention", "exit_reason", "ui", "activity", "worktree_branch",
+            "attention_request",
         }
         # The two new fields are present (even when title is None at create).
         assert body["title"] is None
@@ -3495,6 +3526,7 @@ class TestHandleProxyRequestCodex:
             info.ui = "terminal"
             info.activity = None
             info.worktree_branch = None
+            info.attention_request = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -3850,6 +3882,7 @@ class TestHandleProxyRequestAntigravity:
             info.ui = "terminal"
             info.activity = None
             info.worktree_branch = None
+            info.attention_request = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4172,6 +4205,7 @@ class TestHandleProxyRequestCopilot:
             info.ui = "terminal"
             info.activity = None
             info.worktree_branch = None
+            info.attention_request = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4367,6 +4401,7 @@ class TestHandleProxyRequestCursor:
             info.ui = "terminal"
             info.activity = None
             info.worktree_branch = None
+            info.attention_request = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4530,6 +4565,7 @@ class TestHandleProxyRequestJunie:
             info.ui = "terminal"
             info.activity = None
             info.worktree_branch = None
+            info.attention_request = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -4874,6 +4910,7 @@ class TestHandleProxyRequestPi:
             info.ui = "terminal"
             info.activity = None
             info.worktree_branch = None
+            info.attention_request = None
             s.to_info = MagicMock(return_value=info)
             return s
 
@@ -5155,6 +5192,52 @@ class TestSessionCreateRunsAside:
         await client.stop()
 
         await _wait_until(lambda: creates.cancelled == 2)
+
+
+class TestProxyChatRespond:
+    """The relay twin of ``POST /api/sessions/{id}/chat/respond``: a phone
+    answers a notification through ``/proxy/{agent_id}/…``, with the REST
+    route's validation and statuses."""
+
+    class _Chat:
+        is_chat = True
+
+        def __init__(self, error: Exception | None = None) -> None:
+            self.error = error
+            self.answers: list[tuple[str, str]] = []
+
+        def answer_request(self, request_id: str, choice: str) -> None:
+            if self.error is not None:
+                raise self.error
+            self.answers.append((request_id, choice))
+
+    @pytest.mark.parametrize(
+        ("error", "choice", "status"),
+        [
+            pytest.param(None, "reject_once", 200, id="answered"),
+            pytest.param(
+                RequestGoneError("This request was already answered"), "allow_once", 409,
+                id="already-answered",
+            ),
+            pytest.param(None, "allow_always", 422, id="allow-always-refused"),
+        ],
+    )
+    async def test_status_per_outcome(self, client, mock_session_manager, error, choice, status):
+        chat = self._Chat(error)
+        mock_session_manager.get_session.return_value = chat
+
+        result = await client._dispatch_proxy(
+            "POST",
+            "/api/sessions/s1/chat/respond",
+            {"request_id": "r:3:a1b2c3", "choice": choice},
+            None,
+            AsyncMock(),
+        )
+
+        assert result["status"] == status
+        if status == 200:
+            assert result["body"] == {"answered": True}
+        assert chat.answers == ([("r:3:a1b2c3", choice)] if status == 200 else [])
 
 
 class TestProxyChatSessionDelete:

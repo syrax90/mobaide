@@ -217,6 +217,41 @@ class TestHandleUserEvent:
         assert pushed["kind"] == "custom_0123456789ab"
         assert pushed["kind_label"] == "My Linter"
 
+    @pytest.mark.parametrize(
+        "request_id,tool_kind,relayed",
+        [
+            (
+                "r:3:a1b2c3",
+                "execute",
+                {"request_id": "r:3:a1b2c3", "request_tool_kind": "execute"},
+            ),
+            # Both go into the APNs payload: any other shape is dropped.
+            ("r:3:a1b2c3\nx", "Execute", {}),
+            ("r" * 65, "x" * 33, {}),
+        ],
+        ids=["well-formed", "bad-characters", "too-long"],
+    )
+    def test_the_chat_request_fields_are_relayed_only_in_their_own_shape(
+        self, routing, request_id, tool_kind, relayed
+    ):
+        client = _make_user_client()
+        routing.register_user_client(OWNER, client)
+        dispatcher = _make_dispatcher()
+        ctrl = _ctrl()
+        ctrl["payload"].update(
+            reason="awaiting_permission",
+            request_id=request_id,
+            request_tool_kind=tool_kind,
+        )
+
+        _handle_user_event(_make_ws(dispatcher), AGENT_ID, ctrl, routing)
+
+        keys = ("request_id", "request_tool_kind")
+        payload = json.loads(client.send_queue.get_nowait())["payload"]
+        pushed = dispatcher.schedule_attention.call_args[0][1]
+        assert {k: payload[k] for k in keys if k in payload} == relayed
+        assert {k: pushed[k] for k in keys if k in pushed} == relayed
+
     def test_unknown_agent_connection_is_dropped(self):
         routing = RoutingTable()  # agent never registered → no owner
         dispatcher = _make_dispatcher()
