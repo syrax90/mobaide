@@ -25,6 +25,11 @@
 
 $ErrorActionPreference = "Stop"
 
+# Python must not import modules from the current directory or from the
+# folder of a helper script: a file named like a standard module there would
+# run inside the checks below.
+$env:PYTHONSAFEPATH = "1"
+
 $Script:Prefix = if ($env:MOBAIDE_AGENT_PREFIX) {
     $env:MOBAIDE_AGENT_PREFIX
 } else {
@@ -35,11 +40,11 @@ $Script:ManifestUrl = if ($env:MOBAIDE_AGENT_MANIFEST_URL) {
 } else {
     "https://api.mobaide.com/api/v1/agent/manifest.json"
 }
+# Public half of the key that signs every release manifest (base64 Ed25519).
+# The script carries it, so no server is asked which key to trust. Set
+# MOBAIDE_AGENT_TRUST_KEY_B64 to install from your own release pipeline.
+$Script:ReleasePublicKeyB64 = "f+cIAgdrhuXQtkHjRI5NSYjKAAc0aUWWZP7s7eIjunw="
 $Script:TrustKeyB64 = $env:MOBAIDE_AGENT_TRUST_KEY_B64
-# Self-host / loopback escape hatch for the trust-key fetch. Defaults to
-# off (HTTPS-only); set MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1
-# only on a trusted local network.
-$Script:AllowInsecureTrustKeyFetch = ($env:MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH -eq "1")
 $Script:ServiceName = "MobaideAgent"
 # Used by Assert-AdminOrElevate to re-fetch this script under UAC. Override
 # for self-hosted distributions of install.ps1.
@@ -823,6 +828,28 @@ function Resolve-Python {
     return $py
 }
 
+# The agent installs binary packages only, and its dependency lock has them for
+# 64-bit Python on x86-64 and ARM64. Keep in sync with LOCK_TARGET_PLATFORMS in
+# deploy/prod/release_agent.py. A probe that does not answer lets the install
+# go on.
+function Assert-SupportedPython {
+    param([Parameter(Mandatory=$true)] $PythonExe)
+    $probe = @'
+import platform, struct
+print(platform.machine(), struct.calcsize("P") * 8)
+'@
+    $build = (Invoke-PythonScript -PythonExe $PythonExe -Script $probe | Out-String).Trim()
+    if (-not $build) { return }
+    $machine, $bits = $build -split '\s+', 2
+    if ($bits -eq '64' -and @('AMD64', 'ARM64', 'x86_64', 'aarch64', 'arm64') -contains $machine) {
+        return
+    }
+    Write-Fail @"
+$PythonExe is a $bits-bit Python for $machine. The Mobaide agent needs 64-bit Python 3.12 or newer on an x86-64 or ARM64 computer: it installs prebuilt packages, and they exist only for those.
+Install 64-bit Python from https://www.python.org/downloads/windows/, make it the first python on PATH, and run the installer again.
+"@
+}
+
 # Trust-key validation and manifest-signature verification (Confirm-TrustKey,
 # Test-ManifestSignature below) import `cryptography` — a PyPI dep that is NOT
 # in stdlib and is NOT present on a freshly-installed python.org / winget
@@ -942,9 +969,8 @@ function Get-Manifest {
 }
 
 # Round-trip validate that $Script:TrustKeyB64 decodes to a 32-byte Ed25519
-# public key. Used by both the env-var-pinned path and the
-# central-server-fetched path so a malformed key surfaces immediately at
-# install time as "your key is malformed" rather than later as a confusing
+# public key, so a malformed key surfaces immediately at install time as
+# "your key is malformed" rather than later as a confusing
 # "manifest signature does not verify".
 function Confirm-TrustKey {
     param($PythonExe)
@@ -964,76 +990,25 @@ except Exception as exc:
     }
 }
 
-# Trust-key bootstrap: ensure $Script:TrustKeyB64 is set before fetching the
-# manifest. If the operator pinned via MOBAIDE_AGENT_TRUST_KEY_B64, validate
-# and use it. Otherwise fetch the manifest-signing public key from the
-# central_server endpoint (host derived from $Script:ManifestUrl).
-# Fail-closed if neither path yields a key — never silently ship an install
-# whose auto-updater can't verify rollouts.
-#
-# Two security guards on the fetch path:
-# * User-info in $Script:ManifestUrl is rejected (.NET's [System.Uri] strips
-#   it from .Authority, so we'd silently retarget — explicitly check
-#   .UserInfo before building the origin).
-# * http:// schemes refused unless
-#   MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1 is set.
+# Trust key: the release public key this script carries, unless the operator
+# pinned another one with MOBAIDE_AGENT_TRUST_KEY_B64. The key never comes
+# from the server that also serves the manifest: that server could then
+# sign its own manifest.
 function Initialize-TrustKey {
     param($PythonExe)
     if ($Script:TrustKeyB64) {
         Write-Info "Using operator-pinned trust key (MOBAIDE_AGENT_TRUST_KEY_B64)."
-        Confirm-TrustKey -PythonExe $PythonExe
-        return
+    } else {
+        $Script:TrustKeyB64 = $Script:ReleasePublicKeyB64
     }
-    $manifestUri = [System.Uri]$Script:ManifestUrl
-    if ($manifestUri.UserInfo) {
-        Write-Fail "MOBAIDE_AGENT_MANIFEST_URL must not contain user-info (user@/user:pass@): $Script:ManifestUrl"
-    }
-    $scheme = $manifestUri.Scheme.ToLowerInvariant()
-    if ($scheme -ne "http" -and $scheme -ne "https") {
-        Write-Fail "MOBAIDE_AGENT_MANIFEST_URL has unsupported scheme '$scheme': $Script:ManifestUrl"
-    }
-    if ($scheme -eq "http" -and -not $Script:AllowInsecureTrustKeyFetch) {
-        Write-Fail @"
-Trust-key fetch over cleartext http:// is refused by default
-(MOBAIDE_AGENT_MANIFEST_URL=$Script:ManifestUrl). Set
-MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1 to override (only safe on
-a trusted local network, e.g. self-host loopback).
-"@
-    }
-    $origin = "$($manifestUri.Scheme)://$($manifestUri.Authority)"
-    $trustUrl = "$origin/api/v1/agent/trust_key"
-    Write-Info "Fetching trust key from $trustUrl"
-    try {
-        $response = Invoke-WebRequest -Uri $trustUrl -UseBasicParsing -TimeoutSec 30
-    } catch {
-        Write-Fail @"
-Could not bootstrap trust key from ${trustUrl}: $($_.Exception.Message)
-Set MOBAIDE_AGENT_TRUST_KEY_B64=<base64-ed25519> explicitly,
-or ensure central_server has MANIFEST_SIGNING_PUBLIC_KEY configured.
-See docs/versioning-and-updates.md -> Trust-key bootstrap.
-"@
-    }
-    try {
-        $payload = $response.Content | ConvertFrom-Json
-    } catch {
-        Write-Fail "Trust-key endpoint returned non-JSON: $($_.Exception.Message)"
-    }
-    $key = ($payload.public_key_b64 | Out-String).Trim()
-    if (-not $key) {
-        Write-Fail "Trust-key endpoint returned an empty public_key_b64."
-    }
-    $Script:TrustKeyB64 = $key
-    # Round-trip validate fail-closed BEFORE any files land on disk so a
-    # misconfigured central_server can't smuggle in a malformed key.
     Confirm-TrustKey -PythonExe $PythonExe
-    Write-Info "Trust key bootstrapped from central_server."
 }
 
 function Test-ManifestSignature {
     param($PythonExe, $ManifestPath)
     if (-not $Script:TrustKeyB64) {
         # Initialize-TrustKey should have populated this; defensive only.
-        Write-Fail "Internal error: trust key not bootstrapped before signature verification."
+        Write-Fail "Internal error: trust key not set before signature verification."
     }
     Write-Info "Verifying manifest signature"
     $verifyScript = @'
@@ -1051,7 +1026,10 @@ try:
         base64.b64decode(sig), canon
     )
 except InvalidSignature:
-    sys.exit("manifest signature does not verify")
+    sys.exit(
+        "manifest signature does not verify. A manifest from your own release "
+        "pipeline needs its public key in MOBAIDE_AGENT_TRUST_KEY_B64."
+    )
 '@
     Invoke-PythonScript -PythonExe $PythonExe -Script $verifyScript -Arguments @($ManifestPath, $Script:TrustKeyB64)
     if ($LASTEXITCODE -ne 0) { Write-Fail "Manifest signature verification failed" }
@@ -1149,12 +1127,15 @@ function Install-Release {
 
         # The script prints exactly one line — the staged wheel's full path.
         # All network I/O happened in PowerShell above; this script only
-        # verifies sha256 against the manifest and extracts the tarball.
+        # verifies sha256 against the manifest and extracts the tarball. When
+        # the signed manifest names a dependency lock, it also checks the lock
+        # from the tarball and writes the hash-pinned requirements file.
+        $requirementsPath = Join-Path $tmp.FullName "requirements.txt"
         $stageScript = @'
 import hashlib, json, sys, tarfile
 from pathlib import Path
 
-manifest_path, tarball_path, wheel_path, release_dir = sys.argv[1:5]
+manifest_path, tarball_path, wheel_path, release_dir, requirements_path = sys.argv[1:6]
 record = json.loads(Path(manifest_path).read_text())
 body = record["body"]
 
@@ -1171,9 +1152,22 @@ verify_sha256(wheel_path, body["wheel_sha256"])
 
 with tarfile.open(tarball_path, mode="r:gz") as tar:
     tar.extractall(release_dir, filter="data")
+
+lock_sha = str(body.get("dependency_lock_sha256") or "")
+if lock_sha:
+    lock = Path(release_dir) / "requirements.lock"
+    if not lock.is_file():
+        sys.exit("release tarball has no requirements.lock")
+    verify_sha256(lock, lock_sha)
+    Path(requirements_path).write_text(
+        lock.read_text(encoding="utf-8")
+        + f"\nmobaide-agent @ {Path(wheel_path).resolve().as_uri()}"
+        f" --hash=sha256:{body['wheel_sha256'].lower()}\n",
+        encoding="utf-8",
+    )
 print(wheel_path)
 '@
-        $wheel = Invoke-PythonScript -PythonExe $PythonExe -Script $stageScript -Arguments @($ManifestPath, $tarballPath, $wheelPath, $releaseDir)
+        $wheel = Invoke-PythonScript -PythonExe $PythonExe -Script $stageScript -Arguments @($ManifestPath, $tarballPath, $wheelPath, $releaseDir, $requirementsPath)
         if ($LASTEXITCODE -ne 0) { Write-Fail "Staging failed" }
         $wheel = ($wheel | Out-String).Trim()
 
@@ -1199,16 +1193,31 @@ print(wheel_path)
         & $basePython -m venv $venv | Out-Host
         $venvPython = Join-Path $venv "Scripts\python.exe"
         $venvPip = Join-Path $venv "Scripts\pip.exe"
-        # pip on Windows refuses to self-overwrite through the `pip.exe`
-        # console_scripts shim — that shim is the running process and is
-        # locked. Upgrade through the interpreter so the shim isn't held
-        # open during replacement (pypa/pip#6784).
-        & $venvPython -m pip install --no-cache-dir --upgrade pip | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warn "pip self-upgrade failed (exit $LASTEXITCODE); continuing with bundled pip."
+        if (Test-Path -LiteralPath $requirementsPath) {
+            # Every dependency at the exact version and SHA-256 that the signed
+            # manifest pins. --require-hashes refuses a file with another hash
+            # and a dependency the lock does not list; --only-binary refuses
+            # source builds, whose build tools no hash covers. pip is the
+            # bundled copy.
+            Write-Info "Installing the agent with hash-pinned dependencies"
+            & $venvPython -m pip install --no-cache-dir --disable-pip-version-check --no-input --require-hashes --only-binary ":all:" -r $requirementsPath | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "Dependency install failed: a package did not match the versions and hashes that the signed release lists."
+            }
+        } else {
+            # Releases made before the dependency lock existed have no pins.
+            Write-Warn "This release lists no dependency hashes; installing dependencies without hash checks."
+            # pip on Windows refuses to self-overwrite through the `pip.exe`
+            # console_scripts shim — that shim is the running process and is
+            # locked. Upgrade through the interpreter so the shim isn't held
+            # open during replacement (pypa/pip#6784).
+            & $venvPython -m pip install --no-cache-dir --upgrade pip | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "pip self-upgrade failed (exit $LASTEXITCODE); continuing with bundled pip."
+            }
+            & $venvPip install --no-cache-dir $wheel | Out-Host
+            if ($LASTEXITCODE -ne 0) { Write-Fail "Wheel install failed" }
         }
-        & $venvPip install --no-cache-dir $wheel | Out-Host
-        if ($LASTEXITCODE -ne 0) { Write-Fail "Wheel install failed" }
         # Mark the release complete only after pip + the wheel are installed, so
         # the supervisor recovery never selects a half-built release. Keep
         # '.installed' in sync with install_paths.is_release_complete.
@@ -1480,9 +1489,8 @@ function Wait-AgentHealthy {
         [int] $TimeoutSec = 60
     )
     $envFile = Join-Path (Join-Path $Prefix "mobaide_agent") ".env"
-    # ``port`` and ``host`` default to AgentConfig's documented defaults
-    # (mobaide/agent/config.py:43-44): 0.0.0.0:8000. The installer always
-    # hits 127.0.0.1 (HOST is the bind address, not the contact address).
+    # ``port`` defaults to AgentConfig's documented default, 8000. The agent
+    # listens on 127.0.0.1.
     $port = Read-EnvValue -Path $envFile -Key 'PORT' -Default '8000'
     $url = "http://127.0.0.1:$port/api/health"
     Write-Info "Waiting for agent /api/health at $url (timeout ${TimeoutSec}s)"
@@ -1842,6 +1850,7 @@ function Main {
     New-Item -ItemType Directory -Path $Script:Prefix -Force | Out-Null
 
     $python = Resolve-Python
+    Assert-SupportedPython -PythonExe $python
     # Resolve the GUI-subsystem counterpart now (alongside python.exe) so a
     # missing pythonw.exe surfaces BEFORE we stage releases / register the
     # task. Failing here is far more debuggable than failing at logon.
@@ -1856,17 +1865,17 @@ function Main {
     $verifier = Resolve-VerifierPython -PythonExe $python
     $version = $null
     try {
-        # Order: bootstrap key (env var or central_server fetch) -> pin to disk
-        # so the agent picks it up at runtime -> fetch manifest -> verify it
-        # against the same key -> stage. Initialize-TrustKey fails the install
-        # with an actionable message if neither path yields a key.
+        # Order: choose the trust key (the built-in one, or the operator's) ->
+        # fetch manifest -> verify it against that key -> pin the key to disk
+        # so the agent picks it up at runtime -> stage. A key that does not
+        # verify the manifest never replaces the key of an existing install.
         Initialize-TrustKey -PythonExe $verifier.Python
-        Write-TrustKey
 
         $manifest = New-TemporaryFile
         try {
             Get-Manifest -PythonExe $python -ManifestPath $manifest
             Test-ManifestSignature -PythonExe $verifier.Python -ManifestPath $manifest
+            Write-TrustKey
             $version = Install-Release -PythonExe $python -ManifestPath $manifest
         } finally {
             Remove-Item $manifest -ErrorAction SilentlyContinue
@@ -1905,4 +1914,10 @@ function Main {
     Write-Completion -Version $version -Command $cli.Command
 }
 
-Main
+# Under `irm | iex` this script runs inside the caller's PowerShell, so the
+# variable set at the top must not stay in that session.
+try {
+    Main
+} finally {
+    Remove-Item Env:\PYTHONSAFEPATH -ErrorAction SilentlyContinue
+}
