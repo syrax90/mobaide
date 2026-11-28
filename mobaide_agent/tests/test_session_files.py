@@ -193,55 +193,73 @@ class TestGitListing:
         assert set(_pairs(listing)) == {("keep.txt", False)}
 
 
-class _TimedGit:
-    """Stands in for ``_ls_files``: the listing names ``listed`` and takes
-    ``seconds`` on the fake clock; ``--deleted`` names ``old/gone.txt``.
-    Keeps the time limit each call was given."""
+class _SlowGit:
+    """Stands in for ``_ls_files``: names ``listed`` once ``release`` is set,
+    like a cold git on the first call after the agent starts. Keeps the time
+    limit it was given."""
 
-    def __init__(self, clock: _Clock, listed: bytes, *, seconds: float, truncated: bool) -> None:
-        self._clock = clock
+    def __init__(self, listed: bytes) -> None:
         self._listed = listed
-        self._seconds = seconds
-        self._truncated = truncated
-        self.timeouts: dict[str, float] = {}
+        self.release = threading.Event()
+        self.timeouts: list[float] = []
 
     def __call__(self, binary: str, root: str, args: tuple[str, ...], timeout: float) -> CmdResult:
-        if "--deleted" in args:
-            self.timeouts["deleted"] = timeout
-            return CmdResult(rc=0, stdout=b"old/gone.txt\0", stderr=b"")
-        self.timeouts["listing"] = timeout
-        self._clock.now += self._seconds
-        return CmdResult(rc=0, stdout=self._listed, stderr=b"", truncated=self._truncated)
+        self.timeouts.append(timeout)
+        assert self.release.wait(timeout=10), "the slow git was never released"
+        return CmdResult(rc=0, stdout=self._listed, stderr=b"")
 
 
-class TestGitTimeBudget:
-    """The ``--deleted`` pass shares the listing's git time limit, so one
-    build stays under the reply limit."""
-
-    @pytest.mark.parametrize(
-        ("seconds", "truncated", "deleted_timeout", "files"),
-        [
-            (1.0, False, 1.5, {"keep.txt"}),
-            (2.4, False, None, {"keep.txt", "old/gone.txt"}),
-            (0.5, True, None, {"keep.txt", "old/gone.txt"}),
-        ],
-        ids=["gets-the-rest-of-the-budget", "skipped-below-the-minimum", "skipped-for-a-cut-listing"],
-    )
-    async def test_the_deleted_pass(
-        self, tmp_path, clock, monkeypatch, seconds, truncated, deleted_timeout, files
+class TestSlowGit:
+    async def test_a_git_slower_than_the_reply_answers_503_then_fills_the_cache_without_the_walk(
+        self, tmp_path, monkeypatch
     ):
-        # A cut listing ends in a name that git did not finish writing.
-        listed = b"keep.txt\0old/gone.txt\0" + (b"cut-sh" if truncated else b"")
-        git = _TimedGit(clock, listed, seconds=seconds, truncated=truncated)
+        # The walk would list what .gitignore hides, and keep it for 30 s.
+        root = _files(tmp_path, "keep.txt", "build/out.js", "debug.log")
+        git = _SlowGit(b"keep.txt\0")
         monkeypatch.setattr(session_files, "git_binary", lambda: "git")
         monkeypatch.setattr(session_files, "_ls_files", git)
+        monkeypatch.setattr(session_files, "REPLY_TIMEOUT_SECONDS", 0.05)
 
-        listing = await list_session_files(str(tmp_path), None, 50)
+        try:
+            assert await _status_of(root) == 503
+        finally:
+            git.release.set()
+        await _until(lambda: root in session_files._cache)
+        listing = await list_session_files(root, None, 50)
 
-        assert {path for path, is_dir in _pairs(listing) if not is_dir} == files
-        assert listing.truncated is truncated
-        assert git.timeouts.get("listing") == session_files.GIT_TIMEOUT_SECONDS
-        assert git.timeouts.get("deleted") == deleted_timeout
+        assert _pairs(listing) == [("keep.txt", False)]
+        assert git.timeouts == [session_files.GIT_TIMEOUT_SECONDS]
+        assert session_files.GIT_TIMEOUT_SECONDS > session_files.REPLY_TIMEOUT_SECONDS
+
+
+@requires_git
+class TestOnDiskCheck:
+    async def test_a_file_deleted_after_the_listing_was_kept_is_left_out(self, tmp_path):
+        root = _files(tmp_path, "notes.txt", "notes-old.txt")
+        await list_session_files(root, "notes", 50)
+        os.remove(os.path.join(root, "notes-old.txt"))
+
+        listing = await list_session_files(root, "notes", 50)
+
+        assert _pairs(listing) == [("notes.txt", False)]
+
+    @posix_only
+    @pytest.mark.parametrize("lister", ["git", "walk"])
+    async def test_a_symlink_that_leads_out_of_the_folder_is_left_out(
+        self, tmp_path, monkeypatch, lister
+    ):
+        outside = _files(tmp_path / "outside", "secret.txt")
+        repo = init_repo(str(tmp_path / "repo"), initial_commit=False)
+        write_file(repo, "src/app.py", b"x")
+        os.symlink(outside, os.path.join(repo, "link_out"))
+        os.symlink(os.path.join(outside, "secret.txt"), os.path.join(repo, "link_file"))
+        os.symlink(os.path.join(repo, "src", "app.py"), os.path.join(repo, "link_in"))
+        if lister == "walk":
+            monkeypatch.setattr(session_files, "git_binary", lambda: None)
+
+        listing = await list_session_files(repo, None, 50)
+
+        assert {path for path, _ in _pairs(listing)} == {"src", "src/app.py", "link_in"}
 
 
 @pytest.mark.usefixtures("no_git")
@@ -313,6 +331,24 @@ class TestRanking:
             ("src/main.py", False),
             ("src/.hidden", False),
         ]
+
+    async def test_a_backslash_in_the_query_is_a_slash_on_windows_only(self, tmp_path):
+        root = _files(tmp_path, "src/utils/helper.py")
+        if sys.platform != "win32":
+            _files(tmp_path, "back\\slash.txt")
+
+        slash = await list_session_files(root, "src/ut", 50)
+        backslash = await list_session_files(root, "src\\ut", 50)
+
+        if sys.platform == "win32":
+            assert _pairs(backslash) == _pairs(slash) == [
+                ("src/utils", True),
+                ("src/utils/helper.py", False),
+            ]
+        else:
+            assert _pairs(backslash) == []
+            named = await list_session_files(root, "back\\sl", 50)
+            assert _pairs(named) == [("back\\slash.txt", False)]
 
     @pytest.mark.parametrize(
         ("limit", "count"),

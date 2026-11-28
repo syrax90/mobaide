@@ -7069,6 +7069,21 @@ class TestMentions:
         ]
         assert [_file_chips(u) for u in m.of_type("user")] == [["src/config.json"]] * 2
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="a backslash is a separator on Windows")
+    async def test_a_backslash_in_a_posix_file_name_is_kept(self, open_chat, tmp_path):
+        # The listing offers "back\slash.txt" as is; reading it as a folder
+        # dropped the mention.
+        (tmp_path / "back\\slash.txt").write_text("x")
+        log = tmp_path / "agent.log"
+        m = await open_chat(argv=_mentions_agent(log))
+
+        await m.command("prompt", text="look", mentions=["back\\slash.txt"])
+        await m.until(_turn_done(m, "echo look"))
+
+        assert [link["title"] for link in _links(_params_of(log, "session/prompt")[0])] == [
+            "back\\slash.txt"
+        ]
+
     async def test_only_the_first_ten_mentions_are_looked_at(self, open_chat, tmp_path):
         names = [f"f{n:02}.txt" for n in range(session_mod.MENTIONS_MAX + 2)]
         for name in names:
