@@ -713,6 +713,80 @@ def test_wsl_agent_token_travels_in_wslenv_not_on_the_command_line(monkeypatch):
     assert not any("wsl-secret" in a for a in argv)
 
 
+_WSL_NOW = "{23371C25-B1E9-4492-85F2-B5ADFA5A6C45}"
+
+
+def _fw_rule(name=ms.WSL_FIREWALL_RULE, action="Allow", profile="Any", interfaces="Any",
+             protocol="Any", local_ports="Any", remote="Any"):
+    return {"id": "{rule}", "name": name, "action": action, "profile": profile,
+            "interfaces": interfaces, "protocol": protocol, "local_ports": local_ports,
+            "remote": remote}
+
+
+def _block(**kw):
+    return _fw_rule(name="python.exe", action="Block", profile="Public", **kw)
+
+
+@pytest.mark.parametrize(("rules", "expected"), [
+    # Pinned to the WSL adapter's GUID from before a reboot: the bug this guards.
+    ([_fw_rule(interfaces=["6d0bede9-fe2c-4ac4-a878-024063754413"])], ["no longer exists"]),
+    # ConvertTo-Json collapses a one-item list to the bare item.
+    (_fw_rule(interfaces="23371c25-b1e9-4492-85f2-b5adfa5a6c45"), []),
+    ([_fw_rule()], []),
+    # A "Cancel" on the Defender prompt leaves a block rule; it beats any allow.
+    ([_fw_rule(), _block()], ["Remove-NetFirewallRule -Name"]),
+    ([_block(protocol="TCP", local_ports=["9000-9010"])], ["Remove-NetFirewallRule -Name"]),
+    # Blocks that do not match the forwarder's traffic are never reported.
+    ([_fw_rule(name="python.exe", action="Block", profile="Private")], []),
+    ([_block(protocol="UDP")], []),
+    ([_block(protocol="TCP", local_ports="8080")], []),
+    # Scoped to some addresses: maybe deliberate, so no removal is suggested.
+    ([_block(remote="203.0.113.0/24")], ["check it before"]),
+])
+def test_wsl_firewall_problems_find_rules_that_keep_the_wsl_agent_out(rules, expected):
+    problems = ms.wsl_firewall_problems({"wsl_adapters": _WSL_NOW, "rules": rules}, 9001)
+    assert len(problems) == len(expected)
+    for problem, needle in zip(problems, expected):
+        assert needle in problem
+    assert not any("Remove-" in p for p in problems if "check it before" in p)
+
+
+def test_wsl_firewall_hint_scopes_by_address_range_not_adapter():
+    """The adapter GUID changes on every reboot; the printed rule must not
+    depend on it, and must not open Python to every Public network."""
+    hint = ms.wsl_firewall_hint(9001, "172.31.112.1", [])
+    assert "-RemoteAddress 172.16.0.0/12" in hint
+    assert "-InterfaceAlias" not in hint
+    assert "-LocalPort 9001" in hint
+
+
+def test_wsl_forwarder_relays_on_a_port_of_its_own():
+    """The firewall rule opens only the forwarder's port, so the forwarder
+    must not share the server's port, and must carry traffic to it."""
+    import socket
+    import threading
+
+    server = socket.create_server(("127.0.0.1", 0))
+    server_port = server.getsockname()[1]
+
+    def echo():
+        conn, _ = server.accept()
+        conn.sendall(conn.recv(16).upper())
+        conn.close()
+
+    threading.Thread(target=echo, daemon=True).start()
+    forwarder = ms.LoopbackForwarder("127.0.0.1", 0, ("127.0.0.1", server_port))
+    try:
+        listen_port = forwarder._sock.getsockname()[1]
+        assert listen_port != server_port
+        with socket.create_connection(("127.0.0.1", listen_port), timeout=5) as client:
+            client.sendall(b"ping")
+            assert client.recv(16) == b"PING"
+    finally:
+        forwarder.close()
+        server.close()
+
+
 def test_cloud_voice_settings_reach_the_server_only_when_asked(monkeypatch, tmp_path):
     """Cloud voice input stays off unless `up` asks for it: a shell that
     exports CLOUD_VOICE_* (a sourced central_server .env) must not silently
