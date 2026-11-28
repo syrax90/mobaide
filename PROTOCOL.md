@@ -774,7 +774,7 @@ Additive delta within proto-v7 (2026-11-09, choose the branch a new session's wo
 * ``default`` is the repository's default branch: ``origin/HEAD`` first, then ``origin/<MAIN_BRANCH>``, then the local ``<MAIN_BRANCH>`` (agent setting, default ``main``). ``null`` when none exists; the agent then branches from ``HEAD``.
 * ``last_used`` is the ``base_branch`` of the last worktree session created in this workspace, from any client. It is stored in the agent's ``projects.json`` (never in the public workspace row) and follows a rename. ``null`` when unset or when that ref no longer exists.
 * ``default`` and ``last_used`` are always ``null`` or a ``ref`` present in ``refs``.
-* The route reads local refs only and never fetches. Errors are the workspace-git ones: ``404`` unknown workspace, ``400`` not a git repository, then the session git vocabulary.
+* The route first runs a best-effort ``git fetch --all --prune`` (no sign-in prompt, 10 s limit, 60 s backoff after a timeout, one shared fetch per repo, a fetch younger than 30 s is reused). Offline, it lists the cached refs, so the reply can take up to about 10 s on a slow remote. Errors are the workspace-git ones: ``404`` unknown workspace, ``400`` not a git repository, then the session git vocabulary.
 
 Clients preselect ``last_used``, then ``default``, then nothing (the agent's own default).
 

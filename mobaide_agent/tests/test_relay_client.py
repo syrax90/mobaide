@@ -2698,6 +2698,108 @@ class TestProxyWorktreeBases:
         assert result == {"status": 200, "body": resp.model_dump()}
         assert mock_list.await_args.kwargs["last_used"] == "origin/dev"
 
+    def _wire(self, mock_app_state, tmp_path) -> None:
+        (tmp_path / ".git").mkdir(exist_ok=True)
+        workspace = MagicMock()
+        workspace.name = "proj"
+        workspace.path = str(tmp_path)
+        mock_app_state.workspaces_store = MagicMock()
+        mock_app_state.workspaces_store.get = MagicMock(return_value=workspace)
+        mock_app_state.workspaces_store.get_last_worktree_base = MagicMock(return_value=None)
+        mock_app_state.worktree_manager = MagicMock()
+        mock_app_state.session_manager = MagicMock()
+        mock_app_state.event_bus = MagicMock()
+
+    @staticmethod
+    def _proxy(request_id: str, method: str, path: str, body=None) -> bytes:
+        return json.dumps({
+            "type": "proxy_request", "request_id": request_id,
+            "method": method, "path": path, "body": body,
+        }).encode()
+
+    async def test_a_slow_listing_runs_aside_of_later_frames(
+        self, client, mock_app_state, tmp_path,
+    ):
+        """The listing fetches the remotes first; awaited on the tunnel
+        reader it would hold up every later frame until the fetch ends."""
+        from mobaide.agent.git.models import GitItemRead, WorktreeBasesResponse
+
+        self._wire(mock_app_state, tmp_path)
+        gate = asyncio.Event()
+
+        async def slow_list(*args, **kwargs):
+            await gate.wait()
+            return WorktreeBasesResponse(default="origin/main", last_used=None, refs=[])
+
+        ws = AsyncMock()
+        client._ws = ws
+        try:
+            with patch(
+                "mobaide.relay.client.list_worktree_bases", new=slow_list,
+            ), patch(
+                "mobaide.relay.client.list_git_items",
+                new=AsyncMock(return_value=[GitItemRead(kind="branch_only", branch="x")]),
+            ):
+                await asyncio.wait_for(client._handle_control(self._proxy(
+                    "r-bases", "GET", "/api/projects/proj/git/worktree-bases",
+                ), ws), 1)
+                await asyncio.wait_for(client._handle_control(self._proxy(
+                    "r-list", "GET", "/api/projects/proj/git/items",
+                ), ws), 1)
+                await _wait_until(lambda: len(_control_replies(ws)) == 1)
+
+                assert _control_replies(ws)[0]["request_id"] == "r-list"
+
+                gate.set()
+                await _wait_until(lambda: len(_control_replies(ws)) == 2)
+        finally:
+            gate.set()
+            await client.stop()
+
+        assert _control_replies(ws)[1]["request_id"] == "r-bases"
+        assert _control_replies(ws)[1]["status"] == 200
+        assert _control_replies(ws)[1]["body"]["default"] == "origin/main"
+
+    async def test_full_delete_slots_do_not_refuse_the_listing(
+        self, client, mock_app_state, tmp_path,
+    ):
+        from mobaide.agent.git.models import WorktreeBasesResponse
+        from mobaide.relay.client import MAX_GIT_PROXY_TASKS
+
+        self._wire(mock_app_state, tmp_path)
+        gate = asyncio.Event()
+
+        async def slow_delete(*args, **kwargs):
+            await gate.wait()
+
+        ws = AsyncMock()
+        client._ws = ws
+        try:
+            with patch(
+                "mobaide.relay.client.delete_git_items", new=slow_delete,
+            ), patch(
+                "mobaide.relay.client.list_worktree_bases",
+                new=AsyncMock(return_value=WorktreeBasesResponse(
+                    default="origin/main", last_used=None, refs=[],
+                )),
+            ):
+                for i in range(MAX_GIT_PROXY_TASKS):
+                    await client._handle_control(self._proxy(
+                        f"r-del-{i}", "POST", "/api/projects/proj/git/items:delete",
+                        {"items": [{"kind": "branch_only", "branch": "x"}]},
+                    ), ws)
+                await client._handle_control(self._proxy(
+                    "r-bases", "GET", "/api/projects/proj/git/worktree-bases",
+                ), ws)
+                await _wait_until(lambda: len(_control_replies(ws)) == 1)
+        finally:
+            gate.set()
+            await client.stop()
+
+        reply = _control_replies(ws)[0]
+        assert reply["request_id"] == "r-bases"
+        assert reply["status"] == 200
+
 
 class TestProxyGitBranches:
     """Relay parity for the workspace-git routes added next to

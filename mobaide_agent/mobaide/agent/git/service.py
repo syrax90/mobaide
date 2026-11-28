@@ -315,9 +315,11 @@ async def list_worktree_bases(
 ) -> WorktreeBasesResponse:
     """Local and remote-tracking branches a new worktree can start from.
 
-    ``default`` comes first, then every other ref newest tip first. Reads
-    local refs only: creating the worktree fetches a remote base anyway.
+    ``default`` comes first, then every other ref newest tip first. The
+    remotes are fetched first so branches pushed since the last fetch are
+    offered; offline, the cached remote-tracking refs are listed.
     """
+    await manager.refresh_remotes(workspace_root)
     tips, remote_refs = await _ref_tips(workspace_root)
     remotes = await _remote_names(workspace_root)
     refs: list[WorktreeBaseRef] = []
