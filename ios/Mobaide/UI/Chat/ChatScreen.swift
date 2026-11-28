@@ -819,7 +819,9 @@ struct ChatForkRequest: Identifiable, Equatable {
     var id: String { itemId ?? "chat" }
 }
 
-/// Confirms `fork`, as on Android and web.
+/// Confirms `fork`, as on Android and web. The chat's confirms are alerts, not
+/// confirmation dialogs: iOS 26 shows those as a popover anchored to the whole
+/// screen, which points at an unrelated message.
 private struct ChatForkConfirm: ViewModifier {
     @Binding var request: ChatForkRequest?
     let confirm: (ChatForkRequest) -> Void
@@ -829,10 +831,9 @@ private struct ChatForkConfirm: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        content.confirmationDialog(
+        content.alert(
             request?.itemId == nil ? "Fork this chat?" : "Fork from here?",
             isPresented: isPresented,
-            titleVisibility: .visible,
             presenting: request
         ) { request in
             Button("Fork") { confirm(request) }
@@ -851,7 +852,7 @@ private struct NewConversationConfirm: ViewModifier {
     let confirm: () -> Void
 
     func body(content: Content) -> some View {
-        content.confirmationDialog("Start a new conversation?", isPresented: $isPresented, titleVisibility: .visible) {
+        content.alert("Start a new conversation?", isPresented: $isPresented) {
             Button("New conversation", action: confirm)
             Button("Cancel", role: .cancel) {}
         } message: {
