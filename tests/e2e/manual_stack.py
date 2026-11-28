@@ -1181,8 +1181,6 @@ if sys.argv[1] == "gateway":
     print(gateway() or "")
     sys.exit(0)
 port, hosts = sys.argv[2], [h for h in sys.argv[3:] if h]
-if sys.argv[1] == "1" and gateway():
-    hosts.append(gateway())
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 for host in dict.fromkeys(hosts):
     try:
@@ -1409,17 +1407,18 @@ def prepare_wsl_agent(cfg: SimpleNamespace, *, reinstall: bool, fresh: bool) -> 
 
 
 class LoopbackForwarder:
-    """Plain TCP relay from `listen_host:port` to the server on 127.0.0.1.
+    """Plain TCP relay from `listen_host:listen_port` to the server.
 
-    Lets the WSL agent reach a loopback-only server under NAT networking,
-    where the distro sees Windows only at its vEthernet (WSL) address. The
-    listener sits on that virtual adapter, so the LAN still cannot connect.
+    Lets the WSL agent reach the server under NAT networking, where the
+    distro sees Windows only at its vEthernet (WSL) address. The listener sits
+    on that virtual adapter, on a port of its own, so the LAN cannot connect
+    and the firewall rule for that port opens nothing else.
     """
 
-    def __init__(self, listen_host: str, port: int):
+    def __init__(self, listen_host: str, listen_port: int, target: tuple[str, int]):
         self.listen_host = listen_host
-        self._target = ("127.0.0.1", port)
-        self._sock = socket.create_server((listen_host, port))
+        self._target = target
+        self._sock = socket.create_server((listen_host, listen_port))
         threading.Thread(target=self._accept, daemon=True).start()
 
     def _accept(self) -> None:
@@ -1461,13 +1460,13 @@ class LoopbackForwarder:
 
 
 def _wsl_probe(cfg: SimpleNamespace, port: int, hosts: list[str], *,
-               with_gateway: bool, wait: float = 0.0) -> str | None:
+               wait: float = 0.0) -> str | None:
     """First host the distro reaches the server on; with `wait`, keeps
     retrying that long (a firewall prompt may still be open)."""
     deadline = time.monotonic() + wait
     told = False
     while True:
-        result = run_wsl(cfg, 'exec python3 - "$@"', "1" if with_gateway else "0",
+        result = run_wsl(cfg, 'exec python3 - "$@"', "0",
                          str(port), *hosts, stdin=_WSL_RELAY_PROBE.encode(),
                          timeout=120)
         lines = _wsl_output(result).strip().splitlines()
@@ -1484,6 +1483,8 @@ def _wsl_probe(cfg: SimpleNamespace, port: int, hosts: list[str], *,
 
 
 WSL_FIREWALL_RULE = "Mobaide manual E2E (WSL)"
+# The WSL forwarder listens on the server port + this.
+WSL_FORWARD_PORT_OFFSET = 1
 
 # Inbound rules for one program and the WSL adapters' GUIDs, as JSON. The
 # program path comes in through MOBAIDE_FW_PROGRAM, so it needs no quoting.
@@ -1497,6 +1498,9 @@ $rules = @(Get-NetFirewallApplicationFilter | Where-Object { $_.Program -ieq $ex
     [pscustomobject]@{
       id = $_.Name; name = $_.DisplayName; action = "$($_.Action)"; profile = "$($_.Profile)"
       interfaces = @(($_ | Get-NetFirewallInterfaceFilter).InterfaceAlias | ForEach-Object { "$_" })
+      protocol = "$(($_ | Get-NetFirewallPortFilter).Protocol)"
+      local_ports = @(($_ | Get-NetFirewallPortFilter).LocalPort | ForEach-Object { "$_" })
+      remote = @(($_ | Get-NetFirewallAddressFilter).RemoteAddress | ForEach-Object { "$_" })
     }
   })
 ConvertTo-Json -Depth 4 -Compress @{ wsl_adapters = $wsl; rules = $rules }
@@ -1529,21 +1533,45 @@ def _guid(value: str) -> str:
     return value.strip().strip("{}").lower()
 
 
-def wsl_firewall_problems(state: dict) -> list[str]:
-    """Rules that keep this Python from accepting the WSL agent: a block rule
-    that covers the WSL adapter (block rules win over every allow rule), or
-    our allow rule pinned to a WSL adapter that Windows has since recreated
-    (it gets a new GUID after a reboot or a WSL restart)."""
+def _covers_port(ports: list[str], port: int) -> bool:
+    for entry in ports:
+        low, _, high = entry.partition("-")
+        if entry == "Any":
+            return True
+        if low.isdigit() and int(low) <= port <= int(high if high.isdigit() else low):
+            return True
+    return False
+
+
+def wsl_firewall_problems(state: dict, port: int) -> list[str]:
+    """Rules that keep this Python from accepting the WSL agent on `port`: a
+    block rule for that traffic on the WSL adapter (block rules win over every
+    allow rule), or our allow rule pinned to a WSL adapter that Windows has
+    since recreated (it gets a new GUID after a reboot or a WSL restart)."""
     adapters = {_guid(g) for g in _as_list(state.get("wsl_adapters"))}
     problems = []
     for rule in _as_list(state.get("rules")):
         interfaces = {_guid(i) for i in _as_list(rule.get("interfaces"))} - {"any"}
         on_wsl = not interfaces or bool(interfaces & adapters)
         profile = rule.get("profile", "")
-        if rule.get("action") == "Block" and on_wsl and ("Public" in profile or profile == "Any"):
+        blocks = (
+            rule.get("action") == "Block" and on_wsl
+            and ("Public" in profile or profile == "Any")
+            and rule.get("protocol", "Any") in ("Any", "TCP", "6")
+            and _covers_port(_as_list(rule.get("local_ports", "Any")), port)
+        )
+        remote = _as_list(rule.get("remote", "Any"))
+        if blocks and remote == ["Any"]:
             problems.append(
                 f"rule '{rule.get('name')}' blocks this Python on the WSL network; "
                 f"remove it: Remove-NetFirewallRule -Name '{rule.get('id')}'"
+            )
+        elif blocks:
+            # It may be a deliberate restriction aimed at other addresses.
+            problems.append(
+                f"rule '{rule.get('name')}' ({rule.get('id')}) may block this Python: "
+                f"it blocks TCP {port} from {', '.join(remote)}; check it before "
+                "changing it"
             )
         elif rule.get("name") == WSL_FIREWALL_RULE and interfaces and not on_wsl:
             problems.append(
@@ -1572,8 +1600,9 @@ def wsl_firewall_hint(port: int, gateway: str, problems: list[str]) -> str:
          "Windows Defender Firewall most likely blocks this Python on the WSL "
          "adapter (a Public network).\n")
         + "Allow it once from an ADMIN PowerShell. The rule covers only this "
-        "interpreter, this port and the WSL address range, and it survives reboots "
-        "(do NOT allow Python on all Public networks instead):\n"
+        "interpreter and the forwarder's port, which listens on the WSL adapter "
+        "alone, and it survives reboots (do NOT allow Python on all Public "
+        "networks instead):\n"
         f'  Remove-NetFirewallRule -DisplayName "{WSL_FIREWALL_RULE}" '
         "-ErrorAction SilentlyContinue\n"
         f'  New-NetFirewallRule -DisplayName "{WSL_FIREWALL_RULE}" '
@@ -1585,59 +1614,68 @@ def wsl_firewall_hint(port: int, gateway: str, problems: list[str]) -> str:
 
 def wsl_relay_host(
     cfg: SimpleNamespace, args: argparse.Namespace, lan_ip: str
-) -> tuple[str, LoopbackForwarder | None]:
-    """The address the WSL agent reaches the server on, plus the forwarder
-    started for a loopback-only server under NAT networking (else None)."""
-    loopback_bind = args.host in ("127.0.0.1", "localhost")
+) -> tuple[str, int, LoopbackForwarder | None]:
+    """The address and port the WSL agent reaches the server on, plus the
+    forwarder started for it under NAT networking (else None)."""
     if cfg.relay_host:
-        candidates, with_gateway = [cfg.relay_host], False
-    elif loopback_bind:
-        candidates, with_gateway = ["127.0.0.1"], False  # mirrored networking
+        candidates = [cfg.relay_host]
+    elif args.host in ("127.0.0.1", "localhost"):
+        candidates = ["127.0.0.1"]  # mirrored networking
     elif args.host not in ("0.0.0.0", "::"):
-        candidates, with_gateway = [args.host], False  # one interface bound
+        candidates = [args.host]  # one interface bound
     else:
-        candidates, with_gateway = ["127.0.0.1", lan_ip], True
-    gateway_out = _wsl_output(run_wsl(cfg, 'exec python3 - "$@"', "gateway",
-                                      stdin=_WSL_RELAY_PROBE.encode()))
-    gateway = gateway_out.strip().splitlines()[-1].strip() if gateway_out.strip() else ""
+        candidates = ["127.0.0.1", lan_ip]
+    host = _wsl_probe(cfg, args.port, candidates)
+    if host:
+        return host, args.port, None
 
-    forwarder = None
-    if loopback_bind and not cfg.relay_host:
-        host = _wsl_probe(cfg, args.port, candidates, with_gateway=False)
-        if host:
-            return host, None
+    port, forwarder = args.port, None
+    if not cfg.relay_host:
+        gateway_out = _wsl_output(run_wsl(cfg, 'exec python3 - "$@"', "gateway",
+                                          stdin=_WSL_RELAY_PROBE.encode()))
+        gateway = gateway_out.strip().splitlines()[-1].strip() if gateway_out.strip() else ""
+        # The forwarder has a port of its own: the firewall rule for it then
+        # opens only this WSL-only listener, never the server on the LAN.
+        target = {"0.0.0.0": "127.0.0.1", "::": "::1", "localhost": "127.0.0.1"}
         if gateway:
             try:
-                forwarder = LoopbackForwarder(gateway, args.port)
+                forwarder = LoopbackForwarder(
+                    gateway, args.port + WSL_FORWARD_PORT_OFFSET,
+                    (target.get(args.host, args.host), args.port),
+                )
             except OSError as exc:
-                log(f"WSL: could not listen on {gateway}:{args.port} ({exc})")
+                log(f"WSL: could not listen on {gateway}:"
+                    f"{args.port + WSL_FORWARD_PORT_OFFSET} ({exc})")
             else:
-                log(f"WSL: server is bound to {args.host}; forwarding "
-                    f"{gateway}:{args.port} (the WSL network only) to it")
-                candidates = [gateway]
-    host = _wsl_probe(cfg, args.port, candidates, with_gateway=with_gateway)
-    if host:
-        return host, forwarder
+                port, candidates = args.port + WSL_FORWARD_PORT_OFFSET, [gateway]
+                log(f"WSL: forwarding {gateway}:{port} (the WSL network only) "
+                    f"to the server on port {args.port}")
+        if forwarder is not None:
+            host = _wsl_probe(cfg, port, candidates)
+            if host:
+                return host, port, forwarder
+    else:
+        gateway = ""
     state = _windows_firewall_state(sys.executable)
-    problems = wsl_firewall_problems(state) if state else []
+    problems = wsl_firewall_problems(state, port) if state else []
     # Defender prompts only for a program with no rule at all; with a rule
     # (or a known problem) there is nothing to wait for.
     if state is None or not (problems or _as_list(state.get("rules"))):
-        host = _wsl_probe(cfg, args.port, candidates, with_gateway=with_gateway, wait=90)
+        host = _wsl_probe(cfg, port, candidates, wait=90)
         if host:
-            return host, forwarder
+            return host, port, forwarder
     if forwarder is not None:
         forwarder.close()
-    tried = candidates + ([gateway] if with_gateway and gateway else [])
     die(
         f"WSL: the agent in '{cfg.distro}' cannot reach the server on port "
-        f"{args.port} (tried {', '.join(dict.fromkeys(tried))}).\n"
-        + wsl_firewall_hint(args.port, gateway, problems)
+        f"{port} (tried {', '.join(dict.fromkeys(candidates))}).\n"
+        + wsl_firewall_hint(port, gateway, problems)
     )
 
 
 def build_wsl_agent_env(
-    state: dict, args: argparse.Namespace, work: str, relay_host: str, agent_port: int
+    state: dict, args: argparse.Namespace, work: str, relay_host: str, agent_port: int,
+    relay_port: int | None = None,
 ) -> dict:
     """Env for wsl.exe; WSLENV forwards the agent's variables into Linux, so
     the token never appears on a command line."""
@@ -1646,7 +1684,7 @@ def build_wsl_agent_env(
         "JWT_SECRET_KEY": state["jwt_secret_key"],
         "HOST": "127.0.0.1",
         "PORT": str(agent_port),
-        "RELAY_SERVER_URL": f"ws://{relay_host}:{args.port}",
+        "RELAY_SERVER_URL": f"ws://{relay_host}:{relay_port or args.port}",
         "RELAY_AGENT_ID": state["wsl_agent_id"],
         "RELAY_AGENT_TOKEN": state["wsl_agent_token"],
         "MOBAIDE_AGENT_ALLOW_INSECURE_WS": "1",
@@ -3214,7 +3252,7 @@ def cmd_up(args: argparse.Namespace) -> int:
             assert wsl_work is not None
             state.setdefault("wsl_agent_name", DEFAULT_WSL_AGENT_NAME)
             ensure_agent(client, state, save, prefix="wsl_")
-            relay_host, wsl_forwarder = wsl_relay_host(wsl_cfg, args, lan_ip)
+            relay_host, relay_port, wsl_forwarder = wsl_relay_host(wsl_cfg, args, lan_ip)
             wsl_target = {"distro": wsl_cfg.distro, "user": wsl_cfg.user,
                           "work": wsl_work}
             # Recorded before the spawn: a hard-killed run's Linux process is
@@ -3222,11 +3260,11 @@ def cmd_up(args: argparse.Namespace) -> int:
             state["runtime"]["wsl_agent"] = wsl_target
             save()
             log(f"starting WSL agent in '{wsl_cfg.distro}' "
-                f"(relay ws://{relay_host}:{args.port})")
+                f"(relay ws://{relay_host}:{relay_port})")
             wsl_agent = WslAgentProcess(
                 wsl_target,
                 build_wsl_agent_env(state, args, wsl_work, relay_host,
-                                    free_loopback_port()),
+                                    free_loopback_port(), relay_port),
                 agent_dir,
                 logs_dir / "wsl-agent.log",
             )
