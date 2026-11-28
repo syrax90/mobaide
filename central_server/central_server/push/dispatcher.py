@@ -90,12 +90,19 @@ class PushDispatcher:
         self, user_id: str, payload: dict, exclude_device_ids: frozenset[str]
     ) -> None:
         assert self._sender is not None
+        # Only a permission alert can carry the request its actions answer.
+        request_id = (
+            payload.get("request_id")
+            if payload.get("reason") == "awaiting_permission"
+            else None
+        )
         content = attention_content(
             payload.get("reason"),
             payload.get("title"),
             payload.get("project_name"),
             payload.get("exit_reason"),
             payload.get("kind"),
+            payload.get("request_tool_kind") if request_id else None,
         )
         if content is None:
             return
@@ -119,6 +126,7 @@ class PushDispatcher:
                     session_id=session_id,
                     agent_id=agent_id,
                     environment=environment,
+                    request_id=request_id,
                 )
             except Exception:
                 logger.exception(

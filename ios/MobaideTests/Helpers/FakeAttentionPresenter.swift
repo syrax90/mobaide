@@ -72,7 +72,8 @@ func makeSessionResponse(
     state: String = "running",
     kind: SessionKind = .claude,
     kindLabel: String? = nil,
-    activity: String? = nil
+    activity: String? = nil,
+    attentionRequest: AttentionRequest? = nil
 ) -> SessionResponse {
     SessionResponse(
         session_id: id,
@@ -87,6 +88,7 @@ func makeSessionResponse(
         kind_label: kindLabel,
         attention: attention,
         exit_reason: exitReason,
-        activity: activity
+        activity: activity,
+        attention_request: attentionRequest
     )
 }

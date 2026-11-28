@@ -11,8 +11,8 @@ import os
 /// `NSObject`, which is not `Sendable`. Every stored property is either
 /// immutable and `Sendable` (the tracker is thread-safe, the center is a
 /// thread-safe singleton, `onTap` is `@Sendable`) or lock-guarded
-/// (`authorizationRequest`, `teardownEpoch`), so there is no unsynchronised
-/// mutable state.
+/// (`authorizationRequest`, `teardownEpoch`, `onAction`), so there is no
+/// unsynchronised mutable state.
 final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDelegate, AttentionPresenting, @unchecked Sendable {
     /// Loud delivery: heads-up banner + sound, on the Lock Screen and while
     /// foregrounded. Deliberately excludes `.provisional`, which grants
@@ -20,9 +20,20 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
     /// additionally caps whatever `willPresent` returns down to `.list`.
     static let authorizationOptions: UNAuthorizationOptions = [.alert, .sound, .badge]
 
+    /// Category of an alert whose Allow and Deny actions answer a chat
+    /// permission. The server sets the same id on an APNs alert that names a
+    /// request.
+    static let permissionCategory = "CHAT_PERMISSION"
+    static let allowActionId = "ALLOW"
+    static let denyActionId = "DENY"
+
     private let tracker: ForegroundSessionTracker
     private let center: UNUserNotificationCenter
     private let onTap: @MainActor @Sendable (String, String?) -> Void
+
+    /// Answers an Allow or Deny. Late-bound by `AppContainer` because the
+    /// handler posts through this service; set before the delegate is.
+    private let onAction = OSAllocatedUnfairLock<(@MainActor @Sendable (PermissionAction) async -> Void)?>(initialState: nil)
 
     /// Single-flight slot for an in-flight `requestAuthorization`, so the
     /// coordinator's fire-and-forget request and a racing inline request from
@@ -50,6 +61,54 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
         self.onTap = onTap
     }
 
+    func setOnAction(_ handler: @escaping @MainActor @Sendable (PermissionAction) async -> Void) {
+        onAction.withLock { $0 = handler }
+    }
+
+    /// Allow asks for the passcode or Face ID first. Deny does not, so it
+    /// stays usable on the Lock Screen and on a paired Apple Watch. Neither
+    /// opens the app: the answer goes from the background.
+    static func permissionCategories() -> Set<UNNotificationCategory> {
+        [
+            UNNotificationCategory(
+                identifier: permissionCategory,
+                actions: [
+                    UNNotificationAction(identifier: allowActionId, title: "Allow", options: [.authenticationRequired]),
+                    UNNotificationAction(identifier: denyActionId, title: "Deny", options: []),
+                ],
+                intentIdentifiers: [],
+                options: []
+            ),
+        ]
+    }
+
+    /// Registered at launch, before any alert of the category can arrive.
+    func registerCategories() {
+        center.setNotificationCategories(Self.permissionCategories())
+    }
+
+    /// The Allow or Deny tapped on an alert, or nil for any other response.
+    /// A local alert carries no `agent_id`: it is the connected agent's.
+    static func permissionAction(
+        actionIdentifier: String,
+        userInfo: [AnyHashable: Any],
+        identifier: String
+    ) -> PermissionAction? {
+        let choice: ChatPermissionChoice
+        switch actionIdentifier {
+        case allowActionId: choice = .allow
+        case denyActionId: choice = .deny
+        default: return nil
+        }
+        guard let requestId = userInfo["request_id"] as? String, !requestId.isBlank else { return nil }
+        return PermissionAction(
+            sessionId: sessionId(from: userInfo, identifier: identifier),
+            agentId: agentId(from: userInfo),
+            requestId: requestId,
+            choice: choice
+        )
+    }
+
     /// Session id carried by a notification. Locally-posted alerts use the
     /// request `identifier`; a remote APNs alert carries it in the payload's
     /// custom `session_id` (its `apns-collapse-id` — which iOS surfaces as
@@ -63,8 +122,8 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
 
     /// Agent that raised the alert, or nil when the notification carries no
     /// such claim. Only remote alerts do: the relay stamps `agent_id` from the
-    /// authenticated tunnel, while a locally-posted alert has an empty
-    /// `userInfo` and is by construction the connected agent's. Blank counts as
+    /// authenticated tunnel, while a locally-posted alert carries no `agent_id`
+    /// and is by construction the connected agent's. Blank counts as
     /// no claim — the dispatcher sends `str(payload.get("agent_id", ""))`, so a
     /// payload without one arrives as `""` rather than absent.
     static func agentId(from userInfo: [AnyHashable: Any]) -> String? {
@@ -82,7 +141,40 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
         notification.body = content.body
         notification.sound = .default
         notification.threadIdentifier = session.session_id
+        if session.attention == "awaiting_permission",
+           let request = session.attention_request,
+           request.isAnswerable {
+            notification.categoryIdentifier = permissionCategory
+            notification.userInfo = ["request_id": request.id]
+        }
         return UNNotificationRequest(identifier: session.session_id, content: notification, trigger: nil)
+    }
+
+    func alertEpoch() -> UInt64 {
+        teardownEpoch.withLock { $0 }
+    }
+
+    func shownRequestId(sessionId: String) async -> String? {
+        let shown = await center.deliveredNotifications().first { $0.request.identifier == sessionId }
+        guard let shown else { return nil }
+        return shown.request.content.userInfo["request_id"] as? String ?? ""
+    }
+
+    /// Replaces a session's alert with a plain one that says why an action
+    /// did not answer. Tapping it opens the session like any alert. Dropped
+    /// after a teardown since `epoch`, as `post` drops its add.
+    func postActionFailure(_ action: PermissionAction, body: String, epoch: UInt64) async {
+        let notification = UNMutableNotificationContent()
+        notification.title = "Could not answer"
+        notification.body = body
+        notification.sound = .default
+        notification.threadIdentifier = action.sessionId
+        if let agentId = action.agentId {
+            notification.userInfo = ["session_id": action.sessionId, "agent_id": agentId]
+        }
+        let request = UNNotificationRequest(identifier: action.sessionId, content: notification, trigger: nil)
+        guard teardownEpoch.withLock({ $0 }) == epoch else { return }
+        try? await center.add(request)
     }
 
     // MARK: - AttentionPresenting
@@ -238,12 +330,26 @@ final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDe
     /// `.fullyConnected` on a cold start or navigates immediately when warm.
     /// Dispatched inline rather than from a detached task so the route is
     /// already pushed by the time UIKit takes its post-response snapshot.
+    ///
+    /// Allow and Deny run in the background: the completion handler (the end
+    /// of this method) is held until the answer went out or failed.
     @MainActor
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
         let userInfo = response.notification.request.content.userInfo
+        if let action = Self.permissionAction(
+            actionIdentifier: response.actionIdentifier,
+            userInfo: userInfo,
+            identifier: response.notification.request.identifier
+        ) {
+            await onAction.withLock { $0 }?(action)
+            return
+        }
+        if response.actionIdentifier == Self.allowActionId || response.actionIdentifier == Self.denyActionId {
+            return
+        }
         onTap(
             Self.sessionId(
                 from: userInfo,

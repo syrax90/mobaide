@@ -198,6 +198,11 @@ class SessionInfo:
     # that missed the one-shot ``session.attention`` still resyncs.
     # ``exit_reason`` is the end cause (``SessionEnd`` reason or ``process_exited``).
     attention: str | None = None
+    # Chat sessions: the one open request a notification can answer while
+    # ``attention`` is ``awaiting_permission``, as
+    # ``{id, title, tool_kind, choices}``; None otherwise. See
+    # ``ChatSession._attention_request``.
+    attention_request: dict[str, Any] | None = None
     exit_reason: str | None = None
     # ``"terminal"`` (PTY) or ``"chat"`` (ACP); clients pick the screen by it.
     ui: str = "terminal"
@@ -220,7 +225,8 @@ class SessionInfo:
 @dataclass
 class SessionEvent:
     # "output", "chat", "started", "stopped", "error", "title", "attention",
-    # "activity" (``SessionInfo.activity`` changed; refreshes the session row)
+    # "activity" (``SessionInfo.activity`` changed; refreshes the session row),
+    # "requests" (``SessionInfo.attention_request`` changed to none; refreshes the row)
     event_type: str
     session_id: str
     # Output events carry raw PTY bytes and chat events one encoded chat
@@ -422,6 +428,7 @@ def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:
         "kind": kind.value if isinstance(kind, SessionKind) else kind,
         "kind_label": info.kind_label,
         "attention": info.attention,
+        "attention_request": info.attention_request,
         "exit_reason": info.exit_reason,
         "ui": info.ui,
         "activity": info.activity,

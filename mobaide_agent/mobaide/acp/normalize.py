@@ -11,6 +11,7 @@ import difflib
 import posixpath
 import re
 import shlex
+import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -785,6 +786,48 @@ def usage(update: Mapping[str, Any]) -> dict[str, Any] | None:
         if isinstance(amount, int | float) and currency:
             result["cost"] = {"amount": float(amount), "currency": currency}
     return result
+
+
+# The option kinds a notification answers with: Allow and Deny.
+QUICK_CHOICES = ("allow_once", "reject_once")
+# Longest request title a session row carries for a notification.
+ALERT_TITLE_MAX = 120
+
+
+def alert_title(text: str) -> str:
+    """One line for an alert: without control and format characters (bidi
+    overrides, zero-width marks), which can make a command read differently
+    from what runs, next to a one-tap Allow."""
+    visible = "".join(_ALERT_CHAR.get(unicodedata.category(ch), ch) for ch in text)
+    return _one_line(visible, ALERT_TITLE_MAX)
+
+
+# Control characters (tabs, newlines) become spaces; format characters go.
+_ALERT_CHAR = {"Cc": " ", "Cf": ""}
+
+
+def quick_choices(raw: Any) -> dict[str, str] | None:
+    """The option id for each kind in :data:`QUICK_CHOICES`, or ``None``.
+
+    Needs exactly one option of each and only standard kinds, read from the raw
+    options: :func:`permission_options` turns an unknown kind into ``allow_once``.
+    """
+    if not isinstance(raw, list):
+        return None
+    ids: dict[str, list[str]] = {}
+    for opt in raw[:PERMISSION_OPTIONS_MAX]:
+        if not isinstance(opt, Mapping):
+            continue
+        opt_id = _str(opt.get("optionId"))
+        if not opt_id:
+            continue
+        kind = opt.get("kind")
+        if kind not in PERMISSION_KINDS:
+            return None
+        ids.setdefault(kind, []).append(opt_id)
+    if any(len(ids.get(kind, ())) != 1 for kind in QUICK_CHOICES):
+        return None
+    return {kind: ids[kind][0] for kind in QUICK_CHOICES}
 
 
 def permission_options(raw: Any) -> list[dict[str, Any]]:

@@ -5,9 +5,15 @@ import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
 import androidx.test.core.app.ApplicationProvider
+import com.mobaide.app.data.auth.TokenStore
+import com.mobaide.app.data.network.dto.AttentionRequest
+import com.mobaide.app.data.network.dto.ChatRespondRequest
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
+import io.mockk.every
+import io.mockk.mockk
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -42,6 +48,7 @@ class AttentionNotifierTest {
         exitReason: String? = null,
         kind: SessionKind = SessionKind.Claude,
         kindLabel: String? = null,
+        attentionRequest: AttentionRequest? = null,
     ) = SessionResponse(
         session_id = "s1",
         state = "running",
@@ -52,7 +59,12 @@ class AttentionNotifierTest {
         kind_label = kindLabel,
         attention = attention,
         exit_reason = exitReason,
+        attention_request = attentionRequest,
     )
+
+    private fun request(
+        choices: List<String> = listOf(ChatRespondRequest.ALLOW, ChatRespondRequest.DENY),
+    ) = AttentionRequest(id = "r:3:a1b2c3", title = "npm test", tool_kind = "execute", choices = choices)
 
     private fun lastNotification(): Notification {
         val posted = shadowOf(manager).allNotifications
@@ -66,7 +78,9 @@ class AttentionNotifierTest {
         shadowOf(application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         NotificationChannels.ensureCreated(application)
         manager = application.getSystemService(NotificationManager::class.java)
-        notifier = AttentionNotifier(application)
+        val tokenStore = mockk<TokenStore>()
+        every { tokenStore.getAgentId() } returns "agent-a"
+        notifier = AttentionNotifier(application, tokenStore)
     }
 
     @Test
@@ -107,6 +121,57 @@ class AttentionNotifierTest {
 
         val body = lastNotification().extras.getString(Notification.EXTRA_TEXT).orEmpty()
         assertTrue(body.startsWith("mobaide hit an error"))
+    }
+
+    @Test
+    fun answerableChatPermission_offersAllowBehindAnUnlockAndDeny() {
+        notifier.notify(
+            session(attention = "awaiting_permission", title = "api refactor", attentionRequest = request()),
+        )
+
+        val notification = lastNotification()
+        assertEquals(
+            "api refactor wants to run a command\nnpm test",
+            notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString(),
+        )
+        val actions = notification.actions.orEmpty().toList()
+        assertEquals(listOf("Allow", "Deny"), actions.map { it.title.toString() })
+        assertEquals(listOf(true, false), actions.map { it.isAuthenticationRequired })
+        val answers = actions.map { shadowOf(it.actionIntent).savedIntent }
+        assertEquals(listOf("r:3:a1b2c3", "r:3:a1b2c3"), answers.map { it.getStringExtra("request_id") })
+        assertEquals(
+            listOf(ChatRespondRequest.ALLOW, ChatRespondRequest.DENY),
+            answers.map { it.getStringExtra("choice") },
+        )
+        // The receiver answers only through the agent that posted the alert.
+        assertEquals(listOf("agent-a", "agent-a"), answers.map { it.getStringExtra("agent_id") })
+    }
+
+    @Test
+    fun shownRequestId_namesTheRequestTheShownAlertAnswers() {
+        // The receiver skips its failure alert only when the session's shown
+        // alert names another request, so a plain alert must read as "".
+        assertNull(notifier.shownRequestId("s1"))
+
+        notifier.notify(session(attention = "awaiting_permission", attentionRequest = request()))
+        assertEquals("r:3:a1b2c3", notifier.shownRequestId("s1"))
+
+        notifier.notify(session(attention = "turn_finished"))
+        assertEquals("", notifier.shownRequestId("s1"))
+    }
+
+    @Test
+    fun requestThisBuildCannotAnswer_getsAPlainAlert() {
+        // A newer agent that offers other choices: no action may send one it
+        // did not offer.
+        notifier.notify(
+            session(
+                attention = "awaiting_permission",
+                attentionRequest = request(choices = listOf(ChatRespondRequest.ALLOW, "allow_always")),
+            ),
+        )
+
+        assertTrue(lastNotification().actions.isNullOrEmpty())
     }
 
     @Test

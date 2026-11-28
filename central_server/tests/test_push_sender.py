@@ -133,6 +133,33 @@ class TestNotificationRequestShape:
             "agent_id": "agent-1",
         }
 
+    async def test_a_request_id_adds_the_category_with_allow_and_deny(self):
+        sender = _sender()
+        client = FakeApnsClient()
+        sender._clients["sandbox"] = client
+
+        await _send(
+            sender,
+            body="Fix the bug wants to run a command",
+            request_id="r:3:a1b2c3",
+        )
+
+        (request,) = client.requests
+        assert request.message == {
+            "aps": {
+                "alert": {
+                    "title": "Permission needed",
+                    "body": "Fix the bug wants to run a command",
+                },
+                "sound": "default",
+                "thread-id": "s1",
+                "category": "CHAT_PERMISSION",
+            },
+            "session_id": "s1",
+            "agent_id": "agent-1",
+            "request_id": "r:3:a1b2c3",
+        }
+
 
 class TestClientLifecycle:
     async def test_client_created_once_per_environment(self, monkeypatch):

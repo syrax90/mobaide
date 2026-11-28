@@ -14,6 +14,82 @@ final class NotificationServiceRequestTests: XCTestCase {
         XCTAssertNil(request?.trigger)
     }
 
+    func testAnswerableChatPermissionCarriesTheActionCategoryAndItsRequest() {
+        let session = makeSessionResponse(
+            id: "sess-42",
+            attention: "awaiting_permission",
+            title: "Bug fix",
+            attentionRequest: Self.chatRequest(choices: ["allow_once", "reject_once"])
+        )
+        let request = NotificationService.makeRequest(for: session)
+        XCTAssertEqual(request?.content.categoryIdentifier, NotificationService.permissionCategory)
+        XCTAssertEqual(request?.content.userInfo["request_id"] as? String, "r:3:a1b2c3")
+        // Only the local alert shows the request's title: an APNs alert never carries it.
+        XCTAssertEqual(request?.content.body, "Bug fix wants to run a command\nnpm test")
+    }
+
+    func testRequestThisBuildCannotAnswerGetsAPlainAlert() {
+        // A newer agent that offers other choices: no action may send one it
+        // did not offer.
+        let session = makeSessionResponse(
+            attention: "awaiting_permission",
+            attentionRequest: Self.chatRequest(choices: ["allow_once", "allow_always"])
+        )
+        let request = NotificationService.makeRequest(for: session)
+        XCTAssertEqual(request?.content.categoryIdentifier, "")
+        XCTAssertNil(request?.content.userInfo["request_id"])
+    }
+
+    func testAllowAsksForAnUnlockAndDenyDoesNot() {
+        let category = NotificationService.permissionCategories()
+            .first { $0.identifier == NotificationService.permissionCategory }
+        let options = Dictionary(
+            uniqueKeysWithValues: (category?.actions ?? []).map { ($0.identifier, $0.options) }
+        )
+        XCTAssertEqual(Set(options.keys), [NotificationService.allowActionId, NotificationService.denyActionId])
+        XCTAssertEqual(options[NotificationService.allowActionId], [.authenticationRequired])
+        // Deny stays usable on the Lock Screen and on a paired Apple Watch.
+        XCTAssertEqual(options[NotificationService.denyActionId], [])
+    }
+
+    func testPermissionActionReadsTheTappedChoiceAndTheAlertsRequest() {
+        XCTAssertEqual(
+            NotificationService.permissionAction(
+                actionIdentifier: NotificationService.allowActionId,
+                userInfo: ["request_id": "r:3:a1b2c3"],
+                identifier: "sess-42"
+            ),
+            PermissionAction(sessionId: "sess-42", agentId: nil, requestId: "r:3:a1b2c3", choice: .allow)
+        )
+        XCTAssertEqual(
+            NotificationService.permissionAction(
+                actionIdentifier: NotificationService.denyActionId,
+                userInfo: ["session_id": "sess-remote", "agent_id": "a1", "request_id": "r:3:a1b2c3"],
+                identifier: "apns-collapse-id"
+            ),
+            PermissionAction(sessionId: "sess-remote", agentId: "a1", requestId: "r:3:a1b2c3", choice: .deny)
+        )
+        // A plain tap opens the session; an action on an alert without a request answers nothing.
+        XCTAssertNil(
+            NotificationService.permissionAction(
+                actionIdentifier: UNNotificationDefaultActionIdentifier,
+                userInfo: ["request_id": "r:3:a1b2c3"],
+                identifier: "sess-42"
+            )
+        )
+        XCTAssertNil(
+            NotificationService.permissionAction(
+                actionIdentifier: NotificationService.allowActionId,
+                userInfo: [:],
+                identifier: "sess-42"
+            )
+        )
+    }
+
+    private static func chatRequest(choices: [String]) -> AttentionRequest {
+        AttentionRequest(id: "r:3:a1b2c3", title: "npm test", tool_kind: "execute", choices: choices)
+    }
+
     func testAuthorizationOptionsRequestLoudDeliveryNotProvisional() {
         let options = NotificationService.authorizationOptions
         XCTAssertTrue(options.contains(.alert))
