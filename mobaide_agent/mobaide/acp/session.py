@@ -3967,7 +3967,8 @@ def _resolve_mention(cwd: str, real_root: str, raw: Any) -> _Mention | None:
         return None
     if raw.startswith(("/", "\\")) or _DRIVE_PREFIX.match(raw) or os.path.isabs(raw):
         return None
-    rel = raw.replace("\\", "/").rstrip("/")
+    # On POSIX a "\" is part of a file name, which the listing offers as is.
+    rel = (raw.replace("\\", "/") if os.sep == "\\" else raw).rstrip("/")
     parts = rel.split("/")
     if not rel or any(part in ("", ".", "..") for part in parts):
         return None

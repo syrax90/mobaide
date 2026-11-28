@@ -4,6 +4,8 @@ composer: ``GET /api/sessions/{session_id}/files``.
 The listing runs in the session's own folder: ``git ls-files`` in a git work
 tree, else a breadth-first ``scandir`` walk. Both stop at a fixed count, byte
 size or time; a listing is cached per folder, so each keystroke only ranks.
+The entries an answer returns are checked on disk: one that is gone, or that
+a symlink leads out of the folder, is left out, as a mention of it would be.
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mobaide.core.git_exec import GIT_ARGV_PREFIX, CmdResult, git_binary, git_env, run_capped
 
@@ -26,7 +28,10 @@ LIMIT_DEFAULT = 20
 LIMIT_MAX = 50
 QUERY_MAX_CHARS = 256
 MAX_ENTRIES = 40_000
-GIT_TIMEOUT_SECONDS = 2.5
+# Not bound to the reply: a cold git can take seconds on the first call, and
+# a listing that outlives its reply still fills the cache. A slow git must not
+# fall back to the walk, which lists what .gitignore hides.
+GIT_TIMEOUT_SECONDS = 10.0
 GIT_MAX_BYTES = 8 * 1024 * 1024
 WALK_BUDGET_SECONDS = 1.0
 CACHE_TTL_SECONDS = 30.0
@@ -39,14 +44,12 @@ _LS_FILES_ARGS = (
     "-c", "core.fsmonitor=false",
     "ls-files", "-z", "--cached", "--others", "--exclude-standard",
 )
-_LS_DELETED_ARGS = ("-c", "core.fsmonitor=false", "ls-files", "-z", "--deleted")
-_DELETED_MIN_SECONDS = 0.2
 _SKIPPED_DIRS = frozenset({"node_modules", "__pycache__"})
 
 # Its own pool: a listing stuck on a hung mount must not hold the PTY readers'
 # default executor, and the reply is capped at REPLY_TIMEOUT_SECONDS anyway.
-# Ranking has a pool of its own, so stuck listings cannot starve folders that
-# are already cached.
+# Ranking (and the on-disk check of the few entries it returns) has a pool of
+# its own, so stuck listings cannot starve folders that are already cached.
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mobaide-session-files")
 _rank_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mobaide-session-files-rank")
 
@@ -59,6 +62,9 @@ class _Index:
     entries: tuple[_Entry, ...]
     truncated: bool
     built_at: float
+    # Paths the disk check dropped: gone, or led out of the folder. Filled
+    # by the ranking workers; a set add is atomic under the GIL.
+    dropped: set[str] = field(default_factory=set)
 
 
 # Touched only on the event loop: lookups in list_session_files, stores in
@@ -77,13 +83,17 @@ async def list_session_files(
     """
     if not cwd:
         raise FsListError(404, "This session has no folder")
-    needle = (q or "").strip().replace("\\", "/")[:QUERY_MAX_CHARS].casefold()
+    needle = (q or "").strip()
+    if os.sep == "\\":
+        # A Windows user types "\"; on POSIX it is part of a file name.
+        needle = needle.replace("\\", "/")
+    needle = needle[:QUERY_MAX_CHARS].casefold()
     count = min(max(limit if limit is not None else LIMIT_DEFAULT, 1), LIMIT_MAX)
     try:
         index = await asyncio.wait_for(_index_for(cwd), timeout=REPLY_TIMEOUT_SECONDS)
         loop = asyncio.get_running_loop()
         entries = await asyncio.wait_for(
-            loop.run_in_executor(_rank_executor, rank, index.entries, needle, count),
+            loop.run_in_executor(_rank_executor, _best, cwd, index, needle, count),
             timeout=REPLY_TIMEOUT_SECONDS,
         )
     # Before OSError: TimeoutError subclasses it.
@@ -155,7 +165,6 @@ def _git_files(root: str) -> tuple[list[str], set[str], bool] | None:
     binary = git_binary()
     if binary is None:
         return None
-    started = time.monotonic()
     try:
         result = _ls_files(binary, root, _LS_FILES_ARGS, GIT_TIMEOUT_SECONDS)
     except OSError:
@@ -190,11 +199,6 @@ def _git_files(root: str) -> tuple[list[str], set[str], bool] | None:
         # Everything under the folder is ignored (a dotfiles repo in the home
         # folder that ignores "*"): the walk lists what the user works on.
         return None
-    # Both git calls share one budget, so a build stays under the reply cap;
-    # a list that is cut short anyway is not checked for deleted files.
-    remaining = GIT_TIMEOUT_SECONDS - (time.monotonic() - started)
-    if not truncated and remaining >= _DELETED_MIN_SECONDS:
-        files = _without_deleted(binary, root, files, remaining)
     return files, nested, truncated
 
 
@@ -206,19 +210,6 @@ def _ls_files(binary: str, root: str, args: tuple[str, ...], timeout: float) -> 
         max_bytes=GIT_MAX_BYTES,
         env=git_env(),
     )
-
-
-def _without_deleted(binary: str, root: str, files: list[str], timeout: float) -> list[str]:
-    """``--cached`` still lists a tracked file deleted from the work tree, and
-    a mention of it would be dropped; the list as it is when git cannot say."""
-    try:
-        result = _ls_files(binary, root, _LS_DELETED_ARGS, timeout)
-    except OSError:
-        return files
-    if result.rc != 0 or result.truncated or result.timed_out or not result.stdout:
-        return files
-    deleted = {raw.decode("utf-8", errors="replace") for raw in result.stdout.split(b"\0") if raw}
-    return [path for path in files if path not in deleted]
 
 
 def _walk(root: str) -> tuple[list[str], list[str], bool]:
@@ -265,6 +256,47 @@ def _parent_dirs(files: list[str]) -> list[str]:
             dirs.add(parent)
             cut = path.rfind("/", 0, cut)
     return list(dirs)
+
+
+# Ranked entries looked at beyond ``limit`` in the first pass; each further
+# pass doubles the window, until the answer is full or the budget is spent.
+_SPARE_CHECKS = 32
+CHECK_BUDGET_SECONDS = 0.5
+
+
+def _best(cwd: str, index: _Index, needle: str, limit: int) -> list[tuple[str, bool]]:
+    """The ``limit`` best entries that still exist inside ``cwd``: the listing
+    is up to 30 s old, and ``--cached`` names tracked files deleted from the
+    work tree. A symlink that leads out of the folder is left out too. Dropped
+    paths are kept with the listing, so later keystrokes skip them unchecked."""
+    real_root = os.path.normcase(os.path.realpath(cwd))
+    deadline = time.monotonic() + CHECK_BUDGET_SECONDS
+    kept: list[tuple[str, bool]] = []
+    seen = 0
+    window = limit + _SPARE_CHECKS
+    while True:
+        ranked = rank(index.entries, needle, window)
+        for path, is_dir in ranked[seen:]:
+            if path in index.dropped:
+                continue
+            if not _inside(cwd, real_root, path):
+                index.dropped.add(path)
+                continue
+            kept.append((path, is_dir))
+            if len(kept) == limit:
+                return kept
+        if len(ranked) < window or time.monotonic() >= deadline:
+            return kept
+        seen = len(ranked)
+        window *= 2
+
+
+def _inside(cwd: str, real_root: str, path: str) -> bool:
+    try:
+        real = os.path.normcase(os.path.realpath(os.path.join(cwd, *path.split("/"))))
+        return os.path.exists(real) and os.path.commonpath([real_root, real]) == real_root
+    except (OSError, ValueError):
+        return False
 
 
 def rank(entries: tuple[_Entry, ...], needle: str, limit: int) -> list[tuple[str, bool]]:
