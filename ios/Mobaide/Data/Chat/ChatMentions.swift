@@ -91,24 +91,33 @@ enum ChatMentions {
 
     /// The `picked` mentions whose token is still in `text`, in pick order, at most `maxMentions`.
     static func inText(_ text: String, picked: [String]) -> [String] {
+        let named = named(Array(text), picked: picked)
         var seen: Set<String> = []
-        let chars = Array(text)
-        return Array(
-            picked.filter { seen.insert($0).inserted && names(chars, value: $0) }.prefix(maxMentions)
-        )
+        return Array(picked.filter { seen.insert($0).inserted && named.contains($0) }.prefix(maxMentions))
     }
 
-    private static func names(_ chars: [Character], value: String) -> Bool {
-        let token = Array("@" + value)
-        guard !token.isEmpty, chars.count >= token.count else { return false }
-        for at in 0...(chars.count - token.count) where chars[at..<(at + token.count)].elementsEqual(token) {
-            guard at == 0 || chars[at - 1].isWhitespace else { continue }
-            let end = at + token.count
-            if end == chars.count || chars[end].isWhitespace { return true }
-            if trailingPunctuation.contains(chars[end]), end + 1 == chars.count || chars[end + 1].isWhitespace {
-                return true
+    /// The picked paths the text names: at each `@` that starts a token, only
+    /// the longest picked path that ends there as a whole token. So
+    /// `@notes.txt backup` names `notes.txt backup`, not also the `notes.txt` it replaced.
+    private static func named(_ chars: [Character], picked: [String]) -> Set<String> {
+        let byLength = Set(picked).map { ($0, Array($0)) }.sorted { $0.1.count > $1.1.count }
+        var named: Set<String> = []
+        for at in chars.indices where chars[at] == "@" && (at == 0 || chars[at - 1].isWhitespace) {
+            let start = at + 1
+            let match = byLength.first { _, value in
+                start + value.count <= chars.count
+                    && chars[start..<(start + value.count)].elementsEqual(value)
+                    && endsToken(chars, at: start + value.count)
             }
+            if let match { named.insert(match.0) }
         }
-        return false
+        return named
+    }
+
+    /// Whether a token that ends at `end` stops there: the end of the text,
+    /// whitespace, or one punctuation mark before either.
+    private static func endsToken(_ chars: [Character], at end: Int) -> Bool {
+        if end == chars.count || chars[end].isWhitespace { return true }
+        return trailingPunctuation.contains(chars[end]) && (end + 1 == chars.count || chars[end + 1].isWhitespace)
     }
 }

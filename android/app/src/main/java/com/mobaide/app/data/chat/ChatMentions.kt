@@ -78,20 +78,32 @@ object ChatMentions {
     }
 
     /** The [picked] mentions whose token is still in [text], in pick order, at most [MAX_MENTIONS]. */
-    fun inText(text: String, picked: List<String>): List<String> =
-        picked.distinct().filter { names(text, it) }.take(MAX_MENTIONS)
-
-    private fun names(text: String, value: String): Boolean {
-        val token = "@$value"
-        var at = text.indexOf(token)
-        while (at >= 0) {
-            val end = at + token.length
-            val startsToken = at == 0 || text[at - 1].isWhitespace()
-            val endsToken = end == text.length || text[end].isWhitespace() ||
-                (text[end] in TRAILING_PUNCTUATION && (end + 1 == text.length || text[end + 1].isWhitespace()))
-            if (startsToken && endsToken) return true
-            at = text.indexOf(token, at + 1)
-        }
-        return false
+    fun inText(text: String, picked: List<String>): List<String> {
+        val named = named(text, picked)
+        return picked.distinct().filter { it in named }.take(MAX_MENTIONS)
     }
+
+    /**
+     * The picked paths [text] names: at each `@` that starts a token, only the
+     * longest picked path that ends there as a whole token. So `@notes.txt backup`
+     * names `notes.txt backup`, not also the `notes.txt` it replaced.
+     */
+    private fun named(text: String, picked: List<String>): Set<String> {
+        val byLength = picked.distinct().sortedByDescending { it.length }
+        val named = HashSet<String>()
+        var at = text.indexOf('@')
+        while (at >= 0) {
+            if (at == 0 || text[at - 1].isWhitespace()) {
+                byLength.firstOrNull { text.startsWith(it, at + 1) && endsToken(text, at + 1 + it.length) }
+                    ?.let(named::add)
+            }
+            at = text.indexOf('@', at + 1)
+        }
+        return named
+    }
+
+    /** Whether a token that ends at [end] stops there: the end of the text, whitespace, or one punctuation mark before either. */
+    private fun endsToken(text: String, end: Int): Boolean =
+        end == text.length || text[end].isWhitespace() ||
+            (text[end] in TRAILING_PUNCTUATION && (end + 1 == text.length || text[end + 1].isWhitespace()))
 }

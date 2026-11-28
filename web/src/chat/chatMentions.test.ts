@@ -72,6 +72,16 @@ describe('mentionsInText', () => {
     expect(mentionsInText(text, picked)).toEqual(['src/app.py', 'docs/']);
   });
 
+  it('sends only the longest picked path a token names, not the shorter one it replaced', () => {
+    const picked = ['notes.txt', 'notes.txt backup'];
+
+    expect(mentionsInText('Read @notes.txt backup ', picked)).toEqual(['notes.txt backup']);
+    expect(mentionsInText('Read @notes.txt and @notes.txt backup', picked)).toEqual([
+      'notes.txt',
+      'notes.txt backup',
+    ]);
+  });
+
   it('sends at most MAX_MENTIONS', () => {
     const picked = Array.from({ length: MAX_MENTIONS + 2 }, (_, n) => `f${String(n)}.ts`);
 

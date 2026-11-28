@@ -66,6 +66,13 @@ final class ChatMentionsTests: XCTestCase {
         XCTAssertEqual(ChatMentions.inText(text, picked: picked), ["src/app.py", "docs/"])
     }
 
+    func testInTextSendsOnlyTheLongestPickedPathATokenNames() {
+        let picked = ["notes.txt", "notes.txt backup"]
+
+        XCTAssertEqual(ChatMentions.inText("Read @notes.txt backup ", picked: picked), ["notes.txt backup"])
+        XCTAssertEqual(ChatMentions.inText("Read @notes.txt and @notes.txt backup", picked: picked), picked)
+    }
+
     func testInTextSendsAtMostMaxMentions() {
         let picked = (0..<(ChatMentions.maxMentions + 2)).map { "f\($0).ts" }
         let text = picked.map { "@" + $0 }.joined(separator: " ")

@@ -72,6 +72,14 @@ class ChatMentionsTest {
     }
 
     @Test
+    fun inText_sendsOnlyTheLongestPickedPathATokenNames() {
+        val picked = listOf("notes.txt", "notes.txt backup")
+
+        assertEquals(listOf("notes.txt backup"), ChatMentions.inText("Read @notes.txt backup ", picked))
+        assertEquals(picked, ChatMentions.inText("Read @notes.txt and @notes.txt backup", picked))
+    }
+
+    @Test
     fun inText_sendsAtMostMaxMentions() {
         val picked = (0 until ChatMentions.MAX_MENTIONS + 2).map { "f$it.ts" }
 

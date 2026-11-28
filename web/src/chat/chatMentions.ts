@@ -89,21 +89,30 @@ export function insertMention(
   };
 }
 
-/** Whether `@value` stands as a whole token in `text` (trailing punctuation allowed). */
-function namesMention(text: string, value: string): boolean {
-  const token = `@${value}`;
-  for (let at = text.indexOf(token); at >= 0; at = text.indexOf(token, at + 1)) {
+/** Whether a token that ends at `end` stops there: the end of the text, whitespace, or one punctuation mark before either. */
+function endsToken(text: string, end: number): boolean {
+  if (end === text.length || isSpace(text[end])) return true;
+  return TRAILING_PUNCTUATION.test(text[end] ?? '') && (end + 1 === text.length || isSpace(text[end + 1]));
+}
+
+/**
+ * The picked paths `text` names: at each `@` that starts a token, only the
+ * longest picked path that ends there as a whole token. So `@notes.txt backup`
+ * names `notes.txt backup`, not also the `notes.txt` it replaced.
+ */
+function namedMentions(text: string, picked: readonly string[]): Set<string> {
+  const byLength = [...new Set(picked)].sort((a, b) => b.length - a.length);
+  const named = new Set<string>();
+  for (let at = text.indexOf('@'); at >= 0; at = text.indexOf('@', at + 1)) {
     if (at > 0 && !isSpace(text[at - 1])) continue;
-    const end = at + token.length;
-    if (end === text.length || isSpace(text[end])) return true;
-    if (TRAILING_PUNCTUATION.test(text[end] ?? '') && (end + 1 === text.length || isSpace(text[end + 1]))) {
-      return true;
-    }
+    const value = byLength.find((v) => text.startsWith(v, at + 1) && endsToken(text, at + 1 + v.length));
+    if (value !== undefined) named.add(value);
   }
-  return false;
+  return named;
 }
 
 /** The picked mentions whose token is still in `text`, in pick order, at most {@link MAX_MENTIONS}. */
 export function mentionsInText(text: string, picked: readonly string[]): string[] {
-  return [...new Set(picked)].filter((value) => namesMention(text, value)).slice(0, MAX_MENTIONS);
+  const named = namedMentions(text, picked);
+  return [...new Set(picked)].filter((value) => named.has(value)).slice(0, MAX_MENTIONS);
 }
