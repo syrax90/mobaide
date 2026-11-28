@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.36](https://github.com/syrax90/mobaide/compare/server-v0.2.35...server-v0.2.36) (2026-11-28)
+
+
+### Features
+
+* **agent,server,android,ios,web:** answer chat permission requests from the notification ([#1000](https://github.com/syrax90/mobaide/issues/1000)) ([c4ac9ee](https://github.com/syrax90/mobaide/commit/c4ac9eee8c7f4e81a9db2d16ffb937e44c01f842))
+
 ## [0.2.35](https://github.com/syrax90/mobaide/compare/server-v0.2.34...server-v0.2.35) (2026-11-27)
 
 

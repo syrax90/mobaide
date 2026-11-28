@@ -1,5 +1,14 @@
 # Android Changelog
 
+## [3.7.16](https://github.com/syrax90/mobaide/compare/android-v3.7.15...android-v3.7.16) (2026-11-28)
+
+
+### Features
+
+* **agent,android,ios,web:** add @ file mentions to the chat composer ([#1002](https://github.com/syrax90/mobaide/issues/1002)) ([434048d](https://github.com/syrax90/mobaide/commit/434048d4fee92d5d0d0058a81ede76eb6d15af10))
+* **agent,android,ios,web:** fork a chat from a chosen answer ([#1001](https://github.com/syrax90/mobaide/issues/1001)) ([18ab4ba](https://github.com/syrax90/mobaide/commit/18ab4bafe97f6d9a0604f6466e36b4893c577b75))
+* **agent,server,android,ios,web:** answer chat permission requests from the notification ([#1000](https://github.com/syrax90/mobaide/issues/1000)) ([c4ac9ee](https://github.com/syrax90/mobaide/commit/c4ac9eee8c7f4e81a9db2d16ffb937e44c01f842))
+
 ## [3.7.15](https://github.com/syrax90/mobaide/compare/android-v3.7.14...android-v3.7.15) (2026-11-27)
 
 

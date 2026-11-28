@@ -1,5 +1,22 @@
 # mobaide_agent Changelog
 
+## [0.3.39](https://github.com/syrax90/mobaide/compare/agent-v0.3.38...agent-v0.3.39) (2026-11-28)
+
+
+### Features
+
+* **agent,android,ios,web:** add @ file mentions to the chat composer ([#1002](https://github.com/syrax90/mobaide/issues/1002)) ([434048d](https://github.com/syrax90/mobaide/commit/434048d4fee92d5d0d0058a81ede76eb6d15af10))
+* **agent,android,ios,web:** fork a chat from a chosen answer ([#1001](https://github.com/syrax90/mobaide/issues/1001)) ([18ab4ba](https://github.com/syrax90/mobaide/commit/18ab4bafe97f6d9a0604f6466e36b4893c577b75))
+* **agent,server,android,ios,web:** answer chat permission requests from the notification ([#1000](https://github.com/syrax90/mobaide/issues/1000)) ([c4ac9ee](https://github.com/syrax90/mobaide/commit/c4ac9eee8c7f4e81a9db2d16ffb937e44c01f842))
+* **agent:** show the session cost in Pi chats for pay-per-token logins ([#998](https://github.com/syrax90/mobaide/issues/998)) ([cd52680](https://github.com/syrax90/mobaide/commit/cd52680655d94b25a90b8be9672d13bff4227c4d))
+
+
+### Bug Fixes
+
+* **agent:** keep @ mention suggestions right on a slow first listing ([#1007](https://github.com/syrax90/mobaide/issues/1007)) ([1ea942d](https://github.com/syrax90/mobaide/commit/1ea942d33df2aa6675905d60394e2dccd3effdf6))
+* **agent:** list branches pushed since the last fetch in the base branch picker ([#1004](https://github.com/syrax90/mobaide/issues/1004)) ([74ba40b](https://github.com/syrax90/mobaide/commit/74ba40be8bfa95f169ee1c5dd89a90efe1d8fe38))
+* **agent:** open Codex chat forks by making them in a process of their own ([#1008](https://github.com/syrax90/mobaide/issues/1008)) ([66b93af](https://github.com/syrax90/mobaide/commit/66b93af043e47ae0c8eff7a2f8355665c4e7da93))
+
 ## [0.3.38](https://github.com/syrax90/mobaide/compare/agent-v0.3.37...agent-v0.3.38) (2026-11-27)
 
 
