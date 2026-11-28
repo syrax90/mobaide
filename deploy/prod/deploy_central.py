@@ -419,6 +419,10 @@ errs=""
 [ -d {REMOTE_BASE} ]          || errs="$errs BASE_MISSING"
 [ -w {REMOTE_BASE} ]          || errs="$errs BASE_NOT_WRITABLE"
 [ -f {REMOTE_BASE}/.env ]     || errs="$errs ENV_MISSING"
+if [ -r {REMOTE_BASE}/.env ]; then
+    grep -Eq '^[[:space:]]*(export[[:space:]]+)?MANIFEST_SIGNING_PRIVATE_KEY=[^[:space:]#]' {REMOTE_BASE}/.env && errs="$errs RELEASE_KEY_ON_RELAY"
+    grep -Eq '^[[:space:]]*(export[[:space:]]+)?RELAY_PAIRING_PRIVATE_KEY=[^[:space:]#]' {REMOTE_BASE}/.env || errs="$errs PAIRING_KEY_MISSING"
+fi
 docker info >/dev/null 2>&1 || errs="$errs DOCKER"
 {origin}
 if [ -n "$errs" ]; then echo "ERRORS:$errs"; exit 1; fi
@@ -596,6 +600,18 @@ def remote_preflight(tls_mode: str) -> tuple[str, list[tls_preflight.TlsWarning]
                 )
             if "ENV_MISSING" in errs:
                 fail(f"{REMOTE_BASE}/.env missing on {SSH_HOST} (see bootstrap-mobaide.md)")
+            if "RELEASE_KEY_ON_RELAY" in errs:
+                fail(
+                    f"{REMOTE_BASE}/.env on {SSH_HOST} still holds MANIFEST_SIGNING_PRIVATE_KEY. "
+                    "Delete that line, and the key from server backups: the relay signs pairings "
+                    "with RELAY_PAIRING_PRIVATE_KEY and must not hold the release signing key."
+                )
+            if "PAIRING_KEY_MISSING" in errs:
+                fail(
+                    f"{REMOTE_BASE}/.env on {SSH_HOST} has no RELAY_PAIRING_PRIVATE_KEY, so every "
+                    "pairing would answer 503. Make a key with 'python deploy/prod/release_agent.py "
+                    "--new-relay-pairing-key' and add its private line."
+                )
             if "DOCKER" in errs:
                 fail(
                     f"docker not usable by '{ssh_user}' on {SSH_HOST}. If installed: "
@@ -605,7 +621,7 @@ def remote_preflight(tls_mode: str) -> tuple[str, list[tls_preflight.TlsWarning]
         raise DeployError("")
 
     ok(f"ssh {SSH_HOST} reachable as '{ssh_user}'")
-    ok(f"Server prereqs OK ({REMOTE_BASE}, .env, docker, writable by '{ssh_user}')")
+    ok(f"Server prereqs OK ({REMOTE_BASE}, .env with the relay pairing key, docker, writable by '{ssh_user}')")
 
     warnings: list[tls_preflight.TlsWarning] = []
     if tls_mode == "CloudflareOrigin":

@@ -489,3 +489,60 @@ class TestResolveVerifierPython:
         assert proc.returncode != 0
         assert marker.exists()
         assert "-d" in marker.read_text()
+
+    def test_slow_path_installs_only_the_pinned_requirements_by_hash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This library checks the manifest signature, so another copy of it
+        could pass a forged manifest. The slow path installs the list that
+        the script pins, by hash and from binary packages only."""
+        assert _BASH is not None
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        stubs = tmp_path / "bin"
+        pip_args = tmp_path / "pip_args"
+        installed_from = tmp_path / "installed_from"
+        _stub(
+            stubs,
+            "python3",
+            '[ "$1" = "-c" ] && exit 1\n'
+            '[ "$1" = "-m" ] && [ "$2" = "venv" ] || exit 2\n'
+            'mkdir -p "$3/bin"\n'
+            "cat > \"$3/bin/pip\" <<'PIP'\n"
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$@\" > '{pip_args}'\n"
+            'for last in "$@"; do :; done\n'
+            f"cp \"$last\" '{installed_from}'\n"
+            "PIP\n"
+            'chmod +x "$3/bin/pip"',
+        )
+        harness = (
+            "set -euo pipefail\n"
+            "version=3.12\n"
+            + _LOG_FUNCS
+            + _sh_function("write_verifier_requirements")
+            + _sh_function("resolve_verifier_python")
+            + f'PATH={shlex.quote(str(stubs))}:"$PATH"\n'
+            + "resolve_verifier_python\n"
+            + "printf 'VERIFIER_PYTHON=<%s>\\n' \"$VERIFIER_PYTHON\"\n"
+            + 'rm -rf "$BOOTSTRAP_DIR"\n'
+        )
+
+        proc = subprocess.run([_BASH, "-c", harness], capture_output=True, text=True)
+
+        assert proc.returncode == 0, proc.stderr
+        args = pip_args.read_text().splitlines()
+        assert args[0] == "install"
+        assert "--isolated" in args
+        assert args[args.index("--index-url") + 1] == "https://pypi.org/simple"
+        assert "--require-hashes" in args
+        assert args[args.index("--only-binary") + 1] == ":all:"
+        assert args[-2] == "-r"
+        body = _sh_function_body("write_verifier_requirements")
+        opener = "<<'VERIFIER_REQUIREMENTS'\n"
+        pinned = body[body.index(opener) + len(opener) : body.index("\nVERIFIER_REQUIREMENTS\n") + 1]
+        assert installed_from.read_text() == pinned
+        assert "VERIFIER_PYTHON=<python3>" not in proc.stdout
+        assert any(
+            line.startswith("VERIFIER_PYTHON=<") and line.endswith("/bin/python>")
+            for line in proc.stdout.splitlines()
+        )

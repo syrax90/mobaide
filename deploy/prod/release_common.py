@@ -13,7 +13,7 @@ Layout:
     <release dir>/
         agent/manifest-signing-key      base64 Ed25519 private key (32 raw bytes) or PEM
         agent/release-token             same string as the relay's RELEASE_AUTH_TOKEN
-        agent/relay-pairing-public-key  optional: public half of the relay's RELAY_PAIRING_PRIVATE_KEY
+        agent/relay-pairing-public-key  public half of the relay's RELAY_PAIRING_PRIVATE_KEY
         agent/next-manifest-public-key  optional: a second release key that agents will also trust
         android/upload.keystore
         android/signing.properties      storePassword, keyPassword, keyAlias
@@ -70,7 +70,7 @@ def default_release_dir() -> Path:
         return Path(os.environ["LOCALAPPDATA"]) / "mobaide-release"
     return Path.home() / ".config" / "mobaide-release"
 
-_SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
+SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 class ReleaseError(DeployError):
@@ -180,7 +180,7 @@ def git(*args: str, cwd: Path = PROJECT_ROOT, check: bool = True) -> str:
 
 
 # ------------------------------------------------------------ tags + worktree
-def _version_key(version: str) -> tuple[int, ...]:
+def version_key(version: str) -> tuple[int, ...]:
     return tuple(int(p) for p in version.split("."))
 
 
@@ -194,12 +194,12 @@ def resolve_release_tag(prefix: str, version: str | None) -> tuple[str, str, str
     if version is None:
         tags = [
             t for t in git("tag", "--list", f"{prefix}*").splitlines()
-            if _SEMVER_RE.match(t[len(prefix):])
+            if SEMVER_RE.match(t[len(prefix):])
         ]
         if not tags:
             raise ReleaseError(f"no {prefix}X.Y.Z tag found")
-        version = max((t[len(prefix):] for t in tags), key=_version_key)
-    elif not _SEMVER_RE.match(version):
+        version = max((t[len(prefix):] for t in tags), key=version_key)
+    elif not SEMVER_RE.match(version):
         raise ReleaseError(f"version must be X.Y.Z, got {version!r}")
     tag = f"{prefix}{version}"
 

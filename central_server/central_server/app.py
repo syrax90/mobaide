@@ -206,6 +206,14 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
                 "development only."
             )
 
+        if config.release_private_key_left_in_env:
+            logger.warning(
+                "release_key.still_on_relay MANIFEST_SIGNING_PRIVATE_KEY is set "
+                "but unused: the relay signs pairings with "
+                "RELAY_PAIRING_PRIVATE_KEY. Delete the release signing key "
+                "from this environment and from its backups."
+            )
+
         never_expiring = [
             env_var
             for env_var, minutes in (

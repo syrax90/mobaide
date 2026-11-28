@@ -9,6 +9,7 @@ Usage:
     python deploy/prod/release_agent.py --new-relay-pairing-key   # print a new key pair, do nothing else
     python deploy/prod/release_agent.py --update-lock     # write mobaide_agent/requirements.lock for a pull request
     python deploy/prod/release_agent.py --upgrade-lock    # the same, with the newest version of every dependency
+    python deploy/prod/release_agent.py --update-verifier-pin   # rewrite the install scripts' pinned signature library
 
 What it does:
   1) Preflight: tools (git, uv), clean tree, release dir keys, the tag
@@ -16,7 +17,10 @@ What it does:
      trust key the relay serves, and the relay pairing key in the release
      dir equals the one the relay holds
   2) Detached worktree at the tag: the install scripts must carry the
-     signing key's public half; uv build (wheel + sdist); the committed
+     signing key's public half and accept this version; their pinned
+     signature library must match the index and have a wheel for every
+     supported platform; before a publish, the relay must already run the
+     central_server version of this tag; uv build (wheel + sdist); the committed
      hash-pinned dependency lock (mobaide_agent/requirements.lock) must fit
      pyproject.toml and goes into the source tarball; uv confirms a binary
      wheel for every supported platform and a trial install proves that pip
@@ -75,7 +79,9 @@ from release_common import (
     resolve_release_dir,
     resolve_release_tag,
     sha256_file,
+    SEMVER_RE,
     temporary_worktree,
+    version_key,
     with_retries,
 )
 
@@ -85,9 +91,10 @@ MIN_CENTRAL_SERVER_VERSION = "0.1.0"
 
 SIGNING_KEY_FILE = "agent/manifest-signing-key"
 RELEASE_TOKEN_FILE = "agent/release-token"
-# Optional public keys (base64 of the 32 raw bytes) that the signed manifest
-# tells agents to trust: the relay's pairing key, and a second release key
-# that will sign later manifests.
+# Public keys (base64 of the 32 raw bytes) that the signed manifest tells
+# agents to trust: the relay's pairing key (required: agents accept the
+# pairing push from no other key), and an optional second release key that
+# will sign later manifests.
 RELAY_PAIRING_PUBLIC_KEY_FILE = "agent/relay-pairing-public-key"
 NEXT_SIGNING_PUBLIC_KEY_FILE = "agent/next-manifest-public-key"
 
@@ -119,6 +126,19 @@ LOCK_PLATFORM_FOR_PYTHON = {
 LOCK_MACOS_MINIMUM = "11.0"
 PYPI_INDEX = "https://pypi.org/simple"
 INSTALL_SCRIPTS = ("deploy/install.sh", "deploy/install.ps1")
+# The oldest release each install script accepts.
+MINIMUM_VERSION_PATTERNS = {
+    "deploy/install.sh": re.compile(r'^MOBAIDE_MINIMUM_AGENT_VERSION="([^"]*)"$', re.MULTILINE),
+    "deploy/install.ps1": re.compile(r'^\$Script:MinimumAgentVersion = "([^"]*)"$', re.MULTILINE),
+}
+# The install scripts check the manifest signature with this package, pinned
+# with its dependencies by version and hash. Each script holds the same list
+# between these two lines.
+VERIFIER_PACKAGE = "cryptography"
+VERIFIER_PIN_BLOCKS = {
+    "deploy/install.sh": ("    cat > \"$1\" <<'VERIFIER_REQUIREMENTS'", "VERIFIER_REQUIREMENTS"),
+    "deploy/install.ps1": ("$Script:VerifierRequirements = @'", "'@"),
+}
 
 
 # ------------------------------------------------------------ signing key
@@ -182,10 +202,23 @@ def read_optional_public_key(release_dir: Path, rel: str) -> str | None:
     return value
 
 
-def check_relay_pairing_key(local: str | None, server_url: str) -> None:
+def read_relay_pairing_key(release_dir: Path) -> str:
+    """Agents accept the pairing push only from a key that the signed manifest
+    names, so a release without one would leave its agents unable to pair."""
+    key = read_optional_public_key(release_dir, RELAY_PAIRING_PUBLIC_KEY_FILE)
+    if key is None:
+        raise ReleaseError(
+            f"{release_dir / RELAY_PAIRING_PUBLIC_KEY_FILE} is missing. Agents accept the pairing "
+            "push only from a relay pairing key that the signed manifest names. Make a key pair "
+            "with --new-relay-pairing-key, set RELAY_PAIRING_PRIVATE_KEY on the relay, deploy "
+            "central_server, and put the public half in that file."
+        )
+    return key
+
+
+def check_relay_pairing_key(local: str, server_url: str) -> None:
     """The manifest tells agents which key signs the pairing push, so it must
-    name the key the relay holds. A wrong or missing key would break pairing
-    on the day the relay starts to sign with it."""
+    name the key the relay holds. Another key would break every pairing."""
     try:
         served = with_retries(
             "GET pairing_key",
@@ -198,25 +231,40 @@ def check_relay_pairing_key(local: str | None, server_url: str) -> None:
             raise
         served = None
     if served == local:
-        if local:
-            ok("Relay pairing key matches the relay")
-        else:
-            warn("No relay pairing key: the manifest lists none")
+        ok("Relay pairing key matches the relay")
         return
-    if served and not local:
+    if not served:
         raise ReleaseError(
-            f"the relay holds a pairing key but {RELAY_PAIRING_PUBLIC_KEY_FILE} is missing "
-            f"from the release dir. Put this public key there: {served}"
-        )
-    if local and not served:
-        raise ReleaseError(
-            f"{RELAY_PAIRING_PUBLIC_KEY_FILE} exists but the relay serves no pairing key. "
+            "the relay serves no pairing key. "
             "Set RELAY_PAIRING_PRIVATE_KEY on the relay and deploy central_server first."
         )
     raise ReleaseError(
         f"{RELAY_PAIRING_PUBLIC_KEY_FILE} does not match the relay pairing key "
         f"(local {local}, relay {served})"
     )
+
+
+def check_relay_version(src: Path, server_url: str) -> None:
+    """The relay goes first: an agent from this tag may rely on any relay
+    change up to it, such as the relay key that signs the pairing push."""
+    try:
+        expected = json.loads((src / ".release-please-manifest.json").read_text(encoding="utf-8"))["central_server"]
+    except (OSError, ValueError, KeyError, TypeError):
+        expected = None
+    if not isinstance(expected, str) or not SEMVER_RE.match(expected):
+        warn("No central_server version at this tag; the relay version is not checked")
+        return
+    served = with_retries(
+        "GET version",
+        lambda: http_json(f"{server_url}/api/version", timeout=30),
+        attempts=3, delay=5,
+    ).get("server_version")
+    if not isinstance(served, str) or not SEMVER_RE.match(served) or version_key(served) < version_key(expected):
+        raise ReleaseError(
+            f"the relay runs central_server {served}, but this tag has {expected}. "
+            "Deploy central_server first: agents of this release may rely on relay changes up to it."
+        )
+    ok(f"Relay runs central_server {served} (this tag has {expected})")
 
 
 def print_new_relay_pairing_key() -> int:
@@ -236,14 +284,46 @@ def print_new_relay_pairing_key() -> int:
 
 
 # ------------------------------------------------------------ build
-def check_install_scripts(src: Path, key) -> None:
+def check_install_scripts(src: Path, key, version: str) -> None:
     """New installs trust the key inside the install script, so a script
-    with another key would install an agent that refuses this release."""
+    with another key would install an agent that refuses this release. The
+    scripts also refuse a release below their minimum version."""
     expected = public_key_b64(key)
     for rel in INSTALL_SCRIPTS:
         if expected not in (src / rel).read_text(encoding="utf-8"):
             raise ReleaseError(f"{rel} at this tag does not carry the signing key's public half ({expected})")
     ok("Install scripts carry the signing key's public half")
+    minimum = read_minimum_version(src)
+    if minimum is None:
+        warn("The install scripts at this tag name no minimum agent version; it is not checked")
+        return
+    if version_key(minimum) > version_key(version):
+        raise ReleaseError(
+            f"the install scripts at this tag install only version {minimum} or newer, so they "
+            f"would refuse {version}. Their minimum must not be above the release."
+        )
+    ok(f"Install scripts accept this release (minimum {minimum})")
+
+
+def read_minimum_version(root: Path) -> str | None:
+    """The oldest release both install scripts accept. None when neither
+    names one: scripts from before the minimum existed, at an older tag."""
+    found: dict[str, str] = {}
+    for rel, pattern in MINIMUM_VERSION_PATTERNS.items():
+        m = pattern.search((root / rel).read_text(encoding="utf-8"))
+        if not m:
+            continue
+        if not SEMVER_RE.match(m.group(1)):
+            raise ReleaseError(f"{rel} has a minimum agent version that is not X.Y.Z: {m.group(1)!r}")
+        found[rel] = m.group(1)
+    if not found:
+        return None
+    if len(found) != len(MINIMUM_VERSION_PATTERNS) or len(set(found.values())) != 1:
+        raise ReleaseError(
+            "the install scripts name different minimum agent versions: "
+            + ", ".join(f"{rel} {found.get(rel, 'none')}" for rel in MINIMUM_VERSION_PATTERNS)
+        )
+    return next(iter(found.values()))
 
 
 def minimum_python(requires_python: str) -> str:
@@ -308,7 +388,9 @@ _LOCK_PIN_LINE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*==[^\s;\\]+( ; [^\\]+
 _LOCK_HASH_LINE_RE = re.compile(r"    --hash=sha256:[0-9a-f]{64}( \\)?")
 
 
-def check_lock_grammar(text: str) -> None:
+def check_lock_grammar(
+    text: str, name: str = f"mobaide_agent/{DEPENDENCY_LOCK_NAME}", update_flag: str = "--update-lock"
+) -> None:
     """The lock may hold only what the comparison with the index reads: a
     pinned version with an optional marker, then its sha256 lines. pip
     understands more (other hash forms, URLs, index options), so any other
@@ -332,8 +414,8 @@ def check_lock_grammar(text: str) -> None:
         if not in_entry:
             return
     raise ReleaseError(
-        f"mobaide_agent/{DEPENDENCY_LOCK_NAME} line {number} is not a complete pinned version "
-        "with its sha256 lines. Run 'python deploy/prod/release_agent.py --update-lock' "
+        f"{name} line {number} is not a complete pinned version "
+        f"with its sha256 lines. Run 'python deploy/prod/release_agent.py {update_flag}' "
         "and commit its output unchanged."
     )
 
@@ -448,7 +530,9 @@ def update_lock(*, upgrade: bool) -> int:
     return 0
 
 
-def check_lock_has_wheels(lock: Path, out_dir: Path, python_floor: str) -> None:
+def check_lock_has_wheels(
+    lock: Path, out_dir: Path, python_floor: str, *, what: str = "the dependency lock"
+) -> None:
     """The trial install proves the lock only on this machine. This check
     asks uv for every supported platform and Python version, so a release
     that some agents could never install stops here."""
@@ -485,15 +569,155 @@ def check_lock_has_wheels(lock: Path, out_dir: Path, python_floor: str) -> None:
     scratch.unlink(missing_ok=True)
     if missing:
         raise ReleaseError(
-            "the dependency lock cannot be installed everywhere:\n" + "\n".join(missing) + "\n"
+            f"{what} cannot be installed everywhere:\n" + "\n".join(missing) + "\n"
             "Give the dependency a version with a wheel for that platform (a requirement with "
-            "a platform marker in mobaide_agent/pyproject.toml), or remove the platform from "
-            "LOCK_TARGET_PLATFORMS when agents no longer run there."
+            "a platform marker in mobaide_agent/pyproject.toml, or another pinned version in the "
+            "install scripts), or remove the platform from LOCK_TARGET_PLATFORMS when agents no "
+            "longer run there."
         )
     ok(
-        f"The lock has wheels for {len(LOCK_TARGET_PLATFORMS)} platforms x Python "
+        f"{what[0].upper()}{what[1:]} has wheels for {len(LOCK_TARGET_PLATFORMS)} platforms x Python "
         f"{', '.join(versions)} (macOS {LOCK_MACOS_MINIMUM} and newer)"
     )
+
+
+def _verifier_pin_lines(path: Path, start: str, end: str) -> tuple[list[str], int, int] | None:
+    """The script's lines and the slice that holds the pinned requirements,
+    or None when the script has no such block."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if start not in lines:
+        return None
+    first = lines.index(start) + 1
+    try:
+        last = lines.index(end, first)
+    except ValueError:
+        raise ReleaseError(
+            f"{path.name}: the pinned verifier requirements after {start!r} have no closing {end!r}"
+        ) from None
+    return lines, first, last
+
+
+def read_verifier_pin(root: Path) -> str | None:
+    """The pinned verifier requirements, the same in both install scripts.
+    None when neither has them: scripts from before the pin, at an older tag."""
+    pins: dict[str, str] = {}
+    for rel, (start, end) in VERIFIER_PIN_BLOCKS.items():
+        block = _verifier_pin_lines(root / rel, start, end)
+        if block is not None:
+            lines, first, last = block
+            pins[rel] = "\n".join(lines[first:last]) + "\n"
+    if not pins:
+        return None
+    if len(pins) != len(VERIFIER_PIN_BLOCKS) or len(set(pins.values())) != 1:
+        raise ReleaseError(
+            "deploy/install.sh and deploy/install.ps1 pin different verifier requirements. "
+            "Run 'python deploy/prod/release_agent.py --update-verifier-pin' and commit the result."
+        )
+    return next(iter(pins.values()))
+
+
+def compile_verifier_pin(text: str, out_dir: Path, python_floor: str) -> str:
+    """What the index gives for the pinned verifier version: every
+    dependency with the SHA-256 of each file. Versions the pin already holds
+    stay when they still fit."""
+    versions = lock_pins(text).get(VERIFIER_PACKAGE, set())
+    if len(versions) != 1:
+        raise ReleaseError(f"the verifier pin must name exactly one {VERIFIER_PACKAGE} version")
+    requirement = out_dir / "verifier.in"
+    requirement.write_text(f"{VERIFIER_PACKAGE}=={next(iter(versions))}\n", encoding="utf-8")
+    output = out_dir / "verifier-pin.txt"
+    output.write_text(
+        "\n".join(
+            f"{name}=={version}" + (f" ; {marker}" if marker else "")
+            for name, version, marker in lock_entries(text)
+        ) + "\n",
+        encoding="utf-8",
+    )
+    r = subprocess.run(
+        [
+            "uv", "--no-config", "pip", "compile", str(requirement),
+            "--universal", "--python-version", python_floor,
+            "--default-index", PYPI_INDEX, "--only-binary", ":all:",
+            "--generate-hashes", "--no-header", "--no-annotate",
+            "--quiet", "--output-file", str(output),
+        ],
+        env=_uv_env(),
+    )
+    if r.returncode != 0 or not output.is_file():
+        raise ReleaseError("uv pip compile failed for the verifier pin")
+    fresh = output.read_text(encoding="utf-8").replace("\r\n", "\n")
+    requirement.unlink(missing_ok=True)
+    output.unlink(missing_ok=True)
+    return fresh
+
+
+def check_verifier_pin(src: Path, out_dir: Path, python_floor: str) -> None:
+    """A new install checks the manifest signature with the library that
+    the install scripts pin. A pin that the index no longer matches, or that
+    has no wheel for some platform, would stop new installs there."""
+    text = read_verifier_pin(src)
+    if text is None:
+        warn("The install scripts at this tag pin no signature library; the pin is not checked")
+        return
+    check_lock_grammar(text, "the verifier pin in deploy/install.sh", "--update-verifier-pin")
+    fresh = compile_verifier_pin(text, out_dir, python_floor)
+    added = files_added_on_index(text, fresh)
+    if added is None:
+        raise ReleaseError(
+            "the verifier pin in the install scripts is not what the package index gives "
+            "(pin -> index):\n  " + "\n  ".join(lock_difference(text, fresh)) + "\n"
+            "Run 'python deploy/prod/release_agent.py --update-verifier-pin', review the change in "
+            "a pull request, and release from a tag that contains it."
+        )
+    if added:
+        warn(
+            f"The package index has files the verifier pin does not list for: {', '.join(added)}. "
+            "pip installs only files whose hash the pin lists. To add them, run "
+            "'python deploy/prod/release_agent.py --update-verifier-pin' in a pull request."
+        )
+    pin = out_dir / "verifier-pin-check.txt"
+    pin.write_text(text, encoding="utf-8")
+    check_lock_has_wheels(pin, out_dir, python_floor, what="the verifier pin")
+    pin.unlink(missing_ok=True)
+
+
+def update_verifier_pin() -> int:
+    """Write the verifier pin into both install scripts in this checkout,
+    for a pull request. To move to another version, change the
+    `cryptography==` line in deploy/install.sh first."""
+    require_tools("uv")
+    with (PROJECT_ROOT / "mobaide_agent" / "pyproject.toml").open("rb") as fh:
+        python_floor = minimum_python(tomllib.load(fh)["project"]["requires-python"])
+    blocks = {}
+    for rel, (start, end) in VERIFIER_PIN_BLOCKS.items():
+        block = _verifier_pin_lines(PROJECT_ROOT / rel, start, end)
+        if block is None:
+            raise ReleaseError(f"{rel} has no pinned verifier requirements after {start!r}")
+        blocks[rel] = block
+    lines, first, last = blocks["deploy/install.sh"]
+    old_text = "\n".join(lines[first:last]) + "\n"
+    step("Update the verifier pin in the install scripts")
+    with tempfile.TemporaryDirectory(prefix="mobaide-verifier-") as scratch:
+        new_text = compile_verifier_pin(old_text, Path(scratch), python_floor)
+        check_lock_grammar(new_text, "the new verifier pin", "--update-verifier-pin")
+        candidate = Path(scratch) / "verifier-pin-check.txt"
+        candidate.write_text(new_text, encoding="utf-8")
+        check_lock_has_wheels(candidate, Path(scratch), python_floor, what="the verifier pin")
+    changed = []
+    for rel, (lines, first, last) in blocks.items():
+        if "\n".join(lines[first:last]) + "\n" == new_text:
+            continue
+        updated = lines[:first] + new_text.splitlines() + lines[last:]
+        (PROJECT_ROOT / rel).write_text("\n".join(updated) + "\n", encoding="utf-8", newline="\n")
+        changed.append(rel)
+    if not changed:
+        info("  The verifier pin is already current. Nothing was written.")
+        return 0
+    for line in lock_difference(old_text, new_text) or ["only the layout of the pin changed"]:
+        info(f"  {line}")
+    info("")
+    info(f"Wrote {', '.join(changed)}. Commit them in a pull request.")
+    return 0
 
 
 def trial_install(lock: Path, wheel: Path, wheel_sha: str, out_dir: Path) -> None:
@@ -554,6 +778,7 @@ def build_artifacts(src: Path, version: str, out_dir: Path) -> tuple[Path, Path,
     lock = load_dependency_lock(agent_dir, out_dir, python_floor)
     check_lock_has_wheels(lock, out_dir, python_floor)
     trial_install(lock, wheel, sha256_file(wheel), out_dir)
+    check_verifier_pin(src, out_dir, python_floor)
 
     tarball = out_dir / f"mobaide-agent-{version}.tar.gz"
 
@@ -676,8 +901,13 @@ def run(args: argparse.Namespace) -> int:
     release_dir = resolve_release_dir(args.release_dir)
     key = load_signing_key(release_dir)
     token = None if args.skip_publish else read_secret(release_dir, RELEASE_TOKEN_FILE)
-    relay_pairing_key = read_optional_public_key(release_dir, RELAY_PAIRING_PUBLIC_KEY_FILE)
+    relay_pairing_key = read_relay_pairing_key(release_dir)
     next_signing_key = read_optional_public_key(release_dir, NEXT_SIGNING_PUBLIC_KEY_FILE)
+    if relay_pairing_key in (public_key_b64(key), next_signing_key):
+        raise ReleaseError(
+            f"{RELAY_PAIRING_PUBLIC_KEY_FILE} holds a release key. The relay pairing key must be a "
+            "separate key: make one with --new-relay-pairing-key."
+        )
     ok(f"Keys loaded from {release_dir}")
     check_trust_key(key, server_url)
     check_relay_pairing_key(relay_pairing_key, server_url)
@@ -688,7 +918,9 @@ def run(args: argparse.Namespace) -> int:
     out_dir = Path(tempfile.mkdtemp(prefix="mobaide-agent-out-"))
     step(f"Build {tag}")
     with temporary_worktree(commit) as src:
-        check_install_scripts(src, key)
+        check_install_scripts(src, key, version)
+        if not args.skip_publish:
+            check_relay_version(src, server_url)
         wheel, tarball, lock = build_artifacts(src, version, out_dir)
     tarball_sha, wheel_sha, lock_sha = sha256_file(tarball), sha256_file(wheel), sha256_file(lock)
     dim(f"sha256 {tarball_sha}  {tarball.name}")
@@ -736,6 +968,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "versions already in the lock stay when they still fit")
     p.add_argument("--upgrade-lock", action="store_true",
                    help="like --update-lock, but take the newest version of every dependency")
+    p.add_argument("--update-verifier-pin", action="store_true",
+                   help="rewrite the pinned signature library in deploy/install.sh and deploy/install.ps1 "
+                        "and exit; the cryptography version in deploy/install.sh stays")
     p.add_argument("--release-dir", help="folder with the release keys (default: $MOBAIDE_RELEASE_DIR, else ~/.config/mobaide-release, on Windows %%LOCALAPPDATA%%\\mobaide-release)")
     p.add_argument("--server-url", default=CENTRAL_SERVER_URL, help=f"relay base URL (default: {CENTRAL_SERVER_URL})")
     return p
@@ -751,6 +986,8 @@ def main(argv: list[str] | None = None) -> int:
             return print_new_relay_pairing_key()
         if args.update_lock or args.upgrade_lock:
             return update_lock(upgrade=args.upgrade_lock)
+        if args.update_verifier_pin:
+            return update_verifier_pin()
         return run(args)
     except DeployError as e:
         if str(e):

@@ -73,12 +73,12 @@ def _assets(
     tmp_path: Path,
     *,
     corrupt_wheel_sha: bool = False,
-    lock_in_tarball: str | None = None,
-    signed_lock: str | None = None,
+    lock_in_tarball: str | None = LOCK_TEXT,
+    signed_lock: str | None = LOCK_TEXT,
 ) -> Path:
     """``signed_lock`` is the lock text whose SHA-256 the manifest names
     (``None``: a release made before the lock existed). ``lock_in_tarball``
-    is the lock the tarball really carries."""
+    is the lock the tarball really carries (``None``: no lock in it)."""
     assets = tmp_path / "assets"
     assets.mkdir()
     members = {"mobaide/__init__.py": f'__version__ = "{VERSION}"\n'.encode()}
@@ -189,14 +189,14 @@ def _scratch_dirs(prefix: Path) -> list[str]:
 def test_fresh_install_stages_marks_complete_and_pins_the_version(tmp_path) -> None:
     prefix = tmp_path / "prefix"
 
-    proc, pip_log = _stage_release(tmp_path, prefix, _assets(tmp_path))
+    proc, _ = _stage_release(tmp_path, prefix, _assets(tmp_path))
 
     assert proc.returncode == 0, proc.stderr
     release = prefix / "releases" / VERSION
     assert (release / "mobaide" / "__init__.py").is_file()
     assert (release / ".installed").read_text().strip() == VERSION
     assert (prefix / "current_version").read_text().strip() == VERSION
-    assert pip_log.read_text().splitlines()[-1].endswith(WHEEL_NAME)
+    assert WHEEL_NAME in (tmp_path / "requirements.copy").read_text()
 
 
 def test_successful_reinstall_drops_the_moved_aside_release(tmp_path) -> None:
@@ -218,7 +218,7 @@ def test_release_with_a_dependency_lock_installs_only_from_the_pinned_file(
     with ``--require-hashes`` on a file that holds the signed lock plus the
     wheel pinned by its signed SHA-256. No other pip step runs."""
     prefix = tmp_path / "prefix"
-    manifest = _assets(tmp_path, lock_in_tarball=LOCK_TEXT, signed_lock=LOCK_TEXT)
+    manifest = _assets(tmp_path)
 
     proc, pip_log = _stage_release(tmp_path, prefix, manifest)
 
@@ -246,7 +246,7 @@ def test_release_with_a_dependency_lock_installs_only_from_the_pinned_file(
     "fault",
     [
         "wheel-sha-mismatch",
-        "pip-install-fails",
+        "lock-not-in-signed-release",
         "lock-differs-from-signed-hash",
         "lock-missing-from-tarball",
         "hash-pinned-install-fails",
@@ -259,12 +259,13 @@ def test_failed_reinstall_restores_the_previous_release(tmp_path, fault) -> None
         manifest = _assets(
             tmp_path,
             lock_in_tarball="example-dependency==2.0 --hash=sha256:" + "1" * 64 + "\n",
-            signed_lock=LOCK_TEXT,
         )
     elif fault == "lock-missing-from-tarball":
-        manifest = _assets(tmp_path, signed_lock=LOCK_TEXT)
-    elif fault == "hash-pinned-install-fails":
-        manifest = _assets(tmp_path, lock_in_tarball=LOCK_TEXT, signed_lock=LOCK_TEXT)
+        manifest = _assets(tmp_path, lock_in_tarball=None)
+    elif fault == "lock-not-in-signed-release":
+        # A release from before the lock: nothing in it pins the
+        # dependencies, so it is refused rather than installed unchecked.
+        manifest = _assets(tmp_path, signed_lock=None)
     else:
         manifest = _assets(tmp_path, corrupt_wheel_sha=fault == "wheel-sha-mismatch")
 
@@ -272,7 +273,7 @@ def test_failed_reinstall_restores_the_previous_release(tmp_path, fault) -> None
         tmp_path,
         prefix,
         manifest,
-        wheel_rc=1 if fault in ("pip-install-fails", "hash-pinned-install-fails") else 0,
+        wheel_rc=1 if fault == "hash-pinned-install-fails" else 0,
     )
 
     assert proc.returncode != 0

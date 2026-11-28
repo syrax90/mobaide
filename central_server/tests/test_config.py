@@ -347,8 +347,10 @@ def _relay_pairing_keypair_b64() -> tuple[str, str]:
 
 def test_relay_pairing_key_is_read_and_gives_its_public_half(monkeypatch):
     private_b64, public_b64 = _relay_pairing_keypair_b64()
+    _, release_public_b64 = _relay_pairing_keypair_b64()
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("RELAY_PAIRING_PRIVATE_KEY", f"  {private_b64}\n")
+    monkeypatch.setenv("MANIFEST_SIGNING_PUBLIC_KEY", release_public_b64)
 
     config = CentralServerConfig.from_env()
 
@@ -368,6 +370,41 @@ def test_relay_pairing_key_is_optional(monkeypatch, raw):
 
     assert config.relay_pairing_private_key_b64 is None
     assert config.relay_pairing_public_key_b64 is None
+
+
+@pytest.mark.parametrize("left_in_env", [False, True])
+def test_a_release_private_key_left_in_the_env_is_flagged_and_never_kept(
+    monkeypatch, left_in_env
+):
+    """The relay signs nothing with the release key any more. A copy still
+    set on the relay turns on the startup warning, and the config holds no
+    copy of it."""
+    release_private_b64, _ = _relay_pairing_keypair_b64()
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    if left_in_env:
+        monkeypatch.setenv("MANIFEST_SIGNING_PRIVATE_KEY", release_private_b64)
+    else:
+        monkeypatch.setenv("MANIFEST_SIGNING_PRIVATE_KEY", "  ")
+
+    config = CentralServerConfig.from_env()
+
+    assert config.release_private_key_left_in_env is left_in_env
+    assert all(release_private_b64 not in str(value) for value in vars(config).values())
+
+
+def test_the_release_key_as_relay_pairing_key_stops_the_start(monkeypatch):
+    """The release key signs agent updates and must stay off the relay. Set
+    again under the relay pairing name, it stops the start; the error does
+    not show the key."""
+    release_private_b64, release_public_b64 = _relay_pairing_keypair_b64()
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("MANIFEST_SIGNING_PUBLIC_KEY", release_public_b64)
+    monkeypatch.setenv("RELAY_PAIRING_PRIVATE_KEY", release_private_b64)
+
+    with pytest.raises(ValueError, match="RELAY_PAIRING_PRIVATE_KEY is the release signing key") as failure:
+        CentralServerConfig.from_env()
+
+    assert release_private_b64 not in str(failure.value)
 
 
 @pytest.mark.parametrize(

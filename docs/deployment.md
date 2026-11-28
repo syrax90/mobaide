@@ -89,7 +89,7 @@ Follow [`deploy/prod/bootstrap-mobaide.md`](../deploy/prod/bootstrap-mobaide.md)
    - The Cloudflare dialog pre-fills `mobaide.com, *.mobaide.com`; the wildcard must be deleted.
    - Why: a `*.mobaide.com` SAN matches SNI `app.mobaide.com`, Caddy skips ACME for it, and the SPA serves an Origin CA certificate that every browser rejects. See [TLS certificates](#tls-certificates).
 4. On your workstation: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
-5. Optional: set `RELAY_PAIRING_PRIVATE_KEY` in `/opt/mobaide/.env` (base64 of a 32-byte Ed25519 private key). The relay then serves the public half at `GET /api/v1/agent/pairing_key`; unset, the endpoint answers `{"public_key_b64": null}`. A malformed value stops the relay at start. In this step the pairing push is still signed with the manifest key. `python deploy/prod/release_agent.py --new-relay-pairing-key` prints a new key pair. See [versioning-and-updates.md](versioning-and-updates.md).
+5. Set `RELAY_PAIRING_PRIVATE_KEY` in `/opt/mobaide/.env` (base64 of a 32-byte Ed25519 private key). The relay signs the pairing push with it and serves the public half at `GET /api/v1/agent/pairing_key`. A malformed value stops the relay at start; unset, pairing returns 503. Do not put `MANIFEST_SIGNING_PRIVATE_KEY` on the relay: `deploy_central.py` refuses a deploy while it is there. `python deploy/prod/release_agent.py --new-relay-pairing-key` prints a new key pair. See [versioning-and-updates.md](versioning-and-updates.md).
 
 ### Deploy
 
@@ -694,6 +694,7 @@ Rejections that only happen during processing (such as an expired click, `EVENT_
 - **Automatic**: only if `docker compose up` itself fails (and only on a full deploy, not `--skip-build`) — the script swaps `central_server.prev` back in and rebuilds.
 - **A failed `/api/health` check never rolls back.** The containers running were built from the deployed source, so an automatic swap-and-rebuild would destroy the state the logs describe, and it would also fire for failures no source rollback can fix (DNS, Caddy, the Cloudflare edge, this workstation's own trust store). The script prints the logs command and the rollback command instead.
 - **Manual**: `deploy_central.py --rollback` swaps `central_server.prev` back in on demand — the deliberate response to a failed health check, and to a regression that only surfaces later.
+- **A rollback to a `central_server` that signs pairings with `MANIFEST_SIGNING_PRIVATE_KEY` breaks pairing.** Since the release that signs them with `RELAY_PAIRING_PRIVATE_KEY`, `.env` must not hold the release private key, and older releases need it. After such a rollback every QR and device-code pairing answers 503; paired agents stay online. Putting the release key back in `.env` does not fully repair it: agents that trust only relay pairing keys (the agent releases published after that relay release) refuse a push signed with the release key, and each such scan leaves an agent in the account that never comes online. The automatic rollback of the first deploy of that release lands in the same state. Fix forward instead of rolling back past it.
 
 ### Verify
 

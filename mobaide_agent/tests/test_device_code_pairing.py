@@ -21,6 +21,7 @@ import pytest
 from mobaide.agent.pairing_monitor import (
     DeviceCodeRejected,
     PairingMonitorError,
+    accept_device_code,
     redeem_device_code,
 )
 from mobaide.agent.pairing_qr import (
@@ -249,12 +250,12 @@ def _patch_urlopen(resp):
     return patch("mobaide._http.urlopen", return_value=resp)
 
 
-def _http_error(code: int, body: str):
+def _http_error(code: int, body: str, headers: dict[str, str] | None = None):
     return urllib.error.HTTPError(
         "https://relay.test/api/pairing/device-code/redeem",
         code,
         "err",
-        {},
+        headers or {},
         io.BytesIO(body.encode("utf-8")),
     )
 
@@ -361,3 +362,30 @@ class TestRedeemDeviceCode:
 
         assert "42s" in str(excinfo.value)
         assert excinfo.value.status == 429
+
+
+class TestAcceptDeviceCode:
+    @pytest.mark.parametrize(
+        ("header", "expected"),
+        [("7", 7.0), ("Wed, 21 Oct 2026 07:28:00 GMT", None)],
+        ids=["seconds", "http-date"],
+    )
+    def test_a_throttled_accept_carries_the_relay_s_retry_after(
+        self, header, expected
+    ):
+        # The CLI waits this long before it sends the approval once more; a
+        # value it cannot read falls back to the CLI's own short wait.
+        body = json.dumps(
+            {"detail": {"error": "device_code_rate_limited", "retry_after_seconds": 7}}
+        )
+        with patch(
+            "mobaide._http.urlopen",
+            side_effect=_http_error(429, body, {"Retry-After": header}),
+        ):
+            with pytest.raises(DeviceCodeRejected) as excinfo:
+                accept_device_code(
+                    "wss://relay.test", code="WDJB-MJHT", redeemer_id="redeemer-1"
+                )
+
+        assert excinfo.value.status == 429
+        assert excinfo.value.retry_after == expected

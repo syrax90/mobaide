@@ -32,6 +32,7 @@ from mobaide.agent.pairing_qr import (
     PendingPairing,
     compute_trust_key_fp,
     format_pairing_link,
+    load_pending_pairing,
     save_pending_pairing,
 )
 from mobaide.agent.pairing_ws import PairingWsError
@@ -104,6 +105,25 @@ def _seed_pending(prefix: Path, trust_key_fp: str = "ee" * 32) -> str:
     return payload
 
 
+def _seed_pairing_key(prefix: Path, monkeypatch) -> None:
+    """Store a relay pairing key as a verified manifest would, and keep the
+    refresh offline: ``pair-qr`` shows no QR while no pairing key is known."""
+    pairing_key = base64.b64encode(
+        Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+    ).decode()
+    record_manifest_trust(
+        InstallLayout(prefix=prefix),
+        {
+            "released_at": "2026-06-01T00:00:00+00:00",
+            "trust": {"relay_pairing_public_keys": [pairing_key]},
+        },
+    )
+    monkeypatch.setattr(
+        "mobaide.agent.update_check.refresh_manifest_trust",
+        AsyncMock(return_value=False),
+    )
+
+
 class TestRunPairQrEarlyExits:
     def test_missing_env_returns_2(self, tmp_path, capsys):
         # No .env file at all → exit 2 with an init-env hint.
@@ -145,6 +165,7 @@ class TestRunPairQrEarlyExits:
 
         _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
         _seed_trust_key(tmp_path)
+        _seed_pairing_key(tmp_path, monkeypatch)
         monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
 
         # initiate_pairing's underlying urlopen raises URLError → exit 3.
@@ -164,6 +185,7 @@ class TestRunPairQrEarlyExits:
 
         _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
         _seed_trust_key(tmp_path)
+        _seed_pairing_key(tmp_path, monkeypatch)
         monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
 
         with patch(
@@ -190,6 +212,7 @@ class TestRunPairQrEarlyExits:
         # with no network at all.
         _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
         pub_b64 = _seed_trust_key(tmp_path)
+        _seed_pairing_key(tmp_path, monkeypatch)
         monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
         monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
         payload = _seed_pending(
@@ -211,10 +234,10 @@ class TestRunPairQrEarlyExits:
 
 
 class TestRunPairQrManifestFetch:
-    """``--wait`` reads the relay pairing keys from the signed manifest of the
-    relay. The phone can scan the QR as soon as it is on screen, so the fetch
-    must end before that. Without ``--wait`` nothing checks a credential push,
-    so the command does not fetch."""
+    """Both modes read the relay pairing keys from the signed manifest of the
+    relay before the QR is shown. The phone can scan the QR as soon as it is on
+    screen: ``--wait`` checks the credential push itself, and with ``--print``
+    the service does, so a QR that no key could verify is never offered."""
 
     @pytest.fixture
     def pinned(self, tmp_path, monkeypatch) -> str:
@@ -260,24 +283,42 @@ class TestRunPairQrManifestFetch:
 
         assert rc == 6
         assert order == ["fetch", "qr"]
-        # The wait trusts what the fetch stored.
+        # The wait trusts what the fetch stored, and not the release key.
         wait = mock_ws_cls.return_value.wait_for_claim
-        assert tuple(wait.await_args.kwargs["trust_pub_keys_b64"]) == (
-            pinned, pairing_key,
-        )
+        assert tuple(wait.await_args.kwargs["trust_pub_keys_b64"]) == (pairing_key,)
 
-    def test_without_wait_the_manifest_is_not_fetched(
-        self, tmp_path, monkeypatch, pinned
+    @pytest.mark.parametrize(
+        "mode", [{"wait": True}, {"print": True}], ids=["wait", "print"]
+    )
+    def test_without_a_relay_pairing_key_no_nonce_or_qr_is_made_and_returns_7(
+        self, tmp_path, monkeypatch, capsys, mode
     ):
-        fetch = AsyncMock(return_value=False)
+        # A phone that scanned this QR would pair the account on the relay,
+        # and neither this command nor the service could accept the
+        # credentials it is sent. No pending file: a QR would need a new nonce.
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
         monkeypatch.setattr(
-            "mobaide.agent.update_check.refresh_manifest_trust", fetch
+            "mobaide.agent.update_check.refresh_manifest_trust",
+            AsyncMock(return_value=None),
+        )
+        shown: list[str] = []
+        monkeypatch.setattr(
+            "mobaide.agent.pairing_qr.render_qr_to_terminal", shown.append
         )
 
-        rc = _run_pair_qr(_ns(prefix=str(tmp_path), print=True))
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=AssertionError("no nonce may be made without a pairing key"),
+        ), patch("mobaide.agent.pairing_ws.PairingWsClient") as mock_ws_cls:
+            rc = _run_pair_qr(_ns(prefix=str(tmp_path), **mode))
 
-        assert rc == 0
-        fetch.assert_not_called()
+        assert rc == 7
+        assert shown == []
+        assert capsys.readouterr().out == ""
+        assert load_pending_pairing(InstallLayout(prefix=tmp_path)) is None
+        mock_ws_cls.assert_not_called()
 
 
 class TestRunShowQr:

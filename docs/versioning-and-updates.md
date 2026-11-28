@@ -63,7 +63,7 @@ Both scripts work the same way:
 
 ```bash
 python deploy/prod/release_agent.py [VERSION] [--skip-publish] [--force] [--release-dir DIR]
-python deploy/prod/release_agent.py --update-lock | --upgrade-lock
+python deploy/prod/release_agent.py --update-lock | --upgrade-lock | --update-verifier-pin
 python deploy/prod/release_android.py [VERSION] [--skip-upload] [--force] [--release-dir DIR]
 ```
 
@@ -111,13 +111,17 @@ Shared helpers live in `deploy/prod/release_common.py`.
 
 1. Checks that the public half of the local signing key equals
    `GET https://api.mobaide.com/api/v1/agent/trust_key`.
-2. Checks the relay pairing key: the optional local file
-   `agent/relay-pairing-public-key` must equal the key that
-   `GET /api/v1/agent/pairing_key` returns. A relay older than this endpoint
-   (HTTP 404) counts as "no key". Any other failure stops the release.
+2. Checks the relay pairing key: the local file
+   `agent/relay-pairing-public-key` is required and must equal the key that
+   `GET /api/v1/agent/pairing_key` returns. It must differ from the public half
+   of the signing key and from the next release key. Any failure stops the release.
+   Before a publish, the script also checks that the relay runs a `central_server`
+   at least as new as the version in `.release-please-manifest.json` at the tag
+   (`/api/version`): deploy the relay first.
 3. Checks that `mobaide_agent/pyproject.toml` has the tag version, and that
    `deploy/install.sh` and `deploy/install.ps1` at the tag contain the public
-   half of the signing key.
+   half of the signing key, and the same minimum agent version
+   (not above the release) and the same hash-pinned verifier list.
 4. Builds the wheel and sdist with `uv build --wheel --sdist`. Builds the source
    tarball with Python `tarfile` (no `__pycache__`, no `*.pyc`, owner
    normalised). Computes SHA-256 values.
@@ -149,6 +153,8 @@ makes new bytes, so the files get new URLs and nothing is overwritten.
 To change a dependency version, run `python deploy/prod/release_agent.py --update-lock`
 (keeps the pinned versions) or `--upgrade-lock` (takes newer versions). Open a
 pull request with the new lock, then release from a tag that contains it.
+`--update-verifier-pin` rewrites the hash-pinned verifier list (cryptography,
+cffi, pycparser) in both install scripts from the package index.
 
 `--skip-publish` stops after step 6. The script needs `uv`, `gh`, and the
 `cryptography` package (`pip install cryptography`).
@@ -408,7 +414,7 @@ Keep a backup of the folder in a password manager.
 | File | Used by | Content |
 |------|---------|---------|
 | `agent/manifest-signing-key` | `release_agent.py` | Ed25519 private key that signs the manifest: base64 of the 32 raw bytes (the old `AGENT_MANIFEST_PRIVATE_KEY` format), or a PEM file. |
-| `agent/relay-pairing-public-key` | `release_agent.py` | Optional. Base64 Ed25519 public key of the relay pairing key. Goes into the signed `trust` object of the manifest. |
+| `agent/relay-pairing-public-key` | `release_agent.py` | Required. Base64 Ed25519 public key of the relay pairing key. Goes into the signed `trust` object of the manifest. |
 | `agent/next-manifest-public-key` | `release_agent.py` | Optional. Base64 Ed25519 public key of a second release key. Goes into the signed `trust` object, so agents accept it later. |
 | `agent/release-token` | `release_agent.py` | Token for `PUT /api/internal/agent_release/...` and `POST /api/internal/agent_manifest`. |
 | `android/upload.keystore` | `release_android.py` | Play upload key. |
@@ -443,7 +449,7 @@ host (typically `/opt/mobaide/.env`). Keep each pair in sync:
 |--|--|--|
 | `agent/release-token` | `RELEASE_AUTH_TOKEN` | Identical string. The script sends it in the `X-Release-Token` header; the server compares with `hmac.compare_digest`. |
 | `agent/manifest-signing-key` | `MANIFEST_SIGNING_PUBLIC_KEY` | Private and public halves of the same Ed25519 key. The script signs; the server verifies. |
-| `agent/relay-pairing-public-key` | `RELAY_PAIRING_PRIVATE_KEY` | Public and private halves of one Ed25519 key (the variable holds the base64 of the 32 raw private bytes). The relay serves the public half at `GET /api/v1/agent/pairing_key` (`null` when unset). In this step the pairing push is still signed with the manifest key. |
+| `agent/relay-pairing-public-key` | `RELAY_PAIRING_PRIVATE_KEY` | Public and private halves of one Ed25519 key (the variable holds the base64 of the 32 raw private bytes). The relay serves the public half at `GET /api/v1/agent/pairing_key` (`null` when unset). The relay signs the pairing push with this key only; it does not hold the release private key. |
 
 - If `RELEASE_AUTH_TOKEN` is unset on the server,
   `POST /api/internal/agent_manifest` returns **HTTP 503** ("Manifest
@@ -1008,9 +1014,12 @@ the elevation re-launch re-fetches the installer from
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv. When
    the manifest has `dependency_lock_sha256`, the script checks
    `requirements.lock` from the tarball and installs with
-   `pip install --require-hashes --only-binary :all:`. A manifest from before the
-   lock has no such field: the script keeps the old unpinned install and prints
-   a warning. The agent updater does not accept such a manifest.
+   `pip install --require-hashes --only-binary :all:`. The script refuses a
+   release without `dependency_lock_sha256`, and a signed release below
+   the minimum agent version (0.3.38). If the host Python has no `cryptography`,
+   the manifest check uses a venv with cryptography 46.0.3, cffi 2.1.1 and
+   pycparser 3.12, installed from a hash-pinned list embedded in the script. A host
+   Python that already has `cryptography` is used as it is.
    On Windows, reinstalling the installed version first stops the agent and every
    process running from the prefix (Windows cannot move a release dir whose
    executables are running); the previous release is restarted if staging then
@@ -1116,8 +1125,9 @@ than the running version.
 * Before pairing, an agent has no updater. `pair` and `pair-qr --wait`
   fetch the signed manifest over HTTPS, verify it and record its trust data.
   The pairing monitor does the same at most every 15 minutes (every 60 seconds
-  after a failed fetch). The agent then accepts a pairing push signed by the
-  pinned release key or by any relay pairing key in the trust data.
+  after a failed fetch). The agent then accepts a pairing push signed only by a relay pairing key in
+  the trust data. The pinned release key is not accepted for the push. With no
+  pairing key known, `pair` and `pair-qr` exit 7, and the monitor shows no QR.
 
 ## Android update flows
 

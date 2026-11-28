@@ -259,9 +259,21 @@ class PairingMonitorError(Exception):
 class DeviceCodeRejected(Exception):
     """The relay refused a device code (unknown, expired, spent, throttled)."""
 
-    def __init__(self, message: str, *, status: int | None = None) -> None:
+    def __init__(
+        self, message: str, *, status: int | None = None, retry_after: float | None = None
+    ) -> None:
         super().__init__(message)
         self.status = status
+        self.retry_after = retry_after
+
+
+def _retry_after_seconds(exc) -> float | None:
+    """The wait a 429 names in its ``Retry-After`` header, if any."""
+    value = exc.headers.get("Retry-After") if exc.headers else None
+    try:
+        return max(0.0, float(value)) if value is not None else None
+    except ValueError:
+        return None
 
 
 def redeem_device_code(
@@ -375,7 +387,9 @@ def accept_device_code(
                 )
     except urllib_error.HTTPError as exc:
         raise DeviceCodeRejected(
-            _redeem_error_message(exc), status=exc.code
+            _redeem_error_message(exc),
+            status=exc.code,
+            retry_after=_retry_after_seconds(exc),
         ) from exc
 
 
@@ -545,6 +559,9 @@ async def run_pairing_monitor(
     # then one per TTL, not one per retry.
     dropped_after_403 = False
     trust_refresh_due = 0.0
+    # A fresh install learns its first pairing key from this refresh, while
+    # the installer waits for the QR: retry fast at first.
+    key_backoff = _BACKOFF_FLOOR_S
     while True:
         try:
             if time.monotonic() >= trust_refresh_due:
@@ -554,6 +571,20 @@ async def run_pairing_monitor(
                     if refreshed is None
                     else _TRUST_REFRESH_INTERVAL_S
                 )
+            pairing_keys = pairing_verification_keys(layout)
+            if not pairing_keys:
+                # A QR shown now would pair the account on the relay while
+                # this agent refuses the credentials, so none is offered.
+                logger.warning(
+                    "pairing_monitor.no_pairing_key: no verified manifest names "
+                    "a relay pairing key yet; retry in %.0fs",
+                    key_backoff,
+                )
+                trust_refresh_due = 0.0
+                await asyncio.sleep(key_backoff + random.uniform(0, 1))
+                key_backoff = min(_TRUST_REFRESH_RETRY_S, key_backoff * 2)
+                continue
+            key_backoff = _BACKOFF_FLOOR_S
             pending = load_pending_pairing(layout)
             logger.info(
                 "pairing_monitor.loop_iter has_pending=%s env_path=%s",
@@ -644,9 +675,7 @@ async def run_pairing_monitor(
                     wait_started = time.monotonic()
                     claim = await conn.wait_for_claim(
                         timeout_s=timeout_s,
-                        trust_pub_keys_b64=pairing_verification_keys(
-                            layout, pinned_pub_key
-                        ),
+                        trust_pub_keys_b64=pairing_keys,
                         expected_relay_url=pending.relay_url,
                     )
             except PairingWsError as exc:

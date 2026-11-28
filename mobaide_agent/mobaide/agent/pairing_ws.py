@@ -2,10 +2,9 @@
 
 Connects to the central server's ``WS /ws/pairing/{nonce}``, awaits the
 signed credential push, validates the Ed25519 signature against the
-trusted keys (the pinned release key and the relay pairing keys that a
-signed manifest listed), and returns the parsed claim. The atomic .env
-write is the caller's responsibility — this module is concerned only
-with transport + verification.
+relay pairing keys that a signed manifest listed, and returns the parsed
+claim. The atomic .env write is the caller's responsibility — this module
+is concerned only with transport + verification.
 
 Two-phase API
 -------------

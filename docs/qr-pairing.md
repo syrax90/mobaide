@@ -348,14 +348,14 @@ Cancel does **not** promptly stop an agent that has already connected: that CLI 
 
 ## Server-side configuration
 
-The server **must** hold both halves of the manifest signing keypair
-to operate the QR pairing flow:
+The server **must** hold the manifest signing public key and the relay pairing private key
+to operate the QR pairing flow. It must **not** hold the release signing private key:
 
 | Variable | Required for | Behaviour when unset |
 |---|---|---|
 | `MANIFEST_SIGNING_PUBLIC_KEY` | trust-key endpoint, manifest verification, QR initiate | `GET /api/v1/agent/trust_key` returns 503; QR initiate returns 503 |
-| `MANIFEST_SIGNING_PRIVATE_KEY` | QR initiate, claim push signing | `POST /api/pairing/initiate` returns 503 |
-| `RELAY_PAIRING_PRIVATE_KEY` | Base64 Ed25519 private key (32 raw bytes) of the relay pairing key. `GET /api/v1/agent/pairing_key` serves its public half | Optional. The endpoint answers `{"public_key_b64": null}`. A malformed value stops the relay at start. The pairing push is still signed with the manifest key in this step; the agent accepts the manifest key, or a relay pairing key that a signed manifest listed |
+| `RELAY_PAIRING_PRIVATE_KEY` | QR initiate, claim push signing. Base64 Ed25519 private key (32 raw bytes) of the relay pairing key. `GET /api/v1/agent/pairing_key` serves its public half | `POST /api/pairing/initiate` and the claim paths return 503 (the message names both keys). A malformed value, or a key whose public half equals `MANIFEST_SIGNING_PUBLIC_KEY`, stops the relay at start. The pairing push is signed with this key only |
+| `MANIFEST_SIGNING_PRIVATE_KEY` | Nothing. Do not set it | The relay logs the warning `release_key.still_on_relay` at start when it is set, and ignores it |
 | `PAIRING_QR_TOKEN_TTL_SECONDS` | nonce TTL (default `120`; prod sets `600` for cross-device pairing links) | uses default |
 | `PAIRING_INITIATE_IP_HOURLY_CAP` | per-IP `POST /api/pairing/initiate` calls per hour (default `120`; `0` disables). A healthy unpaired agent makes one call per TTL | uses default |
 | `PUBLIC_BASE_URL` | QR `relay_url` field | falls back to request `Host` header |
@@ -377,7 +377,7 @@ Rotating `MANIFEST_SIGNING_*` invalidates every account's pin at once, so the ro
 
 An account that currently owns **no** agents re-pins automatically even while enforcement is on — the pin protects nothing in that state, so "remove every agent, then pair again" is the self-service recovery for a single account.
 
-> **Note on private-key residency.** The manifest signing private key was previously held only by the release pipeline. CLA-50 expands the trust surface by placing it on the relay so the server can sign pairing pushes. If your threat model rejects this, a future change can introduce a separate `PAIRING_SIGNING_PRIVATE_KEY` keypair plus a parallel pinned file `<prefix>/trust/pairing_trust.pub` on the agent.
+> **Note on private-key residency.** The release signing private key stays in the release pipeline. The relay holds only the relay pairing private key, and the agent accepts a pairing push only from a relay pairing key listed in the signed release data. `deploy/prod/deploy_central.py` refuses a deploy while `/opt/mobaide/.env` holds `MANIFEST_SIGNING_PRIVATE_KEY` or lacks `RELAY_PAIRING_PRIVATE_KEY`.
 
 ## Multi-worker deployments
 
@@ -392,7 +392,8 @@ The device-code direction makes this worse. A QR claim's dropped push is recover
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| `pair-qr` returns 503 | Server lacks `MANIFEST_SIGNING_PRIVATE_KEY` | Set the env var on the relay; restart |
+| `pair-qr` returns 503 | Server lacks `MANIFEST_SIGNING_PUBLIC_KEY` or `RELAY_PAIRING_PRIVATE_KEY` | Set the missing env var on the relay; restart |
+| `pair` or `pair-qr` exits 7 ("no relay pairing key") | The signed release data names no relay pairing key, or the agent could not fetch it | Check the relay is reachable and run the Mobaide installer again to get a current agent |
 | `pair-qr` returns 4 ("trust key not pinned") | The install did not pin the key (`<prefix>/trust/central_server.pub` is missing) | Run the Mobaide installer again |
 | `pair-qr` returns 5 ("fingerprint mismatch") | Server's trust key was rotated since the agent pinned it | Run the Mobaide installer again to pin the current key; confirm rotation was intentional |
 | Mobile shows "Pairing code consumed or expired" (HTTP 410) | QR scanned twice, or after TTL | Render a fresh QR via `show-qr` |
@@ -414,6 +415,7 @@ Entries too long for a table cell:
 - **`show-qr` exits 9 ("still paired with the credentials it started with").** The agent on the host booted before `re-pair` blanked `.env`, so it is still paired and no pairing monitor is waiting on any QR. Run `mobaide-agent re-pair` again from a terminal outside Mobaide (its restart also stops any agent process left from the install). On Windows, re-run the installer once to get the supervisor that ends its whole process tree (before it, `schtasks /End` killed only the supervisor, the orphaned agent kept the port, and the restarted one exited).
 - **Browser sits on "waiting for a machine to enter the code" until the code expires.** Causes: nothing redeemed the code; the operator has not answered the agent's `y/N` prompt yet (expected — the request stays `pending` until answered); or the relay runs multiple workers and the confirm landed on a worker without the agent's WS. Check the command actually ran on the agent host and that the relay is single-worker (see "Multi-worker deployments"). All three clients bound this screen with the deadline the relay reported, so it ends in an expiry message even if the poll fails.
 - **QR scan succeeded but the client shows "Waiting for agent…", then after 60 s "Agent not online yet"** (not an error — the claim already succeeded; "Keep waiting" restarts the wait). The agent relay client did not come online in time: the agent process crashed after writing `.env`, a Windows service build older than v0.1.11 hit a `cp1252`/`cp437` `UnicodeEncodeError` in the QR render, or a `relay_url` scheme mismatch made the agent discard its own credentials. Check that the agent service is running, or run `mobaide-agent show-qr` there to restart pairing; upgrade Windows service builds below v0.1.11.
+- **Scan succeeded, the client shows "Agent not online yet", and the agent log shows `pairing_monitor.ws_failed … signature verification failed`.** The agent does not trust the key that signed its credentials. The relay signs them with `RELAY_PAIRING_PRIVATE_KEY`, and an agent older than 0.3.38 trusts only the release key. A paired agent updates itself, but an agent that was never paired has no updater, so an old install that waited unpaired since before 0.3.38 can no longer pair. Run the Mobaide installer again on that computer and scan the new QR. Each failed scan leaves an agent in the account that never comes online: remove it in the app. A relay rolled back to a release that signs with the release key causes the same symptom for current agents (see [Rollback](deployment.md#rollback)).
 - **QR scan succeeded (mobile shows "Paired") but the agent stays offline / `pairing_pending: true` persists.** Upgrade to v0.1.9+; older agents lost the post-pairing restart (no-op `sudo -n systemctl restart`, or `sys.exit(75)` before credentials were flushed), and Windows service builds v0.1.7–v0.1.8 dropped all log output (v0.1.9+ captures stdout to `<prefix>\logsgent.out.log`). On older Linux/macOS installs, manually run `sudo systemctl restart mobaide-agent` or `launchctl unload … && launchctl load …` once after the initial pairing scan.
 
 ## Security tests
