@@ -83,6 +83,11 @@ one and the Codex flavor the turns up to the one that holds it (by message id,
 else by text fingerprint and occurrence; neither matches: ``-32602``); the
 OpenCode flavor ignores the point and copies all, as OpenCode does.
 
+The Codex flavor, like Codex, saves each thread after every turn (so another
+process can fork it) and stays the only writer of every thread it opens until
+it exits: ``session/load`` of such a thread in another process fails with
+"thread … already has an active writer", even after ``session/close``.
+
 While the file named by ``MOBAIDE_FAKE_ACP_SIGNED_OUT`` exists the agent is
 signed out: the Claude flavor pushes ``_auth/status_update`` and fails each
 prompt, the others fail ``session/new``. ``fake_agent.py login [--flavor F]
@@ -221,12 +226,44 @@ def load_stored(sid: str) -> list[dict[str, Any]] | None:
     """The turns of a fork saved by ``session/fork``, or None."""
     if not sid.startswith("fork-"):
         return None
+    return read_thread(sid)
+
+
+def read_thread(sid: str) -> list[dict[str, Any]] | None:
+    """The turns saved for ``sid`` (a fork, or a Codex thread), or None."""
     try:
         with open(os.path.join(store_dir(), f"{sid}.json"), encoding="utf-8") as f:
             turns = json.load(f).get("turns")
     except (OSError, ValueError):
         return None
     return turns if isinstance(turns, list) else None
+
+
+def save_thread(sid: str, turns: list[dict[str, Any]]) -> None:
+    os.makedirs(store_dir(), exist_ok=True)
+    with open(os.path.join(store_dir(), f"{sid}.json"), "w", encoding="utf-8") as f:
+        json.dump({"turns": turns}, f)
+
+
+def lock_thread(sid: str) -> Any | None:
+    """An exclusive lock on ``sid`` that lasts while the file stays open (and
+    so until this process exits), or None when another process holds it."""
+    os.makedirs(store_dir(), exist_ok=True)
+    f = open(os.path.join(store_dir(), f"{sid}.lock"), "a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
 
 
 def fork_point(turns: list[dict[str, Any]], point: dict[str, Any]) -> tuple[int, int] | None:
@@ -321,6 +358,18 @@ class FakeAgent:
         # The messages of each session this process holds, per turn:
         # ``{"user": text, "messages": [{"id": messageId, "text": text}]}``.
         self.history: dict[str, list[dict[str, Any]]] = {}
+        # Codex: the locks of the threads this process opened.
+        self.writers: dict[str, Any] = {}
+
+    def hold_writer(self, sid: str) -> None:
+        """Codex: the app-server that opens a thread stays its only writer
+        until it exits; ``session/close`` does not let it go."""
+        if not self.codex or sid in self.writers:
+            return
+        lock = lock_thread(sid)
+        if lock is None:
+            raise _RpcError(-32600, f"Invalid request: thread {sid} already has an active writer")
+        self.writers[sid] = lock
 
     def send(self, message: dict[str, Any]) -> None:
         data = (json.dumps(message) + "\n").encode("utf-8")
@@ -352,6 +401,9 @@ class FakeAgent:
     def fork(self, params: dict[str, Any]) -> dict[str, Any]:
         source = str(params.get("sessionId"))
         turns = self.history.get(source)
+        if turns is None and self.codex:
+            # Codex forks a thread it has not opened from its saved copy.
+            turns = read_thread(source)
         if turns is None:
             raise _RpcError(-32002, f"Session {source} not found")
         meta = params.get("_meta")
@@ -367,9 +419,8 @@ class FakeAgent:
             if not self.codex:
                 kept[turn]["messages"] = kept[turn]["messages"][: message + 1]
         fork_id = f"fork-{uuid.uuid4().hex}"
-        os.makedirs(store_dir(), exist_ok=True)
-        with open(os.path.join(store_dir(), f"{fork_id}.json"), "w", encoding="utf-8") as f:
-            json.dump({"turns": kept}, f)
+        save_thread(fork_id, kept)
+        self.hold_writer(fork_id)
         # Like the real adapters, the fork is open in this process too.
         self.new_session(params.get("cwd") or os.getcwd(), sid=fork_id)
         self.history[fork_id] = kept
@@ -717,6 +768,7 @@ class FakeAgent:
         if method == "session/new":
             # agy works in its own working directory, whatever ``cwd`` says.
             sid = self.new_session(os.getcwd() if self.agy else params.get("cwd") or os.getcwd())
+            self.hold_writer(sid)
             self.history[sid] = []
             self.loop.call_later(0.05, self.commands, sid)
             return {"sessionId": sid, "configOptions": self.config(sid), **self.models_block(sid)}
@@ -754,6 +806,8 @@ class FakeAgent:
             return self.fork(params)
         if method == "session/load":
             sid = params["sessionId"]
+            if read_thread(sid) is not None:
+                self.hold_writer(sid)
             self.new_session(params.get("cwd") or os.getcwd(), sid=sid, title="Earlier session")
             self.history[sid] = []
             stored = load_stored(sid)
@@ -765,6 +819,8 @@ class FakeAgent:
             return {"configOptions": self.config(sid), **self.models_block(sid)}
         if method == "session/resume":
             sid = params["sessionId"]
+            if read_thread(sid) is not None:
+                self.hold_writer(sid)
             self.new_session(params.get("cwd") or os.getcwd(), sid=sid)
             return {"configOptions": self.config(sid)}
         if method == "session/close":
@@ -802,6 +858,8 @@ class FakeAgent:
             if self.agy:
                 return await self.agy_answer(sid, task)
             result = await task
+            if self.codex and sid in self.history:
+                save_thread(sid, self.history[sid])
             self.suggest_later(sid, prompt, result)
             return result
         if method == "session/cancel":

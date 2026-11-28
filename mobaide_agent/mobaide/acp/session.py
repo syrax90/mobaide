@@ -420,6 +420,8 @@ class ChatSession:
         self._forking = False
         # A ``session/fork`` that outlived its command: its copy is closed when it comes.
         self._late_fork: asyncio.Future[Any] | None = None
+        # The process of a fork made aside (``ChatLaunchPlan.fork_aside``).
+        self._fork_conn: AcpConnection | None = None
         # The answer that ended the chat before a turn it did not send: that
         # turn has no user message, so it must not mark this one as its own.
         self._external_floor_id: str | None = None
@@ -578,6 +580,7 @@ class ChatSession:
         if self._limit_task is not None:
             self._limit_task.cancel()
         self._resolve_all_requests_cancelled()
+        await self._close_fork_process()
         conn = self._conn
         if conn is not None:
             # On a shared host, session/close would also stop a turn that
@@ -2245,11 +2248,15 @@ class ChatSession:
         if meta is not None:
             params["_meta"] = meta
         self._forking = True
+        started = time.monotonic()
+        # The client waits for the result: past FORK_TIMEOUT it gets an
+        # error, and the copy the agent still makes is closed when it comes.
+        request = asyncio.ensure_future(
+            self._fork_aside(params)
+            if self._plan.fork_aside
+            else conn.request("session/fork", params, fk.FORK_LATE_TIMEOUT)
+        )
         try:
-            started = time.monotonic()
-            # The client waits for the result: past FORK_TIMEOUT it gets an
-            # error, and the copy the agent still makes is closed when it comes.
-            request = asyncio.ensure_future(conn.request("session/fork", params, fk.FORK_LATE_TIMEOUT))
             try:
                 result = await asyncio.wait_for(asyncio.shield(request), fk.FORK_TIMEOUT)
             except AcpRpcError as exc:
@@ -2270,7 +2277,10 @@ class ChatSession:
             if not isinstance(fork_id, str) or not nz.is_valid_chat_resume_id(fork_id) or fork_id == source:
                 raise ChatCommandError("The agent did not return the forked session")
             forked = time.monotonic()
-            await self._close_fork_copy(conn, fork_id)
+            if self._plan.fork_aside:
+                await self._close_fork_process()
+            else:
+                await self._close_fork_copy(conn, fork_id)
             logger.info(
                 "chat.forked session=%s at_answer=%s fork_ms=%d close_ms=%d",
                 self.session_id,
@@ -2297,7 +2307,42 @@ class ChatSession:
             return {"session_id": row.get("session_id"), "session": row}
         finally:
             self._forking = False
+            if self._late_fork is not request:
+                await self._close_fork_process()
             self._start_queue_if_idle()
+
+    async def _fork_aside(self, params: dict[str, Any]) -> Any:
+        """``session/fork`` in a new process of this chat's agent. Its thread
+        lock goes when the process exits, so the new chat can open the fork."""
+        async def refuse(method: str, params: Any) -> Any:
+            raise AcpRpcError(ERR_METHOD_NOT_FOUND, f"{method} is not handled while forking")
+
+        conn = AcpConnection(
+            self._plan.argv,
+            cwd=self._plan.process_cwd or os.path.expanduser("~"),
+            env=self._plan.env,
+            on_notification=lambda method, params: None,
+            on_request=refuse,
+            on_exit=lambda returncode: None,
+            name=f"acp-fork-{self.session_id}",
+        )
+        self._fork_conn = conn
+        await conn.start()
+        await conn.request(
+            "initialize",
+            {
+                "protocolVersion": ACP_PROTOCOL_VERSION,
+                "clientCapabilities": self._client_capabilities(),
+                "clientInfo": {"name": "mobaide", "title": "Mobaide", "version": __version__},
+            },
+            INITIALIZE_TIMEOUT,
+        )
+        return await conn.request("session/fork", params, fk.FORK_LATE_TIMEOUT)
+
+    async def _close_fork_process(self) -> None:
+        conn, self._fork_conn = self._fork_conn, None
+        if conn is not None:
+            await conn.close(grace=0.5)
 
     async def _close_fork_copy(self, conn: AcpConnection, fork_id: str) -> None:
         try:
@@ -2309,6 +2354,10 @@ class ChatSession:
         """Close the copy of a ``session/fork`` that answered after its command gave up."""
         if self._late_fork is request:
             self._late_fork = None
+        if self._plan.fork_aside:
+            # Whatever came of it: a fork it made stays saved on the PC.
+            self._run_aside(self._close_fork_process())
+            return
         if request.cancelled() or request.exception() is not None:
             return
         result = request.result()

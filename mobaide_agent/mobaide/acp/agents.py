@@ -291,6 +291,11 @@ class ChatLaunchPlan:
     # :mod:`.fork`). An agent may advertise ``fork`` and still copy the whole
     # conversation (OpenCode does): only agents known to read the point say so.
     fork_at_answer: bool = False
+    # ``session/fork`` runs in a process of its own that exits once the fork
+    # is made. Codex keeps every thread its app-server opened locked to that
+    # process until it exits (``session/close`` does not release it), so a
+    # fork made on the chat's own connection could not open in the new chat.
+    fork_aside: bool = False
     # Files the user mentions with ``@`` go out as ACP ``resource_link``
     # blocks next to the text. Off for an agent that mishandles them: it then
     # gets the ``@path`` in the text only.
@@ -966,6 +971,7 @@ class CodexChatSpec(_AdapterSpec):
             ),
             subagents=True,
             fork_at_answer=True,
+            fork_aside=True,
         )
 
     def _shared_codex_path(
