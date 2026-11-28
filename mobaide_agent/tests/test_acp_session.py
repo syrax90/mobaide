@@ -2211,8 +2211,10 @@ class _ForkOpener:
     session opens a stored one. After ``hold()`` the next fork waits for
     ``release()`` before it opens."""
 
-    def __init__(self, open_chat) -> None:
+    def __init__(self, open_chat, **plan_fields: Any) -> None:
         self._open_chat = open_chat
+        # The source chat's plan: the new chat runs the same agent.
+        self._plan_fields = plan_fields
         self.calls: list[tuple[str, str | None, list[ConfigIntent]]] = []
         self.opened: list[TimelineMirror] = []
         self.entered = asyncio.Event()
@@ -2238,7 +2240,7 @@ class _ForkOpener:
             fork_answer=answer,
             title_prefix="Fork: ",
             initial_config=list(initial_config),
-            fork_at_answer=True,
+            **{"fork_at_answer": True, **self._plan_fields},
         )
         self.opened.append(mirror)
         return {"session_id": mirror.session.session_id, "ui": "chat"}
@@ -2318,6 +2320,42 @@ class TestFork:
         await fork.until(_turn_done(fork, "You said: next"))
         assert fork.state["title"] == "next"
         assert fork.session.to_info().title == "next"
+
+    async def test_a_codex_fork_is_made_in_a_process_of_its_own_so_the_new_chat_can_open_it(
+        self, open_chat, monkeypatch
+    ):
+        """Codex keeps a thread locked to the process that opened it until
+        that process exits, ``session/close`` or not: a fork made on the
+        chat's own connection could not open in the new chat."""
+        plan = {"argv": fake_agent_argv("codex"), "fork_aside": True}
+        opener = _ForkOpener(open_chat, **plan)
+        m = await open_chat(fork_opener=opener, fork_at_answer=True, **plan)
+        for text in ("one", "two"):
+            await m.command("prompt", text=text)
+            await m.until(_turn_done(m, f"You said: {text}"))
+        request = AcpConnection.request
+        forked_on: list[AcpConnection] = []
+
+        async def record(conn, method, params, timeout=None, **options):
+            if method == "session/fork":
+                forked_on.append(conn)
+            return await request(conn, method, params, timeout, **options)
+
+        monkeypatch.setattr(AcpConnection, "request", record)
+
+        result = await m.command("fork", item_id=_fork_points(m)[0]["id"])
+
+        assert result["ok"] is True
+        [fork] = opener.opened
+        assert fork.status == "ready"
+        assert fork.texts("user") == ["one"]
+        [fork_conn] = forked_on
+        assert fork_conn is not m.session._conn
+        assert not fork_conn.alive
+        await m.command("prompt", text="three")
+        await m.until(_turn_done(m, "You said: three"))
+        await fork.command("prompt", text="other")
+        await fork.until(_turn_done(fork, "You said: other"))
 
     async def test_a_message_sent_while_the_fork_opens_waits_and_then_goes_to_this_chat(
         self, open_chat
