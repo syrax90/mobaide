@@ -13,6 +13,7 @@ import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ForceUpdateResponse
 import com.mobaide.app.data.network.dto.FsDirsResponse
+import com.mobaide.app.data.network.dto.SessionFilesResponse
 import com.mobaide.app.data.network.dto.GitCommitContextResponse
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitCommitResponse
@@ -368,6 +369,19 @@ class RestApi(
 
     suspend fun getGitDeleteJob(workspaceName: String, jobId: String): GitDeleteJobResponse {
         val url = workspaceGitUrl(workspaceName, "delete-jobs").addPathSegment(jobId).build()
+        return executeCancellable(Request.Builder().url(url).get().build())
+    }
+
+    /** Cancellable: each keystroke after `@` supersedes the listing before it. */
+    suspend fun listSessionFiles(sessionId: String, q: String, limit: Int): SessionFilesResponse {
+        val url = baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("sessions")
+            .addPathSegment(sessionId)
+            .addPathSegment("files")
+            .addQueryParameter("q", q)
+            .addQueryParameter("limit", limit.toString())
+            .build()
         return executeCancellable(Request.Builder().url(url).get().build())
     }
 

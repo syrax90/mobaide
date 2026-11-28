@@ -769,6 +769,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Session Files Endpoint
+         * @description Files and folders of the session's own folder that match ``q``, best
+         *     first; ``limit`` is clamped to 1–50.
+         */
+        get: operations["list_session_files_endpoint_api_sessions__session_id__files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/git/commit": {
         parameters: {
             query?: never;
@@ -3255,6 +3276,30 @@ export interface components {
             total: number;
         };
         /**
+         * SessionFileEntry
+         * @description One file or folder of a session's folder, relative to it with ``/``
+         *     separators on every host; a folder has no trailing separator.
+         */
+        SessionFileEntry: {
+            /** Dir */
+            dir: boolean;
+            /** Path */
+            path: string;
+        };
+        /**
+         * SessionFilesResponse
+         * @description The best matches for an ``@`` mention, best first.
+         *
+         *     ``truncated`` means a cap on count, bytes or time stopped the listing
+         *     behind them, so a file the query should match may be missing.
+         */
+        SessionFilesResponse: {
+            /** Entries */
+            entries: components["schemas"]["SessionFileEntry"][];
+            /** Truncated */
+            truncated: boolean;
+        };
+        /**
          * SessionResponse
          * @description REST response for a single session.
          *
@@ -4937,6 +4982,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_session_files_endpoint_api_sessions__session_id__files_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionFilesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

@@ -124,12 +124,15 @@ struct ChatUserBubble: View {
                     SelectableText(text, color: colors.text)
                 }
                 if !attachments.isEmpty {
-                    HStack(spacing: 6) {
+                    // Wraps: a message can carry up to ten file chips named by their paths.
+                    ChipFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
                         ForEach(Array(attachments.enumerated()), id: \.offset) { _, attachment in
                             Label(
                                 attachment.kind == "image" ? "Image" : (attachment.name ?? "File"),
                                 systemImage: attachment.kind == "image" ? "photo" : "doc"
                             )
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                             .font(.caption)
                             .foregroundStyle(colors.textMuted)
                             .padding(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
@@ -144,7 +147,15 @@ struct ChatUserBubble: View {
             .pixelRing(MobaideColorScheme.brand2)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("You: \(text)")
+        .accessibilityLabel(accessibilityText)
+    }
+
+    /// The explicit label replaces the combined one, so it names the chips too.
+    private var accessibilityText: String {
+        let chips = attachments.map { $0.kind == "image" ? "Image" : ($0.name ?? "File") }
+        let attached = "attached: " + chips.joined(separator: ", ")
+        if chips.isEmpty { return "You: \(text)" }
+        return text.isEmpty ? "You: \(attached)" : "You: \(text), \(attached)"
     }
 }
 

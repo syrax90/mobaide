@@ -477,6 +477,11 @@ def prompt_parts(blocks: Any) -> tuple[str, list[dict[str, str]]]:
             continue
         if block.get("type") == "text" and isinstance(block.get("text"), str):
             texts.append(block["text"])
+        elif block.get("type") == "resource_link" and isinstance(block.get("uri"), str):
+            # Pi takes text only: the link as Claude Code writes it, which a
+            # replay shows as a file chip again.
+            name = block.get("name") if isinstance(block.get("name"), str) else block["uri"]
+            texts.append(f"[@{name}]({block['uri']})")
         elif block.get("type") == "image" and isinstance(block.get("data"), str):
             images.append(
                 {

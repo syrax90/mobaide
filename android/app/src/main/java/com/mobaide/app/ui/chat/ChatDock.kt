@@ -93,9 +93,11 @@ import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.chat.ChatConfigOption
 import com.mobaide.app.data.chat.ChatImageEncoder
 import com.mobaide.app.data.chat.ChatLimitWait
+import com.mobaide.app.data.chat.ChatMentions
 import com.mobaide.app.data.chat.ChatPlanEntry
 import com.mobaide.app.data.chat.ChatQueuedMessage
 import com.mobaide.app.data.chat.ChatSlashCommand
+import com.mobaide.app.data.network.dto.SessionFileEntry
 import com.mobaide.app.ui.chat.markdown.CodeFontFamily
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import com.mobaide.app.ui.common.pixel.PixelButton
@@ -112,6 +114,7 @@ const val CHAT_COMPOSER_FIELD_TAG = "chat_composer_field"
 const val CHAT_SEND_BUTTON_TAG = "chat_send_button"
 const val CHAT_CONFIG_CHIPS_TAG = "chat_config_chips"
 const val CHAT_PROMPT_SUGGESTION_TAG = "chat_prompt_suggestion"
+const val CHAT_MENTION_SUGGESTIONS_TAG = "chat_mention_suggestions"
 const val CHAT_EXPAND_COMPOSER_TAG = "chat_expand_composer"
 
 @Composable
@@ -483,6 +486,54 @@ fun SlashSuggestions(
     }
 }
 
+/** The agent's matches for the `@` token at the cursor: name (folders end in `/`), then its folder. */
+@Composable
+fun MentionSuggestions(
+    entries: List<SessionFileEntry>,
+    onPick: (SessionFileEntry) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        modifier = modifier
+            .testTag(CHAT_MENTION_SUGGESTIONS_TAG)
+            .fillMaxWidth()
+            .heightIn(max = (48 * 6).dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .pixelFrame(MaterialTheme.pixel.surface2),
+    ) {
+        items(entries, key = { (if (it.dir) "d:" else "f:") + it.path }) { entry ->
+            val cut = entry.path.lastIndexOf('/')
+            val name = ChatMentions.value(entry.path.substring(cut + 1), entry.dir)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.Button, onClickLabel = "Insert in message") { onPick(entry) }
+                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = CodeFontFamily),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    // Room for the folder after it; a file at the top level takes the row.
+                    modifier = if (cut > 0) Modifier.widthIn(max = 220.dp) else Modifier.weight(1f, fill = false),
+                )
+                if (cut > 0) {
+                    Spacer(modifier = Modifier.width(10.dp))
+                    MiddleEllipsisText(
+                        text = entry.path.substring(0, cut),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** Shows [hint] muted after the text while the field holds exactly the inserted `/name `. */
 private class TrailingHint(private val hint: String, private val color: Color) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
@@ -741,6 +792,14 @@ private fun ChatDockPreview() {
                 enabled = true,
                 onPick = {},
                 onOpenSettings = {},
+            )
+            MentionSuggestions(
+                entries = listOf(
+                    SessionFileEntry("src/app.py", dir = false),
+                    SessionFileEntry("src/app", dir = true),
+                    SessionFileEntry("README.md", dir = false),
+                ),
+                onPick = {},
             )
             ChatComposer(
                 value = TextFieldValue(""),

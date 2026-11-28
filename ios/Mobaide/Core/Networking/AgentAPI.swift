@@ -278,6 +278,14 @@ struct AgentAPI: Sendable {
         )
     }
 
+    /// `GET /api/sessions/{id}/files?q=&limit=` — the agent's best matches for
+    /// an `@` mention in a chat session's folder.
+    func listSessionFiles(sessionId: String, q: String, limit: Int) async throws -> SessionFilesResponse {
+        let query = "?q=\(Self.encodeQueryValue(q))&limit=\(limit)"
+        let id = Self.encodePathSegment(sessionId)
+        return try await execute(method: "GET", url: "\(try await base())/api/sessions/\(id)/files\(query)")
+    }
+
     /// `GET /api/fs/dirs?path=[&q=]` — subdirectory names for the path fields' suggestions.
     func listDirs(path: String, q: String?) async throws -> FsDirsResponse {
         var query = "?path=\(Self.encodeQueryValue(path))"

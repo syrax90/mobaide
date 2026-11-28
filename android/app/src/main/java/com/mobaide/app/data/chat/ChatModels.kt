@@ -304,6 +304,8 @@ data class ChatState(
     val requests: List<ChatRequest> = emptyList(),
     val queue: List<ChatQueuedMessage> = emptyList(),
     val promptImages: Boolean = false,
+    // The agent lists the session's files for `@` suggestions and takes `mentions`.
+    val promptMentions: Boolean = false,
     val turnStartedAt: String? = null,
     val cancelling: Boolean = false,
     // The agent takes a message during a running turn ("Send now" on queued messages).
@@ -353,6 +355,7 @@ internal object ChatJson {
             ChatQueuedMessage(id = id, text = q.str("text").orEmpty(), images = q.long("images")?.toInt() ?: 0)
         },
         promptImages = obj.obj("prompt_caps")?.bool("image") == true,
+        promptMentions = obj.obj("prompt_caps")?.bool("mentions") == true,
         turnStartedAt = obj.str("turn_started_at"),
         cancelling = obj.bool("cancelling") == true,
         steering = obj.bool("steering") == true,

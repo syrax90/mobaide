@@ -76,6 +76,7 @@ from mobaide.agent.git.changes_conflicts import (
 from mobaide.agent.fs.models import FS_CAPABILITIES
 from mobaide.agent.updater import newer_version
 from mobaide.agent.fs.service import FsListError, list_dirs
+from mobaide.agent.fs.session_files import list_session_files
 from mobaide.agent.git.changes_jobs import job_registry
 from mobaide.agent.git.changes_models import (
     GIT_CAPABILITIES,
@@ -294,6 +295,10 @@ MAX_GIT_PROXY_TASKS = 4
 # its own set: four long delete batches must not turn the picker into a 503.
 _GIT_WORKTREE_BASES_ROUTE = re.compile(r"^/api/projects/[^/]+/git/worktree-bases$")
 MAX_WORKTREE_BASES_TASKS = 4
+# The composer's @ suggestions list a session's folder: git or a walk can
+# take seconds on a large tree, so they run aside too.
+_SESSION_FILES_ROUTE = re.compile(r"^/api/sessions/([^/]+)/files$")
+MAX_FILES_PROXY_TASKS = 8
 # Session creation runs aside as well: a worktree create fetches from the
 # remote and holds the repo lock, and an inline await would freeze input to
 # every session and the pings until it ends.
@@ -553,6 +558,8 @@ class RelayClient:
         # In-flight ``POST /api/projects/{name}/git/items:delete`` batches.
         self._git_proxy_tasks: set[asyncio.Task] = set()
         self._worktree_bases_tasks: set[asyncio.Task] = set()
+        # In-flight ``GET /api/sessions/{id}/files`` listings.
+        self._files_proxy_tasks: set[asyncio.Task] = set()
         # In-flight session creates (``POST /api/sessions`` and the legacy
         # ``create_session`` control message).
         self._session_create_tasks: set[asyncio.Task] = set()
@@ -602,6 +609,7 @@ class RelayClient:
             *self._autoscan_proxy_tasks,
             *self._git_proxy_tasks,
             *self._worktree_bases_tasks,
+            *self._files_proxy_tasks,
             *self._session_create_tasks,
         ]:
             task.cancel()
@@ -941,6 +949,8 @@ class RelayClient:
                     self._run_git_proxy,
                     "relay-worktree-bases",
                 )
+            elif _SESSION_FILES_ROUTE.match(path):
+                self._spawn_files_proxy(ctrl)
             elif (
                 path == "/api/sessions"
                 and str(ctrl.get("method", "GET")).upper() == "POST"
@@ -2114,6 +2124,10 @@ class RelayClient:
         if session_git_resp is not None:
             return session_git_resp
 
+        files_resp = await self._dispatch_session_files(method, path, query)
+        if files_resp is not None:
+            return files_resp
+
         linear_resp = await self._dispatch_linear_discovery(method, path)
         if linear_resp is not None:
             return linear_resp
@@ -2884,6 +2898,57 @@ class RelayClient:
             logger.warning("relay.proxy_request_failed path=%s: %s", path, exc)
             result = {"status": 500, "body": {"detail": str(exc)}}
         await self._send_proxy_result(ctrl, result)
+
+    def _spawn_files_proxy(self, ctrl: dict) -> None:
+        self._spawn_aside(
+            ctrl,
+            self._files_proxy_tasks,
+            MAX_FILES_PROXY_TASKS,
+            self._run_files_proxy,
+            "relay-session-files",
+        )
+
+    async def _run_files_proxy(self, ctrl: dict) -> None:
+        method = str(ctrl.get("method", "GET")).upper()
+        path = str(ctrl.get("path", ""))
+        try:
+            result = await self._dispatch_session_files(method, path, ctrl.get("query"))
+            if result is None:
+                result = {
+                    "status": 404,
+                    "body": {"detail": f"Unknown proxy route: {method} {path}"},
+                }
+        except Exception as exc:
+            logger.warning("relay.proxy_request_failed path=%s: %s", path, exc)
+            result = {"status": 500, "body": {"detail": str(exc)}}
+        await self._send_proxy_result(ctrl, result)
+
+    async def _dispatch_session_files(
+        self, method: str, path: str, query: dict | None
+    ) -> dict | None:
+        """``GET /api/sessions/{id}/files`` with the same service call and
+        bodies as ``mobaide.agent.fs.router``; ``None`` for any other route."""
+        m = _SESSION_FILES_ROUTE.match(path)
+        if m is None or method != "GET":
+            return None
+        session_id = m.group(1)
+        session = await self._session_manager.get_session(session_id)
+        if session is None:
+            return {
+                "status": 404,
+                "body": {"detail": f"Session '{session_id}' not found"},
+            }
+        q = query or {}
+        raw_limit = q.get("limit")
+        try:
+            limit = int(raw_limit) if raw_limit is not None else None
+        except (TypeError, ValueError):
+            return {"status": 422, "body": {"detail": "limit must be an integer"}}
+        try:
+            listing = await list_session_files(session.to_info().cwd, q.get("q"), limit)
+        except FsListError as exc:
+            return {"status": exc.status, "body": {"detail": exc.detail}}
+        return {"status": 200, "body": listing.model_dump()}
 
     async def _run_chat_proxy(self, ctrl: dict) -> None:
         method = str(ctrl.get("method", "GET")).upper()

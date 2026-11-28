@@ -652,6 +652,7 @@ struct ChatStatePatch: Sendable, Decodable {
     var requests: [ChatPendingRequest]?
     var queue: [ChatQueuedMessage]?
     var promptImages: Bool?
+    var promptMentions: Bool?
     var turnStartedAt: String??
     var cancelling: Bool?
     var steering: Bool?
@@ -683,6 +684,7 @@ struct ChatStatePatch: Sendable, Decodable {
         if c.has("prompt_caps") {
             let caps = try? c.nestedContainer(keyedBy: ChatKey.self, forKey: "prompt_caps")
             promptImages = caps?.bool("image") ?? false
+            promptMentions = caps?.bool("mentions") ?? false
         }
         turnStartedAt = nullable(String.self, "turn_started_at")
         if c.has("cancelling") { cancelling = c.bool("cancelling") ?? false }
@@ -714,6 +716,8 @@ struct ChatState: Equatable, Sendable {
     var requests: [ChatPendingRequest] = []
     var queue: [ChatQueuedMessage] = []
     var promptImages = false
+    /// The agent lists the session's files for `@` suggestions and takes `mentions`.
+    var promptMentions = false
     var turnStartedAt: String?
     var cancelling = false
     /// The agent takes a message during a running turn ("Send now").
@@ -741,6 +745,7 @@ struct ChatState: Equatable, Sendable {
         if let value = patch.requests { requests = value }
         if let value = patch.queue { queue = value }
         if let value = patch.promptImages { promptImages = value }
+        if let value = patch.promptMentions { promptMentions = value }
         if let value = patch.turnStartedAt { turnStartedAt = value }
         if let value = patch.cancelling { cancelling = value }
         if let value = patch.steering { steering = value }

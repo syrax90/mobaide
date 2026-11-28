@@ -4098,6 +4098,47 @@
         "title": "ScrollbackResponse",
         "type": "object"
       },
+      "SessionFileEntry": {
+        "description": "One file or folder of a session's folder, relative to it with ``/``\nseparators on every host; a folder has no trailing separator.",
+        "properties": {
+          "dir": {
+            "title": "Dir",
+            "type": "boolean"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "dir"
+        ],
+        "title": "SessionFileEntry",
+        "type": "object"
+      },
+      "SessionFilesResponse": {
+        "description": "The best matches for an ``@`` mention, best first.\n\n``truncated`` means a cap on count, bytes or time stopped the listing\nbehind them, so a file the query should match may be missing.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/SessionFileEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entries",
+          "truncated"
+        ],
+        "title": "SessionFilesResponse",
+        "type": "object"
+      },
       "SessionResponse": {
         "description": "REST response for a single session.\n\nField set is the canonical wire shape \u2014 must stay in lockstep with\n:func:`mobaide.core.models.session_to_wire_dict` and the Android\n``SessionResponse`` DTO. Add or rename a field in one place only.",
         "properties": {
@@ -7023,6 +7064,75 @@
         "summary": "Respond To Chat Request",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/files": {
+      "get": {
+        "description": "Files and folders of the session's own folder that match ``q``, best\nfirst; ``limit`` is clamped to 1\u201350.",
+        "operationId": "list_session_files_endpoint_api_sessions__session_id__files_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionFilesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Session Files Endpoint",
+        "tags": [
+          "fs"
         ]
       }
     },

@@ -125,6 +125,26 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-27: file mentions in chat
+
+Additive delta within proto-v7 (2026-11-27): **one agent route, one optional `prompt` field, one `prompt_caps` key. No version bump; `central_server` is untouched.**
+
+| Where | Change |
+|-------|--------|
+| `GET /api/sessions/{session_id}/files?q=&limit=` | `SessionFilesResponse` `{entries: [{path, dir}], truncated}`: files and folders of the session's own folder that match `q`, best first. `limit` 1–50 (default 20; values out of range are clamped). `404` unknown session or missing folder, `403` unreadable folder, `503` no answer within 4 s, `422` a `limit` that is not an integer. |
+| `'c'` command `prompt` | Optional `mentions`: paths relative to the session folder that the text names with `@`. |
+| State key `prompt_caps` | Gains `mentions: true`: `prompt` takes `mentions` and the route above exists. Missing means `false`. |
+
+* Why a state key and not `GET /api/version`: `capabilities.chat` maps agent kinds to their flags, so a boolean there would read as a kind.
+* Listing: `path` is relative to the session's spawn folder (workspace root or worktree), with `/` separators on every host; a folder has no trailing `/`. The client never sends a path. In a git work tree the agent runs `git -c core.fsmonitor=false ls-files -z --cached --others --exclude-standard` (`.gitignore` honoured; 2.5 s and 8 MiB caps), leaves out the tracked files `ls-files --deleted` names, and lists a nested repository as a folder; elsewhere a breadth-first walk that skips dot folders, `node_modules` and `__pycache__` and stops after 1 s. Both stop at 40 000 entries. The parent folders of each listed file are entries with `dir: true`. `truncated: true` when a cap stopped the listing. A listing is kept per folder for 30 s.
+* Ranking happens on the agent, so every client shows the same order. No query: shallow paths first, dot names last, then by name. A query (case-insensitive, `\` read as `/`): name prefix, name substring, path prefix, path substring, then the query's characters in order anywhere in the path; shorter paths win ties.
+* Over the relay the route runs aside from the tunnel reader (at most 8 in flight, then `503`).
+* `mentions`: a list, or the prompt fails with "Invalid mentions". Only the first 10 entries are checked, duplicates once. Each must be a relative path inside the session folder that exists once symlinks are resolved; a trailing `/` is allowed. An absolute path, a `..` part, a symlink that leads out of the folder or a missing path is dropped silently: the text still names it.
+* Each kept mention goes to the agent as an ACP `resource_link` after the text and images: `uri` the `file://` URI of the path under the session folder as the agent was given it (`file:///C:/…` on Windows; a folder's URI ends with `/`), `name` its last part, `title` the relative path, `mimeType` guessed from a file's extension but only a `text/*` or `image/*` type, `application/pdf` or `application/json` (none for a folder or another type: the host's table calls `.ts` `video/mp2t`). Queued sends, **Send now** (both steering styles), the resend after a sign-in and the resend after a reload keep the links. A per-agent launch switch can turn the links off; that agent gets the `@path` text only.
+* The `user` item gains one attachment `{kind: "file", name}` per kept mention, `name` the relative path (a folder ends with `/`). On `session/load`, a replayed user text that ends with `[@name](file://…)` links (how Claude Code, Codex and the Pi bridge keep a link) or `[Resource link: file://…]` (GitHub Copilot) shows them as file attachments instead (at most 20 per text), named by the path relative to the session folder when it lies inside it (a folder ends with `/`). A replayed `resource_link` block (Antigravity, OpenCode) is named the same way.
+* Pi has no resource links: the bridge adds one `[@name](uri)` line per link to the message text.
+* Clients offer suggestions only while `prompt_caps.mentions` is `true`. When the token at the cursor starts with `@` (at the start of the text or after whitespace), they ask with `q` = the text after the `@` up to the cursor, 150 ms after the last change, and show the answer in the suggestion list. A pick replaces the token with `@path `; a folder with `@path/` and no space, so the list goes on inside it. A path picked before counts as one token even when it has spaces (`@my docs/`), so the list also goes on inside such a folder and a later pick replaces the whole path. On send, `mentions` holds the picked paths whose `@path` token is still in the text; at each `@` only the longest picked path that ends there counts, so `@notes.txt backup` does not also send a `notes.txt` it replaced. A failed request shows no list. Older clients send no `mentions`; an older agent ignores the field and advertises no flag.
+
 ### Delta 2026-11-27: answer a chat permission from the notification
 
 Additive delta within proto-v7 (2026-11-27): **one session field, one agent route, two user-event fields and one APNs category. No version bump.**
@@ -869,7 +889,7 @@ Chat sessions use the same `/ws/session/{id}` and `CH_SESSION_IO` channel. Two f
 | Command `op` | Fields | Effect |
 |--------------|--------|--------|
 | `sync` | `epoch?`, `after_seq?` | The missed `events` (or an empty `events` ack), else a `snapshot`. No `result`. |
-| `prompt` | `text`, `images?` (`[{mime, data}]`, ≤ 4, base64 ≤ 1.5 MB each and ≤ 3.5 MB together, so the frame stays under the 4 MiB tunnel limit) | Sends the message, or queues it while a turn runs (`data: {queued, queue_id}`). |
+| `prompt` | `text`, `images?` (`[{mime, data}]`, ≤ 4, base64 ≤ 1.5 MB each and ≤ 3.5 MB together, so the frame stays under the 4 MiB tunnel limit), `mentions?` (relative paths, ≤ 10; Delta 2026-11-27 file mentions) | Sends the message, or queues it while a turn runs (`data: {queued, queue_id}`). |
 | `cancel` | — | Cancels the turn (`session/cancel`); pending requests are answered as cancelled. |
 | `set_config` | `config_id`, `value` | `session/set_config_option` (or `session/set_mode` for agents without config options). |
 | `respond` | `request_id`, `option_id` or `action` + `values` | Answers a permission or a form question; the first answer wins. |
