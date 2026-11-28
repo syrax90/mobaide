@@ -333,6 +333,14 @@ _PROCESS_SET_QUOTA = 0x0100
 _PROCESS_TERMINATE = 0x0001
 
 
+def _inheritable(stream) -> int | None:
+    """The stream's file descriptor, or None (inherit) when it has none."""
+    try:
+        return stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
 def _spawn_and_wait_windows(args: list[str]) -> NoReturn:
     """Spawn the agent and propagate its exit code. Windows-only.
 
@@ -429,8 +437,15 @@ def _spawn_and_wait_windows(args: list[str]) -> NoReturn:
             kernel32.CloseHandle(job_handle)
             job_handle = None
 
+    # Pass the log files that the supervisor gave this launcher. Without
+    # them, CREATE_NO_WINDOW gives the agent a hidden console of its own,
+    # and every log line it writes is lost.
     proc = subprocess.Popen(
-        args, close_fds=True, creationflags=subprocess.CREATE_NO_WINDOW
+        args,
+        stdout=_inheritable(sys.stdout),
+        stderr=_inheritable(sys.stderr),
+        close_fds=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
     )
 
     if job_handle:

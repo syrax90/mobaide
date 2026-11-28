@@ -360,6 +360,16 @@ def test_spawn_and_wait_windows_attaches_job_object(monkeypatch):
     monkeypatch.setattr(_subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(launcher.subprocess, "Popen", _FakePopen)
 
+    class _LogFile:
+        def __init__(self, fd: int) -> None:
+            self._fd = fd
+
+        def fileno(self) -> int:
+            return self._fd
+
+    monkeypatch.setattr(launcher.sys, "stdout", _LogFile(11))
+    monkeypatch.setattr(launcher.sys, "stderr", _LogFile(12))
+
     with pytest.raises(SystemExit) as excinfo:
         launcher._spawn_and_wait_windows(["python.exe", "-m", "mobaide", "run"])
     assert excinfo.value.code == 0
@@ -379,6 +389,8 @@ def test_spawn_and_wait_windows_attaches_job_object(monkeypatch):
     popen_call = next(c for c in calls if c[0] == "Popen")
     popen_kwargs = popen_call[1][1]
     assert popen_kwargs.get("close_fds") is True
+    # The supervisor's log files: without them every agent log line is lost.
+    assert (popen_kwargs.get("stdout"), popen_kwargs.get("stderr")) == (11, 12)
     flags = popen_kwargs.get("creationflags", 0)
     assert not (flags & _subprocess.CREATE_NEW_PROCESS_GROUP), (
         "CREATE_NEW_PROCESS_GROUP is incompatible with the "
