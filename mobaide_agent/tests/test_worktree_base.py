@@ -3,6 +3,7 @@ explicit ``base_branch``, the ``GET /worktree-bases`` listing and the
 per-workspace memory of the last choice."""
 from __future__ import annotations
 
+import asyncio
 import atexit
 import os
 import shutil
@@ -204,6 +205,138 @@ class TestListWorktreeBases:
 
         assert kept.last_used == "origin/develop"
         assert gone.last_used is None
+
+
+    async def test_branch_pushed_after_the_clone_is_listed(self, clone, tmp_path):
+        seed = str(tmp_path / "seed")
+        run_git_sync(seed, "checkout", "-q", "-b", "pushed-later")
+        write_file(seed, "later.txt", b"later\n")
+        commit_all(seed, "pushed after the clone")
+        run_git_sync(seed, "push", "-q", "origin", "pushed-later")
+
+        resp = await list_worktree_bases(clone, _manager(), last_used=None)
+
+        assert ("origin/pushed-later", "remote") in {(r.ref, r.kind) for r in resp.refs}
+
+    async def test_branch_deleted_on_the_remote_is_dropped(self, clone, tmp_path):
+        run_git_sync(str(tmp_path / "seed"), "push", "-q", "origin", "--delete", "develop")
+
+        resp = await list_worktree_bases(clone, _manager(), last_used=None)
+
+        assert "origin/develop" not in {r.ref for r in resp.refs}
+
+    async def test_unreachable_remote_lists_the_cached_refs(self, clone, tmp_path):
+        run_git_sync(clone, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+
+        resp = await list_worktree_bases(clone, _manager(), last_used=None)
+
+        assert {r.ref for r in resp.refs} >= {"origin/main", "origin/develop"}
+
+    async def test_recent_fetch_is_reused_then_refetched_once_stale(
+        self, clone, tmp_path, monkeypatch
+    ):
+        mgr = _manager()
+        seed = str(tmp_path / "seed")
+        await list_worktree_bases(clone, mgr, last_used=None)
+        run_git_sync(seed, "checkout", "-q", "-b", "fresh")
+        run_git_sync(seed, "push", "-q", "origin", "fresh")
+
+        cached = await list_worktree_bases(clone, mgr, last_used=None)
+        monkeypatch.setattr("mobaide.linear.worktree._REMOTES_FRESH_FOR", 0.0)
+        stale = await list_worktree_bases(clone, mgr, last_used=None)
+
+        assert "origin/fresh" not in {r.ref for r in cached.refs}
+        assert "origin/fresh" in {r.ref for r in stale.refs}
+
+
+class TestRefreshRemotes:
+    async def test_concurrent_callers_share_one_fetch(self):
+        fetches: list[tuple[str, ...]] = []
+        release = asyncio.Event()
+
+        async def fake_fetch(*args: str, cwd: str) -> None:
+            fetches.append(args)
+            await release.wait()
+
+        mgr = _manager()
+        with patch("mobaide.linear.worktree._fetch", fake_fetch):
+            calls = [asyncio.create_task(mgr.refresh_remotes("/r")) for _ in range(3)]
+            await asyncio.sleep(0)
+            release.set()
+            await asyncio.gather(*calls)
+
+        assert fetches == [("--all", "--prune")]
+
+    async def test_runs_while_a_create_holds_the_repo_lock(self, tmp_path):
+        fetches: list[str] = []
+
+        async def fake_fetch(*args: str, cwd: str) -> None:
+            fetches.append(cwd)
+
+        mgr = _manager()
+        root = str(tmp_path)
+        with patch("mobaide.linear.worktree._fetch", fake_fetch):
+            async with mgr._lock_for(root):
+                await asyncio.wait_for(mgr.refresh_remotes(root), timeout=5)
+
+        assert fetches == [root]
+
+    async def test_caller_answers_after_the_wait_while_the_fetch_runs_on(self):
+        fetches: list[tuple[str, ...]] = []
+        release = asyncio.Event()
+        done = asyncio.Event()
+
+        async def fake_fetch(*args: str, cwd: str) -> None:
+            fetches.append(args)
+            await release.wait()
+            done.set()
+
+        mgr = _manager()
+        with patch("mobaide.linear.worktree._fetch", fake_fetch), patch(
+            "mobaide.linear.worktree._REMOTES_WAIT", 0.01,
+        ):
+            await asyncio.wait_for(mgr.refresh_remotes("/r"), timeout=5)
+            assert fetches == [("--all", "--prune")]
+            assert not done.is_set()
+
+            await asyncio.wait_for(mgr.refresh_remotes("/r"), timeout=5)
+            assert fetches == [("--all", "--prune")]
+
+            release.set()
+            await asyncio.wait_for(done.wait(), timeout=5)
+            await asyncio.sleep(0)
+            await asyncio.wait_for(mgr.refresh_remotes("/r"), timeout=5)
+
+        assert fetches == [("--all", "--prune")]
+
+    async def test_refetches_once_the_last_fetch_is_stale(self):
+        fetches: list[str] = []
+
+        async def fake_fetch(*args: str, cwd: str) -> None:
+            fetches.append(cwd)
+
+        mgr = _manager()
+        with patch("mobaide.linear.worktree._fetch", fake_fetch), patch(
+            "mobaide.linear.worktree._REMOTES_FRESH_FOR", 0.0,
+        ):
+            await mgr.refresh_remotes("/r")
+            await mgr.refresh_remotes("/r")
+
+        assert fetches == ["/r", "/r"]
+
+    async def test_a_failed_fetch_answers_and_is_not_retried_at_once(self):
+        attempts: list[str] = []
+
+        async def failing_fetch(*args: str, cwd: str) -> None:
+            attempts.append(cwd)
+            raise OSError("offline")
+
+        mgr = _manager()
+        with patch("mobaide.linear.worktree._fetch", failing_fetch):
+            await asyncio.wait_for(mgr.refresh_remotes("/r"), timeout=5)
+            await asyncio.wait_for(mgr.refresh_remotes("/r"), timeout=5)
+
+        assert attempts == ["/r"]
 
 
 class TestWorkspacesStoreLastBase:

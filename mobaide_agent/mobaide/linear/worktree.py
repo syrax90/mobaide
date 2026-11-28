@@ -39,6 +39,12 @@ _TIMEOUT_RC = 124
 # timeout again would push the later ones past the proxy budget.
 _FETCH_BACKOFF = 60.0
 _fetch_timed_out_at: dict[tuple[str, tuple[str, ...]], float] = {}
+# The base-branch picker refetches on every open and window focus; one
+# network fetch per repo in this window serves all of them.
+_REMOTES_FRESH_FOR = 30.0
+# A listing waits out the whole fetch bound: nothing tells an open picker
+# that refs changed later. The margin covers the thread hand-off.
+_REMOTES_WAIT = _FETCH_TIMEOUT + 1.0
 
 
 @dataclass
@@ -466,6 +472,8 @@ class WorktreeManager:
         self._branch_prefix = branch_prefix
         self._main_branch = main_branch
         self._repo_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._refresh_tasks: dict[str, asyncio.Task[None]] = {}
+        self._remotes_fetched_at: dict[str, float] = {}
 
     def _lock_for(self, workspace_root: str) -> asyncio.Lock:
         try:
@@ -543,6 +551,35 @@ class WorktreeManager:
         ):
             return self._main_branch
         return None
+
+    async def refresh_remotes(self, workspace_root: str) -> None:
+        """Best-effort ``fetch --all --prune`` of the remote-tracking refs.
+
+        Callers share one fetch, reused for ``_REMOTES_FRESH_FOR``, and wait
+        at most ``_REMOTES_WAIT``. Takes no repo lock, so a running create
+        never delays a listing; offline or a timeout keeps the cached refs.
+        """
+        key = _canonical_root(workspace_root)
+        task = self._refresh_tasks.get(key)
+        if task is None:
+            fetched_at = self._remotes_fetched_at.get(key)
+            if fetched_at is not None and time.monotonic() - fetched_at < _REMOTES_FRESH_FOR:
+                return
+            task = asyncio.create_task(
+                self._fetch_remotes(key, workspace_root),
+                name="worktree-refresh-remotes",
+            )
+            self._refresh_tasks[key] = task
+        await asyncio.wait({task}, timeout=_REMOTES_WAIT)
+
+    async def _fetch_remotes(self, key: str, workspace_root: str) -> None:
+        try:
+            await _fetch("--all", "--prune", cwd=workspace_root)
+        except Exception:
+            logger.warning("worktree.refresh_remotes_failed", exc_info=True)
+        finally:
+            self._remotes_fetched_at[key] = time.monotonic()
+            self._refresh_tasks.pop(key, None)
 
     async def _remote_of(self, workspace_root: str, ref: str) -> str | None:
         """The configured remote ``ref`` (``<remote>/<branch>``) lives under;

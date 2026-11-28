@@ -291,6 +291,10 @@ _LINEAR_DISCOVERY_ROUTE = re.compile(r"^/api/projects/[^/]+/linear/(labels|state
 # even the Git screen's own list request — until it ends.
 _GIT_ITEMS_DELETE_ROUTE = re.compile(r"^/api/projects/[^/]+/git/items:delete$")
 MAX_GIT_PROXY_TASKS = 4
+# The base-branch listing fetches the remotes first, so it runs aside too, in
+# its own set: four long delete batches must not turn the picker into a 503.
+_GIT_WORKTREE_BASES_ROUTE = re.compile(r"^/api/projects/[^/]+/git/worktree-bases$")
+MAX_WORKTREE_BASES_TASKS = 4
 # The composer's @ suggestions list a session's folder: git or a walk can
 # take seconds on a large tree, so they run aside too.
 _SESSION_FILES_ROUTE = re.compile(r"^/api/sessions/([^/]+)/files$")
@@ -553,6 +557,7 @@ class RelayClient:
         self._autoscan_proxy_tasks: set[asyncio.Task] = set()
         # In-flight ``POST /api/projects/{name}/git/items:delete`` batches.
         self._git_proxy_tasks: set[asyncio.Task] = set()
+        self._worktree_bases_tasks: set[asyncio.Task] = set()
         # In-flight ``GET /api/sessions/{id}/files`` listings.
         self._files_proxy_tasks: set[asyncio.Task] = set()
         # In-flight session creates (``POST /api/sessions`` and the legacy
@@ -603,6 +608,7 @@ class RelayClient:
             *self._chat_proxy_tasks,
             *self._autoscan_proxy_tasks,
             *self._git_proxy_tasks,
+            *self._worktree_bases_tasks,
             *self._files_proxy_tasks,
             *self._session_create_tasks,
         ]:
@@ -935,6 +941,14 @@ class RelayClient:
                 self._spawn_autoscan_proxy(ctrl, ws)
             elif _GIT_ITEMS_DELETE_ROUTE.match(path):
                 self._spawn_git_proxy(ctrl)
+            elif _GIT_WORKTREE_BASES_ROUTE.match(path):
+                self._spawn_aside(
+                    ctrl,
+                    self._worktree_bases_tasks,
+                    MAX_WORKTREE_BASES_TASKS,
+                    self._run_git_proxy,
+                    "relay-worktree-bases",
+                )
             elif _SESSION_FILES_ROUTE.match(path):
                 self._spawn_files_proxy(ctrl)
             elif (

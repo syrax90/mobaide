@@ -239,7 +239,7 @@ For stored git workspaces, tapping the tile first shows a "Terminal session" con
 
 When "Create worktree" is on for a git workspace, the config page shows a "Base branch" picker. The new worktree branch starts from the selected branch. This works for Claude, Codex, Antigravity, OpenCode, GitHub Copilot, Cursor, Junie, Pi and Terminal sessions.
 
-- **List.** The picker lists the local branches and the remote-tracking branches. It has a search field. The default branch is first, then the newest branches.
+- **List.** The picker lists the local branches and the remote-tracking branches. Before it lists, the agent runs a best-effort fetch of all remotes, so new remote branches appear and deleted ones disappear. The fetch has a 10 s limit, never asks for a sign-in, and is reused for 30 s. Offline, the picker shows the last fetched branches. It has a search field. The default branch is first, then the newest branches.
 - **Default.** The agent picks `origin/HEAD` first, then `origin/main`, then the local `main`.
 - **Memory.** The agent remembers the last base branch for each workspace. Every client and device preselects it the next time. A pick of "Default branch" clears it. If that branch is gone, the picker selects the default.
 - **Fresh start.** For a remote base, the agent fetches that remote before it creates the worktree. The fetch has a 10 s time limit and never asks for a sign-in. If the remote does not answer in time, the worktree starts from the last fetched state, and the next minute of creates in that workspace skips the fetch.
