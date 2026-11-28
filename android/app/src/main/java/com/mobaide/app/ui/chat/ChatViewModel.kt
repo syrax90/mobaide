@@ -502,7 +502,7 @@ class ChatViewModel @Inject constructor(
     private fun refreshMentions(value: TextFieldValue) {
         val ui = _ui.value
         val token = if (ui.state.promptMentions && ui.live && !ui.sessionClosed && value.selection.collapsed) {
-            ChatMentions.tokenAt(value.text, value.selection.end)
+            ChatMentions.tokenAt(value.text, value.selection.end, pickedMentions)
         } else {
             null
         }
@@ -535,7 +535,7 @@ class ChatViewModel @Inject constructor(
     /** Replaces the `@` token at the cursor with [entry]; a folder keeps the list open inside it. */
     fun pickMention(entry: SessionFileEntry) {
         val current = _composer.value
-        val token = ChatMentions.tokenAt(current.text, current.selection.end) ?: return
+        val token = ChatMentions.tokenAt(current.text, current.selection.end, pickedMentions) ?: return
         val value = ChatMentions.value(entry.path, entry.dir)
         val (text, cursor) = ChatMentions.insert(current.text, token, value)
         pickedMentions.remove(value)

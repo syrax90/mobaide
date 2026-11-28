@@ -14,6 +14,9 @@ object ChatMentions {
 
     private const val TRAILING_PUNCTUATION = ".,;:!?)]}'\""
 
+    /** How far back from the cursor a picked path's `@` is looked for (the agent's path cap). */
+    private const val PICKED_SCAN_MAX = 4096
+
     /** The `@` token around the cursor: `[start, end)`; [query] is what is typed after the `@`. */
     data class Token(val start: Int, val end: Int, val query: String)
 
@@ -21,9 +24,34 @@ object ChatMentions {
      * The token the cursor is in when it starts with `@` at the start of the text
      * or after whitespace, with no whitespace up to the cursor; null otherwise. The
      * `@` must be before the cursor: a cursor just in front of it is not in the token.
+     * A [picked] path counts as one token even with spaces in it (`@my docs/`),
+     * together with what is typed right after it.
      */
-    fun tokenAt(text: String, cursor: Int): Token? {
+    fun tokenAt(text: String, cursor: Int, picked: List<String> = emptyList()): Token? {
         val at = cursor.coerceIn(0, text.length)
+        return pickedTokenAt(text, at, picked) ?: plainTokenAt(text, at)
+    }
+
+    /** The token of a picked path the cursor is in, found from the nearest `@` before the cursor. */
+    private fun pickedTokenAt(text: String, at: Int, picked: List<String>): Token? {
+        if (picked.isEmpty()) return null
+        val floor = maxOf(0, at - PICKED_SCAN_MAX)
+        var p = at - 1
+        while (p >= floor && text[p] != '\n') {
+            if (text[p] == '@' && (p == 0 || text[p - 1].isWhitespace())) {
+                val longest = picked.filter { text.startsWith(it, p + 1) }.maxOfOrNull { it.length }
+                if (longest != null) {
+                    var end = p + 1 + longest
+                    while (end < text.length && !text[end].isWhitespace()) end++
+                    if (at <= end) return Token(p, end, text.substring(p + 1, at))
+                }
+            }
+            p--
+        }
+        return null
+    }
+
+    private fun plainTokenAt(text: String, at: Int): Token? {
         var start = at
         while (start > 0 && !text[start - 1].isWhitespace()) start--
         if (start >= at || text[start] != '@') return null

@@ -34,6 +34,22 @@ class ChatMentionsTest {
     }
 
     @Test
+    fun tokenAt_keepsAPickedPathWithSpacesAsOneToken() {
+        val inFolder = "see @my docs/re"
+        val backInFile = "see @my docs/read me.md now"
+
+        val fileToken = ChatMentions.tokenAt(backInFile, 7, listOf("my docs/read me.md"))
+
+        assertNull(ChatMentions.tokenAt(inFolder, 15))
+        assertEquals(ChatMentions.Token(4, 15, "my docs/re"), ChatMentions.tokenAt(inFolder, 15, listOf("my docs/")))
+        assertEquals(ChatMentions.Token(4, 23, "my"), fileToken)
+        assertEquals(
+            "see @my docs/other.md now" to 22,
+            ChatMentions.insert(backInFile, fileToken!!, "my docs/other.md"),
+        )
+    }
+
+    @Test
     fun insert_endsAFileWithOneSpace_andLeavesTheCursorInsideAFolder() {
         assertEquals("@src/app.py " to 12, ChatMentions.insert("@sr", ChatMentions.Token(0, 3, "sr"), "src/app.py"))
         assertEquals(

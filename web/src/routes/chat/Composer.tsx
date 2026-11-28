@@ -151,7 +151,10 @@ export function Composer({
     () => (dismissedFor === text ? [] : matchCommands(text, commands)),
     [text, commands, dismissedFor],
   );
-  const mention = acceptsMentions && live && !closed ? mentionAt(text, caret ?? text.length) : null;
+  const mention =
+    acceptsMentions && live && !closed
+      ? mentionAt(text, caret ?? text.length, model.draftMentions)
+      : null;
   const mentionStart = mention?.start ?? null;
   const mentionQuery = mention?.query ?? null;
   useEffect(() => {

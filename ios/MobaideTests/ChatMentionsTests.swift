@@ -28,6 +28,23 @@ final class ChatMentionsTests: XCTestCase {
         XCTAssertNil(ChatMentions.token(in: "hi @", cursor: 3))
     }
 
+    func testTokenKeepsAPickedPathWithSpacesAsOneToken() throws {
+        let inFolder = "see @my docs/re"
+        let backInFile = "see @my docs/read me.md now"
+
+        let fileToken = try XCTUnwrap(ChatMentions.token(in: backInFile, cursor: 7, picked: ["my docs/read me.md"]))
+        let replaced = ChatMentions.insert("my docs/other.md", replacing: fileToken, in: backInFile)
+
+        XCTAssertNil(ChatMentions.token(in: inFolder, cursor: 15))
+        XCTAssertEqual(
+            ChatMentions.token(in: inFolder, cursor: 15, picked: ["my docs/"]),
+            .init(start: 4, end: 15, query: "my docs/re")
+        )
+        XCTAssertEqual(fileToken, .init(start: 4, end: 23, query: "my"))
+        XCTAssertEqual(replaced.text, "see @my docs/other.md now")
+        XCTAssertEqual(replaced.cursor, 22)
+    }
+
     func testInsertEndsAFileWithOneSpaceAndLeavesTheCursorInsideAFolder() {
         let atEnd = ChatMentions.insert("src/app.py", replacing: .init(start: 0, end: 3, query: "sr"), in: "@sr")
         let midText = ChatMentions.insert("src/app.py", replacing: .init(start: 4, end: 7, query: "sr"), in: "fix @sr now")

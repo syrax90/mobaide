@@ -861,7 +861,9 @@ final class ChatSessionModel {
 
     /// Replaces the `@` token at the cursor with `entry`; a folder keeps the list open inside it.
     func pickMention(_ entry: SessionFileEntry) {
-        guard let token = ChatMentions.token(in: composerText, cursor: mentionCursor ?? composerText.count) else { return }
+        guard let token = ChatMentions.token(
+            in: composerText, cursor: mentionCursor ?? composerText.count, picked: pickedMentions
+        ) else { return }
         let value = ChatMentions.value(path: entry.path, dir: entry.dir)
         let result = ChatMentions.insert(value, replacing: token, in: composerText)
         pickedMentions.removeAll { $0 == value }
@@ -885,7 +887,7 @@ final class ChatSessionModel {
     private func refreshMentions() {
         guard listSessionFiles != nil, state.promptMentions, isLive, !sessionClosed,
               let cursor = mentionCursor,
-              let token = ChatMentions.token(in: composerText, cursor: cursor)
+              let token = ChatMentions.token(in: composerText, cursor: cursor, picked: pickedMentions)
         else {
             mentionTask?.cancel()
             mentionTask = nil

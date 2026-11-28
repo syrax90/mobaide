@@ -23,6 +23,24 @@ describe('mentionAt', () => {
   });
 });
 
+describe('mentionAt with picked paths', () => {
+  it('keeps a picked path with spaces as one token, so a folder lists its files and a pick replaces the whole path', () => {
+    const inFolder = 'see @my docs/re';
+    const backInFile = 'see @my docs/read me.md now';
+
+    const folderToken = mentionAt(inFolder, 15, ['my docs/']);
+    const fileToken = mentionAt(backInFile, 7, ['my docs/read me.md']);
+
+    expect(mentionAt(inFolder, 15)).toBeNull();
+    expect(folderToken).toEqual({ start: 4, end: 15, query: 'my docs/re' });
+    expect(fileToken).toEqual({ start: 4, end: 23, query: 'my' });
+    expect(fileToken && insertMention(backInFile, fileToken, 'my docs/other.md')).toEqual({
+      text: 'see @my docs/other.md now',
+      caret: 22,
+    });
+  });
+});
+
 describe('insertMention', () => {
   it('ends a file with one space and puts the caret after it', () => {
     const atEnd = '@sr';

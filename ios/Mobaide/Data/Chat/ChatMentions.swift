@@ -14,6 +14,8 @@ enum ChatMentions {
     static let debounce: Duration = .milliseconds(150)
 
     private static let trailingPunctuation: Set<Character> = [".", ",", ";", ":", "!", "?", ")", "]", "}", "'", "\""]
+    /// How far back from the cursor a picked path's `@` is looked for (the agent's path cap).
+    private static let pickedScanMax = 4096
 
     /// The `@` token around the cursor: `start..<end`; `query` is what is typed after the `@`.
     struct Token: Equatable {
@@ -26,11 +28,39 @@ enum ChatMentions {
     /// text or after whitespace, with no whitespace up to the cursor; nil otherwise.
     /// The `@` must be before the cursor: one just in front of it, or a cursor
     /// `composerText.didSet` reads before the selection moves, is not in the token.
-    static func token(in text: String, cursor: Int) -> Token? {
+    /// A `picked` path counts as one token even with spaces in it (`@my docs/`),
+    /// together with what is typed right after it.
+    static func token(in text: String, cursor: Int, picked: [String] = []) -> Token? {
         // Runs on every keystroke: skip the copy of a long draft with no `@`.
         guard text.utf8.contains(UInt8(ascii: "@")) else { return nil }
         let chars = Array(text)
         let at = min(max(cursor, 0), chars.count)
+        return pickedToken(chars, at: at, picked: picked) ?? plainToken(chars, at: at)
+    }
+
+    /// The token of a picked path the cursor is in, found from the nearest `@` before the cursor.
+    private static func pickedToken(_ chars: [Character], at: Int, picked: [String]) -> Token? {
+        guard !picked.isEmpty else { return nil }
+        let values = picked.map(Array.init)
+        let floor = max(0, at - pickedScanMax)
+        var p = at - 1
+        while p >= floor, !chars[p].isNewline {
+            if chars[p] == "@", p == 0 || chars[p - 1].isWhitespace {
+                let longest = values.filter { value in
+                    p + 1 + value.count <= chars.count && chars[(p + 1)..<(p + 1 + value.count)].elementsEqual(value)
+                }.map(\.count).max()
+                if let longest {
+                    var end = p + 1 + longest
+                    while end < chars.count, !chars[end].isWhitespace { end += 1 }
+                    if at <= end { return Token(start: p, end: end, query: String(chars[(p + 1)..<at])) }
+                }
+            }
+            p -= 1
+        }
+        return nil
+    }
+
+    private static func plainToken(_ chars: [Character], at: Int) -> Token? {
         var start = at
         while start > 0, !chars[start - 1].isWhitespace { start -= 1 }
         guard start < at, chars[start] == "@" else { return nil }

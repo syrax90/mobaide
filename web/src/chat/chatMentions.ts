@@ -7,6 +7,8 @@
 
 /** The agent takes at most this many per prompt. */
 export const MAX_MENTIONS = 10;
+/** How far back from the caret a picked path's `@` is looked for (the agent's path cap). */
+const PICKED_SCAN_MAX = 4096;
 
 /** The `@` token around the caret: `[start, end)`; `query` is what is typed after the `@`. */
 export interface MentionToken {
@@ -22,15 +24,43 @@ const TRAILING_PUNCTUATION = /[.,;:!?)\]}'"]/;
  * The token the caret is in when it starts with `@` at the start of the text
  * or after whitespace, with no whitespace up to the caret; null otherwise. The
  * `@` must be before the caret: a caret just in front of it is not in the token.
+ * A `picked` path counts as one token even with spaces in it (`@my docs/`),
+ * together with what is typed right after it.
  */
-export function mentionAt(text: string, caret: number): MentionToken | null {
+export function mentionAt(
+  text: string,
+  caret: number,
+  picked: readonly string[] = [],
+): MentionToken | null {
   const at = Math.min(Math.max(caret, 0), text.length);
+  return pickedMentionAt(text, at, picked) ?? plainMentionAt(text, at);
+}
+
+function plainMentionAt(text: string, at: number): MentionToken | null {
   let start = at;
   while (start > 0 && !isSpace(text[start - 1])) start -= 1;
   if (start === at || text[start] !== '@') return null;
   let end = at;
   while (end < text.length && !isSpace(text[end])) end += 1;
   return { start, end, query: text.slice(start + 1, at) };
+}
+
+/** The token of a picked path the caret is in, found from the nearest `@` before the caret. */
+function pickedMentionAt(text: string, at: number, picked: readonly string[]): MentionToken | null {
+  if (picked.length === 0) return null;
+  const floor = Math.max(0, at - PICKED_SCAN_MAX);
+  for (let p = at - 1; p >= floor && text[p] !== '\n'; p -= 1) {
+    if (text[p] !== '@' || (p > 0 && !isSpace(text[p - 1]))) continue;
+    let longest = -1;
+    for (const value of picked) {
+      if (value.length > longest && text.startsWith(value, p + 1)) longest = value.length;
+    }
+    if (longest < 0) continue;
+    let end = p + 1 + longest;
+    while (end < text.length && !isSpace(text[end])) end += 1;
+    if (at <= end) return { start: p, end, query: text.slice(p + 1, at) };
+  }
+  return null;
 }
 
 /** What the composer holds for a picked entry: folders end in `/`. */
