@@ -713,6 +713,40 @@ def test_wsl_agent_token_travels_in_wslenv_not_on_the_command_line(monkeypatch):
     assert not any("wsl-secret" in a for a in argv)
 
 
+_WSL_NOW = "{23371C25-B1E9-4492-85F2-B5ADFA5A6C45}"
+
+
+def _fw_rule(name=ms.WSL_FIREWALL_RULE, action="Allow", profile="Any", interfaces="Any"):
+    return {"id": "{rule}", "name": name, "action": action, "profile": profile,
+            "interfaces": interfaces}
+
+
+@pytest.mark.parametrize(("rules", "expected"), [
+    # Pinned to the WSL adapter's GUID from before a reboot: the bug this guards.
+    ([_fw_rule(interfaces=["6d0bede9-fe2c-4ac4-a878-024063754413"])], ["no longer exists"]),
+    # ConvertTo-Json collapses a one-item list to the bare item.
+    (_fw_rule(interfaces="23371c25-b1e9-4492-85f2-b5adfa5a6c45"), []),
+    ([_fw_rule()], []),
+    # A "Cancel" on the Defender prompt leaves a block rule; it beats any allow.
+    ([_fw_rule(), _fw_rule(name="python.exe", action="Block", profile="Public")], ["blocks"]),
+    ([_fw_rule(name="python.exe", action="Block", profile="Private")], []),
+])
+def test_wsl_firewall_problems_find_rules_that_keep_the_wsl_agent_out(rules, expected):
+    problems = ms.wsl_firewall_problems({"wsl_adapters": _WSL_NOW, "rules": rules})
+    assert len(problems) == len(expected)
+    for problem, needle in zip(problems, expected):
+        assert needle in problem
+
+
+def test_wsl_firewall_hint_scopes_by_address_range_not_adapter():
+    """The adapter GUID changes on every reboot; the printed rule must not
+    depend on it, and must not open Python to every Public network."""
+    hint = ms.wsl_firewall_hint(9000, "172.31.112.1", [])
+    assert "-RemoteAddress 172.16.0.0/12" in hint
+    assert "-InterfaceAlias" not in hint
+    assert "-LocalPort 9000" in hint
+
+
 def test_cloud_voice_settings_reach_the_server_only_when_asked(monkeypatch, tmp_path):
     """Cloud voice input stays off unless `up` asks for it: a shell that
     exports CLOUD_VOICE_* (a sourced central_server .env) must not silently

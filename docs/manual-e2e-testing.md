@@ -215,7 +215,8 @@ On Windows, `up --wsl` also runs a second agent, `manual-e2e-wsl-agent`, inside 
 **Networking.** The agent tries `127.0.0.1` (mirrored networking), the PC's LAN IP, and the distro's default gateway (the Windows host under NAT networking), and uses the first one that serves `/api/health`.
 
 - With `--host 127.0.0.1` (or a saved loopback host) under NAT networking, the distro cannot see the server's loopback. The script then listens on the Windows side of the WSL network (the distro's default gateway, e.g. `172.31.112.1`) and forwards to the loopback server. Only the WSL network can use that address, so the LAN still cannot connect.
-- If no address works, allow Python through Windows Defender Firewall on **Public** networks as well (the `vEthernet (WSL)` adapter is Public), or set `relay_host`.
+- If no address works, Windows Defender Firewall most likely blocks this env's `python.exe` on the WSL adapter (a Public network). The script then checks this Python's firewall rules and prints what it found: a block rule (left by a cancelled Defender prompt; block rules beat every allow rule), or a `Mobaide manual E2E (WSL)` rule pinned to an old WSL adapter. Windows recreates that adapter with a new id after a reboot or a WSL restart, so a rule pinned to it stops working. It then prints a rule to add once in an admin PowerShell. That rule names the WSL address range (such as `172.16.0.0/12`) instead of the adapter, so it survives reboots. Do not allow Python on all **Public** networks instead: that opens it on every public Wi-Fi. Or set `relay_host`.
+- The script waits 90 s for a Defender prompt only when this Python has no firewall rule yet; Windows shows the prompt only then. Otherwise it stops at once.
 
 **Stopping.** `Ctrl+C`, `stop` and the reaping after a hard kill also stop the agent inside the distro. `--fresh` also empties `~/.mobaide-manual-e2e/agent`. `clean` leaves `~/.mobaide-manual-e2e` in place, so the next run reuses the venv.
 
@@ -277,7 +278,7 @@ On Windows, `up --wsl` also runs a second agent, `manual-e2e-wsl-agent`, inside 
 | `--wsl needs the config file ...` | Copy `tests/e2e/wsl_agent.example.toml` to `tests/e2e/wsl_agent.toml` and fill it in. |
 | `WSL: distro '...' did not start (exit -1, no message)` | Usually a slow first start after an import; the script retries for up to 4 minutes and terminates the half-started distro once. If it keeps failing, run `wsl -d <distro>` by hand to see the error. |
 | `WSL distro '...' is not registered` | Run with `--wsl-reset` to import it from the snapshot, or fix `distro` in the config. |
-| `the agent in '...' cannot reach the server` | Windows Defender Firewall blocks this env's `python.exe` on the WSL adapter (a Public network). Run the `New-NetFirewallRule` command the error prints, once, in an admin PowerShell; or set `relay_host`. |
+| `the agent in '...' cannot reach the server` | Windows Defender Firewall blocks this env's `python.exe` on the WSL adapter (a Public network). The error lists the rules in the way. Run the `Remove-NetFirewallRule` / `New-NetFirewallRule` commands it prints, once, in an admin PowerShell; or set `relay_host`. |
 | State vanished after reboot (Linux/macOS) | `/tmp` may be cleared on reboot; use `--state-dir ~/mobaide-manual-e2e`. |
 
 ## Production safety

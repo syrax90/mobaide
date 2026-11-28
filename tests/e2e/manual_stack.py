@@ -29,9 +29,11 @@ This file is intentionally not named test_*.py so pytest never collects it.
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import platform
@@ -1474,33 +1476,109 @@ def _wsl_probe(cfg: SimpleNamespace, port: int, hosts: list[str], *,
         if time.monotonic() >= deadline:
             return None
         if not told:
-            log("WSL: the agent cannot reach the server yet. If Windows Defender "
-                "Firewall asks about Python, tick Public networks too and allow it; "
-                f"retrying for {wait:.0f}s")
+            log("WSL: the agent cannot reach the server yet. A Windows Defender "
+                "Firewall prompt about Python may be open; retrying for "
+                f"{wait:.0f}s, then printing a rule that covers only the WSL network")
             told = True
         time.sleep(3)
 
 
-def _interface_with_address(address: str) -> str | None:
+WSL_FIREWALL_RULE = "Mobaide manual E2E (WSL)"
+
+# Inbound rules for one program and the WSL adapters' GUIDs, as JSON. The
+# program path comes in through MOBAIDE_FW_PROGRAM, so it needs no quoting.
+_FIREWALL_QUERY_PS = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$exe = $env:MOBAIDE_FW_PROGRAM
+$wsl = @(Get-NetAdapter -IncludeHidden -Name 'vEthernet (WSL*' | ForEach-Object { "$($_.InterfaceGuid)" })
+$rules = @(Get-NetFirewallApplicationFilter | Where-Object { $_.Program -ieq $exe } |
+  Get-NetFirewallRule | Where-Object { "$($_.Direction)" -eq 'Inbound' -and "$($_.Enabled)" -eq 'True' } |
+  ForEach-Object {
+    [pscustomobject]@{
+      id = $_.Name; name = $_.DisplayName; action = "$($_.Action)"; profile = "$($_.Profile)"
+      interfaces = @(($_ | Get-NetFirewallInterfaceFilter).InterfaceAlias | ForEach-Object { "$_" })
+    }
+  })
+ConvertTo-Json -Depth 4 -Compress @{ wsl_adapters = $wsl; rules = $rules }
+"""
+
+
+def _windows_firewall_state(program: str) -> dict | None:
+    """This program's enabled inbound firewall rules and the WSL adapters;
+    None when the query fails (then the caller knows nothing)."""
+    script = base64.b64encode(_FIREWALL_QUERY_PS.encode("utf-16-le")).decode()
     try:
-        import psutil
-    except ImportError:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", script],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "MOBAIDE_FW_PROGRAM": program},
+        )
+        return json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
-    for name, addrs in psutil.net_if_addrs().items():
-        if any(a.address == address for a in addrs):
-            return name
-    return None
 
 
-def _wsl_firewall_hint(port: int, gateway: str) -> str:
-    alias = (_interface_with_address(gateway) if gateway else None) or "vEthernet (WSL*"
+def _as_list(value) -> list:
+    # ConvertTo-Json writes a one-item array as the bare item.
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def _guid(value: str) -> str:
+    return value.strip().strip("{}").lower()
+
+
+def wsl_firewall_problems(state: dict) -> list[str]:
+    """Rules that keep this Python from accepting the WSL agent: a block rule
+    that covers the WSL adapter (block rules win over every allow rule), or
+    our allow rule pinned to a WSL adapter that Windows has since recreated
+    (it gets a new GUID after a reboot or a WSL restart)."""
+    adapters = {_guid(g) for g in _as_list(state.get("wsl_adapters"))}
+    problems = []
+    for rule in _as_list(state.get("rules")):
+        interfaces = {_guid(i) for i in _as_list(rule.get("interfaces"))} - {"any"}
+        on_wsl = not interfaces or bool(interfaces & adapters)
+        profile = rule.get("profile", "")
+        if rule.get("action") == "Block" and on_wsl and ("Public" in profile or profile == "Any"):
+            problems.append(
+                f"rule '{rule.get('name')}' blocks this Python on the WSL network; "
+                f"remove it: Remove-NetFirewallRule -Name '{rule.get('id')}'"
+            )
+        elif rule.get("name") == WSL_FIREWALL_RULE and interfaces and not on_wsl:
+            problems.append(
+                f"rule '{WSL_FIREWALL_RULE}' is pinned to a WSL adapter that no longer "
+                "exists (Windows recreates it after a reboot or a WSL restart)"
+            )
+    return list(dict.fromkeys(problems))
+
+
+def _wsl_remote_range(gateway: str) -> str:
+    """The private block that holds the WSL network; it moves inside that
+    block after a restart, so the rule names the block, not the subnet."""
+    blocks = ("172.16.0.0/12", "192.168.0.0/16", "10.0.0.0/8")
+    with contextlib.suppress(ValueError):
+        address = ipaddress.ip_address(gateway)
+        for block in blocks:
+            if address in ipaddress.ip_network(block):
+                return block
+    return blocks[0]
+
+
+def wsl_firewall_hint(port: int, gateway: str, problems: list[str]) -> str:
+    found = "".join(f"  - {p}\n" for p in problems)
     return (
-        "Windows Defender Firewall most likely blocks this Python on the WSL "
-        "adapter (a Public network). Allow it once from an ADMIN PowerShell -- the "
-        "rule only covers this interpreter, this port and the WSL adapter:\n"
-        f'  New-NetFirewallRule -DisplayName "Mobaide manual E2E (WSL)" '
+        (f"Windows Defender Firewall:\n{found}" if found else
+         "Windows Defender Firewall most likely blocks this Python on the WSL "
+         "adapter (a Public network).\n")
+        + "Allow it once from an ADMIN PowerShell. The rule covers only this "
+        "interpreter, this port and the WSL address range, and it survives reboots "
+        "(do NOT allow Python on all Public networks instead):\n"
+        f'  Remove-NetFirewallRule -DisplayName "{WSL_FIREWALL_RULE}" '
+        "-ErrorAction SilentlyContinue\n"
+        f'  New-NetFirewallRule -DisplayName "{WSL_FIREWALL_RULE}" '
         f"-Direction Inbound -Action Allow -Protocol TCP -LocalPort {port} "
-        f'-Program "{sys.executable}" -InterfaceAlias "{alias}"\n'
+        f'-RemoteAddress {_wsl_remote_range(gateway)} -Program "{sys.executable}"\n'
         "Or set relay_host in the WSL config if the server is reachable elsewhere."
     )
 
@@ -1537,16 +1615,24 @@ def wsl_relay_host(
                 log(f"WSL: server is bound to {args.host}; forwarding "
                     f"{gateway}:{args.port} (the WSL network only) to it")
                 candidates = [gateway]
-    host = _wsl_probe(cfg, args.port, candidates, with_gateway=with_gateway, wait=90)
+    host = _wsl_probe(cfg, args.port, candidates, with_gateway=with_gateway)
     if host:
         return host, forwarder
+    state = _windows_firewall_state(sys.executable)
+    problems = wsl_firewall_problems(state) if state else []
+    # Defender prompts only for a program with no rule at all; with a rule
+    # (or a known problem) there is nothing to wait for.
+    if state is None or not (problems or _as_list(state.get("rules"))):
+        host = _wsl_probe(cfg, args.port, candidates, with_gateway=with_gateway, wait=90)
+        if host:
+            return host, forwarder
     if forwarder is not None:
         forwarder.close()
     tried = candidates + ([gateway] if with_gateway and gateway else [])
     die(
         f"WSL: the agent in '{cfg.distro}' cannot reach the server on port "
         f"{args.port} (tried {', '.join(dict.fromkeys(tried))}).\n"
-        + _wsl_firewall_hint(args.port, gateway)
+        + wsl_firewall_hint(args.port, gateway, problems)
     )
 
 
