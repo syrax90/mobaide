@@ -47,6 +47,9 @@ class ChatFramesFixtureTest {
         "prompt_with_image" to { id ->
             ChatProtocol.prompt(id, "What is on this screen?", listOf(ChatImagePayload("image/png", "iVBORw0KGgo=")))
         },
+        "prompt_with_mentions" to { id ->
+            ChatProtocol.prompt(id, "Explain @src/app.py and @docs/", emptyList(), listOf("src/app.py", "docs/"))
+        },
         "cancel" to { id -> ChatProtocol.cancel(id) },
         "set_config_select" to { id -> ChatProtocol.setConfig(id, "model", JsonPrimitive("sonnet")) },
         "set_config_boolean" to { id -> ChatProtocol.setConfig(id, "fast", JsonPrimitive(true)) },
@@ -175,6 +178,7 @@ class ChatFramesFixtureTest {
         )
         assertEquals(listOf(ChatQueuedMessage("q:14", "Also update the README", 0)), state.queue)
         assertTrue(state.promptImages)
+        assertTrue(state.promptMentions)
         assertTrue(state.steering)
         assertTrue(state.newConversation)
     }

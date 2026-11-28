@@ -30,3 +30,22 @@ class FsDirsResponse(BaseModel):
     path: str
     dirs: list[str]
     truncated: bool
+
+
+class SessionFileEntry(BaseModel):
+    """One file or folder of a session's folder, relative to it with ``/``
+    separators on every host; a folder has no trailing separator."""
+
+    path: str
+    dir: bool
+
+
+class SessionFilesResponse(BaseModel):
+    """The best matches for an ``@`` mention, best first.
+
+    ``truncated`` means a cap on count, bytes or time stopped the listing
+    behind them, so a file the query should match may be missing.
+    """
+
+    entries: list[SessionFileEntry]
+    truncated: bool

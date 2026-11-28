@@ -1,0 +1,30 @@
+{
+  "type": "SessionFilesResponse",
+  "cases": [
+    {
+      "name": "files_and_folders_ranked",
+      "wire": {
+        "entries": [
+          { "path": "src/app.py", "dir": false },
+          { "path": "src/app", "dir": true },
+          { "path": "tests/test_app.py", "dir": false }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "truncated_listing",
+      "wire": {
+        "entries": [{ "path": "node_tools/a.js", "dir": false }],
+        "truncated": true
+      }
+    },
+    {
+      "name": "no_match",
+      "wire": {
+        "entries": [],
+        "truncated": false
+      }
+    }
+  ]
+}

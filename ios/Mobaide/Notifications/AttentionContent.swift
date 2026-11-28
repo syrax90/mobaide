@@ -41,7 +41,7 @@ enum AttentionContent {
         let label = label(for: session)
         switch session.attention {
         case "awaiting_permission":
-            return ("Permission needed", "\(label) is waiting for your approval")
+            return ("Permission needed", permissionBody(label: label, request: session.attention_request))
         case "awaiting_os_permission":
             return (
                 "Action needed on your Mac",
@@ -57,6 +57,27 @@ enum AttentionContent {
         default:
             return nil
         }
+    }
+
+    /// What a chat request asks for, by its ACP tool kind. The server's
+    /// `push/content.py` sends the same words over APNs.
+    static let permissionPhrases: [String: String] = [
+        "execute": "wants to run a command",
+        "edit": "wants to edit files",
+        "delete": "wants to delete files",
+        "move": "wants to move files",
+        "read": "wants to read files",
+        "search": "wants to search files",
+        "fetch": "wants to fetch from the web",
+    ]
+
+    /// "<label> wants to run a command", then the request's own title on a
+    /// second line. A local alert only: an APNs alert never carries the title.
+    static func permissionBody(label: String, request: AttentionRequest?) -> String {
+        guard let request else { return "\(label) is waiting for your approval" }
+        let phrase = permissionPhrases[request.tool_kind] ?? "is waiting for your approval"
+        let title = request.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? "\(label) \(phrase)" : "\(label) \(phrase)\n\(title)"
     }
 
     /// Sessions whose attention warrants a notification — the "attention set"

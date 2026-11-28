@@ -12,12 +12,15 @@ are Pi's own JSONL files, so a chat and ``pi`` in a terminal list and
 continue the same sessions. Pi asks for no approval before a tool call; only
 an extension's dialogs (``extension_ui_request``) become request cards.
 
-It runs as ``python -I pi_bridge.py <pi command...>``: only the standard
-library, no ``mobaide`` imports.
+It runs as ``python -I pi_bridge.py <pi command...> [-- <session options...>]``:
+only the standard library, no ``mobaide`` imports. The options after ``--``
+go to each ``pi`` session; ``pi auth check`` and ``pi --version`` get the
+bare command.
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import re
@@ -39,6 +42,8 @@ ERR_NOT_FOUND = -32002
 
 STEER_METHOD = "_session/steering"
 VERSION_TIMEOUT = 10.0
+AUTH_CHECK_TIMEOUT = 10.0
+SESSION_OPTIONS_SEPARATOR = "--"
 # How long Pi gets for its orderly shutdown before it is killed.
 STOP_GRACE = 1.2
 TERMINATE_GRACE = 0.3
@@ -61,6 +66,8 @@ RESUME_ID_CHARS = frozenset(
 )
 # The ids Pi itself takes for a new session (its ``--session-id``).
 NEW_SESSION_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,198}[A-Za-z0-9])?")
+# A provider id that is safe as a ``pi auth check`` argument.
+PROVIDER_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 WINDOWS_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 # What ``cmd`` reads as syntax outside double quotes.
 CMD_SPECIAL = frozenset("&|<>^()%!,;=")
@@ -77,6 +84,12 @@ THINKING_NAMES = {
     "max": "Max",
 }
 COMPACT_COMMAND = "compact"
+
+# Pi's ``isUsingSubscription``: an OAuth login is a subscription, except for
+# these providers, whose OAuth login gives a pay-per-token key.
+PAY_PER_TOKEN_OAUTH = frozenset({"openrouter", "radius"})
+# Subscriptions whatever the login: Pi's footer counts them so too.
+SUBSCRIPTION_PROVIDERS = frozenset({"kimi-coding"})
 # A choice with this few short options shows as buttons, a longer one as a list.
 BUTTON_OPTIONS_MAX = 4
 BUTTON_LABEL_MAX = 40
@@ -149,6 +162,33 @@ def _text_of(content: Any) -> str:
         for block in content
         if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
     )
+
+
+def _count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def split_argv(argv: list[str]) -> tuple[list[str], list[str]]:
+    """The bridge's argv as the Pi command and the options for each session."""
+    if SESSION_OPTIONS_SEPARATOR not in argv:
+        return argv, []
+    at = argv.index(SESSION_OPTIONS_SEPARATOR)
+    return argv[:at], argv[at + 1 :]
+
+
+def subscription_login(output: bytes, provider: str) -> bool | None:
+    """Whether ``pi auth check --provider <provider> --json`` printed a
+    subscription login; None when it does not say. Pi prices a
+    subscription's turns at list prices too, which is not what the user
+    pays."""
+    lines = output.strip().splitlines()
+    record = _json_line(lines[-1]) if lines else None
+    if record is None or record.get("status") != "ready" or record.get("provider") != provider:
+        return None
+    auth_type = record.get("authType")
+    if not isinstance(auth_type, str) or not auth_type:
+        return None
+    return auth_type == "oauth" and provider not in PAY_PER_TOKEN_OAUTH
 
 
 def agent_dir(env: Mapping[str, str] | None = None) -> str:
@@ -437,6 +477,11 @@ def prompt_parts(blocks: Any) -> tuple[str, list[dict[str, str]]]:
             continue
         if block.get("type") == "text" and isinstance(block.get("text"), str):
             texts.append(block["text"])
+        elif block.get("type") == "resource_link" and isinstance(block.get("uri"), str):
+            # Pi takes text only: the link as Claude Code writes it, which a
+            # replay shows as a file chip again.
+            name = block.get("name") if isinstance(block.get("name"), str) else block["uri"]
+            texts.append(f"[@{name}]({block['uri']})")
         elif block.get("type") == "image" and isinstance(block.get("data"), str):
             images.append(
                 {
@@ -650,8 +695,9 @@ class _Pi:
 
 
 class Bridge:
-    def __init__(self, pi_argv: list[str]) -> None:
+    def __init__(self, pi_argv: list[str], session_options: list[str] | None = None) -> None:
         self._pi_argv = pi_argv
+        self._session_options = session_options or []
         # ``SimpleQueue``: the SIGTERM handler puts into it on the thread that
         # reads it, and a ``Queue`` would deadlock on its own lock there.
         self._events: queue.SimpleQueue[tuple[Any, ...]] = queue.SimpleQueue()
@@ -682,6 +728,13 @@ class Bridge:
         self._streamed: set[int] = set()
         self._tools: dict[str, dict[str, Any]] = {}
         self._compaction: str | None = None
+        # The last context use sent, and Pi's cost of the whole session.
+        self._usage: tuple[int, int] | None = None
+        self._cost: float | None = None
+        # Per provider: a subscription login, not one, or None when unknown.
+        # Kept while the bridge runs: a sign-in from the chat restarts it.
+        self._subscriptions: dict[str, bool | None] = {}
+        self._checking: set[str] = set()
 
     def _write(self, message: dict[str, Any]) -> None:
         data = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
@@ -749,6 +802,8 @@ class Bridge:
                 self._on_pi(event[2])
             elif kind == "pi_exit" and event[1] is self._pi:
                 return self._on_pi_exit(event[1], event[2])
+            elif kind == "auth":
+                self._on_auth(event[1], event[2])
         self._close()
         self._reap_stopped()
         return 0
@@ -876,7 +931,7 @@ class Bridge:
         if self._setup_id is not None:
             raise _Rpc(ERR_INVALID_PARAMS, "A session is already starting")
         self._close()
-        argv = [*self._pi_argv, "--mode", "rpc", *(session or [])]
+        argv = [*self._pi_argv, *self._session_options, "--mode", "rpc", *(session or [])]
         try:
             pi = _Pi(argv, cwd, self._events)
         except (OSError, ValueError) as exc:
@@ -983,6 +1038,8 @@ class Bridge:
             result["sessionId"] = session_id
         self._reply(request_id, result)
         self._send_commands(self._data(results.get("commands")).get("commands"))
+        if loaded:
+            self._request_stats()
 
     def _apply_state(self, state: dict[str, Any]) -> None:
         model = state.get("model")
@@ -1026,6 +1083,8 @@ class Bridge:
         self._streaming = False
         self._tools.clear()
         self._compaction = None
+        self._usage = None
+        self._cost = None
 
     def _on_pi_exit(self, pi: _Pi, returncode: int | None) -> int:
         detail = pi.stderr_tail[-1][:ERROR_MAX] if pi.stderr_tail else ""
@@ -1098,6 +1157,7 @@ class Bridge:
             for tool in self._tools.values():
                 self._update({"sessionUpdate": "tool_call_update", "toolCallId": tool["id"], "status": "failed"})
         self._tools.clear()
+        self._request_stats()
         request_id, self._prompt_id = self._prompt_id, None
         if request_id is None:
             return
@@ -1125,6 +1185,7 @@ class Bridge:
             self._prompt_id = None
             if response.get("success"):
                 self._reply(request_id, {"stopReason": "end_turn"})
+                self._request_stats()
             elif self._stop_asked:
                 self._end_compaction("cancelled", "")
                 self._reply(request_id, {"stopReason": "cancelled"})
@@ -1353,16 +1414,88 @@ class Bridge:
         self._report_usage(message.get("usage"))
 
     def _report_usage(self, usage: Any) -> None:
-        window = self._model.get("contextWindow") if self._model else None
-        used = usage.get("totalTokens") if isinstance(usage, dict) else None
-        if (
-            isinstance(used, int)
-            and isinstance(window, int)
-            and not isinstance(used, bool)
-            and used > 0
-            and window > 0
-        ):
+        window = _count(self._model.get("contextWindow")) if self._model else None
+        used = _count(usage.get("totalTokens")) if isinstance(usage, dict) else None
+        if used is not None and window is not None:
+            self._usage = (used, window)
             self._update({"sessionUpdate": "usage_update", "used": used, "size": window})
+
+    def _request_stats(self) -> None:
+        """Ask Pi for the cost of the whole session. It also counts what no
+        message shows: tools, compaction and branch summaries."""
+        self._call({"type": "get_session_stats"}, self._on_stats)
+
+    def _on_stats(self, response: dict[str, Any]) -> None:
+        data = self._data(response)
+        cost = data.get("cost")
+        if isinstance(cost, bool) or not isinstance(cost, int | float) or not math.isfinite(cost) or cost <= 0:
+            # A local model costs nothing: Pi's footer shows no cost either.
+            return
+        if self._usage is None:
+            context = data.get("contextUsage")
+            if isinstance(context, dict):
+                used, size = _count(context.get("tokens")), _count(context.get("contextWindow"))
+                if used is not None and size is not None:
+                    self._usage = (used, size)
+        self._cost = float(cost)
+        self._send_cost()
+
+    def _send_cost(self) -> None:
+        provider = self._model.get("provider") if self._model else None
+        if self._cost is None or self._usage is None or not isinstance(provider, str):
+            return
+        if self._subscription(provider) is not False:
+            return
+        used, size = self._usage
+        self._update(
+            {
+                "sessionUpdate": "usage_update",
+                "used": used,
+                "size": size,
+                "cost": {"amount": self._cost, "currency": "USD"},
+            }
+        )
+
+    def _subscription(self, provider: str) -> bool | None:
+        """Whether ``provider`` is signed in with a subscription; None while
+        unknown. The first ask starts ``pi auth check``, and its answer
+        sends the cost that waits."""
+        if provider in self._subscriptions:
+            return self._subscriptions[provider]
+        if provider in SUBSCRIPTION_PROVIDERS:
+            self._subscriptions[provider] = True
+            return True
+        if provider not in self._checking:
+            self._checking.add(provider)
+            threading.Thread(target=self._check_auth, args=(provider,), daemon=True).start()
+        return None
+
+    def _check_auth(self, provider: str) -> None:
+        """On a worker thread: a ``pi`` start takes a while, on Windows
+        longer. ``--no-refresh``: a token refresh here could rotate the
+        login under the running ``pi``."""
+        answer: bool | None = None
+        if PROVIDER_ID.fullmatch(provider) is not None:
+            try:
+                done = subprocess.run(
+                    spawn_command(
+                        [*self._pi_argv, "auth", "check", "--provider", provider, "--json", "--no-refresh"]
+                    ),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    timeout=AUTH_CHECK_TIMEOUT,
+                    creationflags=WINDOWS_NO_WINDOW,
+                )
+                answer = subscription_login(done.stdout, provider)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                pass
+        self._events.put(("auth", provider, answer))
+
+    def _on_auth(self, provider: str, subscription: bool | None) -> None:
+        self._checking.discard(provider)
+        self._subscriptions[provider] = subscription
+        self._send_cost()
 
     def _announce(self, pi_id: str, name: str, args: Any) -> dict[str, Any]:
         """Make the tool call known to the client, and complete what it
@@ -1647,10 +1780,11 @@ class Bridge:
 
 
 def main(argv: list[str]) -> int:
-    if not argv:
-        sys.stderr.write("usage: pi_bridge.py <pi command...>\n")
+    pi_argv, session_options = split_argv(argv)
+    if not pi_argv:
+        sys.stderr.write("usage: pi_bridge.py <pi command...> [-- <session options...>]\n")
         return 2
-    bridge = Bridge(argv)
+    bridge = Bridge(pi_argv, session_options)
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, lambda *_: bridge._events.put(("eof",)))
     return bridge.run()

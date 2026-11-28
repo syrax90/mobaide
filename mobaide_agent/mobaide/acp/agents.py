@@ -291,6 +291,10 @@ class ChatLaunchPlan:
     # :mod:`.fork`). An agent may advertise ``fork`` and still copy the whole
     # conversation (OpenCode does): only agents known to read the point say so.
     fork_at_answer: bool = False
+    # Files the user mentions with ``@`` go out as ACP ``resource_link``
+    # blocks next to the text. Off for an agent that mishandles them: it then
+    # gets the ``@path`` in the text only.
+    prompt_links: bool = True
 
 
 class ChatAgentSpec(Protocol):
@@ -1546,8 +1550,9 @@ class PiChatSpec(_ChatSpecBase):
         if options.code_mode and self._fixed_command() is None:
             # Before the worktree, like the missing-binary check.
             await self._launcher.check_code_mode_version(env)
-            # The bridge passes these on to every ``pi`` it starts.
-            argv = [*argv, *PI_CODE_MODE_ARGS]
+            # The bridge passes these on to every ``pi`` session it starts,
+            # and not to ``pi auth check``, which would refuse them.
+            argv = [*argv, pi_bridge.SESSION_OPTIONS_SEPARATOR, *PI_CODE_MODE_ARGS]
         cwd = await self._launcher.resolve_cwd(target, options)
         return ChatLaunchPlan(
             argv=argv,

@@ -2369,15 +2369,15 @@ class TestCodeModePrepare:
         assert "OPENCODE_CONFIG_CONTENT" not in on.env
 
     async def test_pi_chat_bridge_starts_pi_with_the_codemode_tool(self, tmp_path):
-        """The bridge passes the arguments after Pi's path on to every ``pi``
-        it starts, so Code Mode reaches the chat too."""
+        """The bridge passes the options after ``--`` on to every ``pi``
+        session it starts, so Code Mode reaches the chat too."""
         spec = PiChatSpec(FakePiLauncher())
 
         on = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), PiOptions(code_mode=True))
         off = await spec.prepare(AdHocLaunch(cwd=str(tmp_path)), PiOptions())
 
         bridge = [sys.executable, "-I", pi_bridge.__file__, "/opt/pi/bin/pi"]
-        assert on.argv == [*bridge, "--tools", "+codemode"]
+        assert on.argv == [*bridge, "--", "--tools", "+codemode"]
         assert off.argv == bridge
 
     async def test_pi_chat_with_a_command_override_gets_no_extra_arguments(self, tmp_path):

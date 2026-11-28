@@ -1,5 +1,6 @@
 package com.mobaide.app.data.repository
 
+import com.mobaide.app.data.chat.ChatMentions
 import com.mobaide.app.data.events.AgentEvent
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.RestApi
@@ -10,6 +11,7 @@ import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.GitHubSetupRequest
 import com.mobaide.app.data.network.dto.ScrollbackResponse
+import com.mobaide.app.data.network.dto.SessionFileEntry
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
 import kotlinx.coroutines.CoroutineScope
@@ -109,6 +111,10 @@ class SessionRepository(
      *  A stateless read, not server-pushed state, so it stays a plain pass-through
      *  (like [codexLogin]) rather than a cached StateFlow with an event subscription. */
     suspend fun getAgentVersion(): VersionInfoResponse = restApi.getAgentVersion()
+
+    /** The agent's best matches for an `@` mention in a chat session's folder. */
+    suspend fun listSessionFiles(sessionId: String, q: String): List<SessionFileEntry> =
+        restApi.listSessionFiles(sessionId, q, ChatMentions.SUGGESTIONS_LIMIT).entries
 
     suspend fun deleteSession(
         sessionId: String,

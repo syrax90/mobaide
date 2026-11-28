@@ -11,9 +11,11 @@ import difflib
 import posixpath
 import re
 import shlex
+import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from typing import Any
+from urllib.parse import unquote
 
 import orjson
 
@@ -36,6 +38,11 @@ PLAN_MAX = 100
 PROMPT_SUGGESTIONS_MAX = 3
 PROMPT_SUGGESTION_TEXT_MAX = 2000
 CONFIG_OPTIONS_MAX = 40
+# An agent's own session id, as a client or the agent names it (``session/fork``
+# answers, ``chat_resume_id``): a path part on the PC, so no ``/``.
+CHAT_RESUME_ID_PATTERN = r"^[A-Za-z0-9._:-]+$"
+CHAT_RESUME_ID_MAX = 200
+_CHAT_RESUME_ID = re.compile(CHAT_RESUME_ID_PATTERN)
 CONFIG_VALUES_MAX = 200
 FORM_FIELDS_MAX = 20
 FORM_OPTIONS_MAX = 50
@@ -297,6 +304,56 @@ def _without_file_lines(old_text: str | None, new_text: str) -> tuple[str | None
     old_rest = old_text[old_match.end():]
     new_file = not old_rest and old_match.group(0).startswith("-- /dev/null")
     return (None if new_file else old_rest), new_text[new_match.end():]
+
+
+# A ``resource_link`` that claude-agent-acp or codex-acp (``[@name](uri)``) or
+# GitHub Copilot (``[Resource link: uri]``) turned into text. The ``[@…]`` form is
+# cut at known positions, not by a regex that tries every ``](file://``: the
+# name may hold brackets (``[id].vue``).
+_LINK_URI = re.compile(r"file://[^)\s]+")
+_RESOURCE_LINK = re.compile(r"\[Resource link: (file://[^\]\s]+)\]")
+FILE_LINKS_MAX = 20
+
+
+def split_file_links(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """``text`` without the file links at its end (at most
+    ``FILE_LINKS_MAX``), and those links as ``(name, uri)`` in order. Text
+    without one comes back unchanged. Linear: each link is found from the
+    end, never by a search across the whole text."""
+    links: list[tuple[str, str]] = []
+    rest = text.rstrip()
+    while len(links) < FILE_LINKS_MAX:
+        link = _last_link(rest)
+        if link is None:
+            break
+        start, name, uri = link
+        links.append((name, uri))
+        rest = rest[:start].rstrip()
+    if not links:
+        return text, []
+    links.reverse()
+    return rest, links
+
+
+def _last_link(text: str) -> tuple[int, str, str] | None:
+    """``(start, name, uri)`` of the link that ends ``text``, or None."""
+    if text.endswith(")"):
+        target = text.rfind("](file://")
+        start = text.rfind("[@", 0, target) if target >= 0 else -1
+        if start < 0:
+            return None
+        name, uri = text[start + 2 : target], text[target + 2 : -1]
+        if "\n" in name or _LINK_URI.fullmatch(uri) is None:
+            return None
+        return start, name, uri
+    if text.endswith("]"):
+        start = text.rfind("[Resource link: file://")
+        match = _RESOURCE_LINK.fullmatch(text, start) if start >= 0 else None
+        if match is None:
+            return None
+        uri = match.group(1)
+        return start, unquote(uri.rstrip("/").rsplit("/", 1)[-1]) or uri, uri
+    return None
 
 
 def content_block_part(block: Any) -> dict[str, Any] | None:
@@ -787,6 +844,48 @@ def usage(update: Mapping[str, Any]) -> dict[str, Any] | None:
     return result
 
 
+# The option kinds a notification answers with: Allow and Deny.
+QUICK_CHOICES = ("allow_once", "reject_once")
+# Longest request title a session row carries for a notification.
+ALERT_TITLE_MAX = 120
+
+
+def alert_title(text: str) -> str:
+    """One line for an alert: without control and format characters (bidi
+    overrides, zero-width marks), which can make a command read differently
+    from what runs, next to a one-tap Allow."""
+    visible = "".join(_ALERT_CHAR.get(unicodedata.category(ch), ch) for ch in text)
+    return _one_line(visible, ALERT_TITLE_MAX)
+
+
+# Control characters (tabs, newlines) become spaces; format characters go.
+_ALERT_CHAR = {"Cc": " ", "Cf": ""}
+
+
+def quick_choices(raw: Any) -> dict[str, str] | None:
+    """The option id for each kind in :data:`QUICK_CHOICES`, or ``None``.
+
+    Needs exactly one option of each and only standard kinds, read from the raw
+    options: :func:`permission_options` turns an unknown kind into ``allow_once``.
+    """
+    if not isinstance(raw, list):
+        return None
+    ids: dict[str, list[str]] = {}
+    for opt in raw[:PERMISSION_OPTIONS_MAX]:
+        if not isinstance(opt, Mapping):
+            continue
+        opt_id = _str(opt.get("optionId"))
+        if not opt_id:
+            continue
+        kind = opt.get("kind")
+        if kind not in PERMISSION_KINDS:
+            return None
+        ids.setdefault(kind, []).append(opt_id)
+    if any(len(ids.get(kind, ())) != 1 for kind in QUICK_CHOICES):
+        return None
+    return {kind: ids[kind][0] for kind in QUICK_CHOICES}
+
+
 def permission_options(raw: Any) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
@@ -1043,6 +1142,10 @@ def terminal_meta(update: Mapping[str, Any]) -> tuple[str | None, bool, int | No
     exited = isinstance(exit_info, Mapping)
     code = exit_info.get("exit_code") if exited else None  # type: ignore[union-attr]
     return text, replaces, code if isinstance(code, int) and not isinstance(code, bool) else None, exited
+
+
+def is_valid_chat_resume_id(value: str) -> bool:
+    return len(value) <= CHAT_RESUME_ID_MAX and _CHAT_RESUME_ID.fullmatch(value) is not None
 
 
 def _thread_status_kind(update: Mapping[str, Any]) -> Any:

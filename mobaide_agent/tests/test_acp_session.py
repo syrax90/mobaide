@@ -26,6 +26,7 @@ import asyncio
 import functools
 import itertools
 import os
+import re
 import sys
 import threading
 from collections.abc import Awaitable, Iterator
@@ -620,7 +621,7 @@ class TestStart:
         m = await open_chat()
 
         assert m.state["agent"] == {"name": "fake-acp-agent", "title": "Fake Agent", "version": "1.0.0"}
-        assert m.state["prompt_caps"] == {"image": True}
+        assert m.state["prompt_caps"] == {"image": True, "mentions": True}
         assert m.state["cwd"] == str(tmp_path)
         assert isinstance(m.state["acp_session_id"], str) and m.state["acp_session_id"]
         assert [o["id"] for o in m.state["config"]] == ["mode", "model", "effort", "fast"]
@@ -861,8 +862,9 @@ class TestTurns:
             ({"text": "x", "images": [{"mime": "image/png", "data": "@@@"}]}, "An image is not valid base64"),
             ({"text": "x", "images": [{"mime": "image/png", "data": PNG_B64}] * 5}, "Attach at most 4 images"),
             ({"text": "x", "images": "nope"}, "Invalid images"),
+            ({"text": "x", "mentions": "src/app.py"}, "Invalid mentions"),
         ],
-        ids=["empty", "mime", "base64", "count", "shape"],
+        ids=["empty", "mime", "base64", "count", "shape", "mentions-shape"],
     )
     async def test_invalid_prompts_are_refused(self, open_chat, fields, error):
         m = await open_chat()
@@ -1492,6 +1494,184 @@ class TestAgentCancelsRequest:
         agent_text = "".join(m.texts("agent"))
         assert "900 -32800" in agent_text
         assert '"optionId": "allow"' not in agent_text
+
+
+# A prompt asks a permission (id 900); a second one (id 901) follows once the
+# file ``<argv[1]>`` exists. Each answer is shown as agent text,
+# "<id> <optionId>"; the turn ends once both are answered.
+TWO_PERMISSIONS_AGENT = r"""
+import json, os, sys, threading, time
+release = sys.argv[1]
+lock = threading.Lock()
+prompt = None
+answered = set()
+
+def send(message):
+    with lock:
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+        sys.stdout.flush()
+
+def ask(req_id, tool, title):
+    send({"id": req_id, "method": "session/request_permission", "params": {
+        "sessionId": "two",
+        "toolCall": {"toolCallId": tool, "title": title, "kind": "execute"},
+        "options": [
+            {"optionId": "allow", "name": "Allow once", "kind": "allow_once"},
+            {"optionId": "always", "name": "Always allow", "kind": "allow_always"},
+            {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+        ]}})
+
+def ask_again_when_released():
+    while not os.path.exists(release):
+        time.sleep(0.02)
+    ask(901, "t2", "npm test")
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None:
+        outcome = (msg.get("result") or {}).get("outcome") or {}
+        send({"method": "session/update", "params": {"sessionId": "two", "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": f"{msg['id']} {outcome.get('optionId')}\n"}}}})
+        answered.add(msg["id"])
+        if answered == {900, 901}:
+            send({"id": prompt, "result": {"stopReason": "end_turn"}})
+        continue
+    if "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "two"}
+    elif method == "session/prompt":
+        prompt = msg["id"]
+        ask(900, "t1", "git push")
+        threading.Thread(target=ask_again_when_released, daemon=True).start()
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _two_permissions_agent(release) -> list[str]:
+    return [sys.executable, "-c", TWO_PERMISSIONS_AGENT, str(release)]
+
+
+# Like Claude's ExitPlanMode: a prompt asks to switch out of plan mode, with a
+# one-time allow and reject among its options, and waits for the answer.
+PLAN_APPROVAL_AGENT = r"""
+import json, sys
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None or "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "plan"}
+    elif method == "session/prompt":
+        send({"id": 900, "method": "session/request_permission", "params": {
+            "sessionId": "plan",
+            "toolCall": {"toolCallId": "exit-plan", "title": "Ready to code?", "kind": "switch_mode",
+                         "rawInput": {"plan": "1. Write it"}},
+            "options": [
+                {"optionId": "acceptEdits", "name": "Yes, and auto-accept edits", "kind": "allow_always"},
+                {"optionId": "default", "name": "Yes, and manually approve edits", "kind": "allow_once"},
+                {"optionId": "plan", "name": "No, keep planning", "kind": "reject_once"},
+            ]}})
+        continue
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+PLAN_APPROVAL_AGENT_ARGV = [sys.executable, "-c", PLAN_APPROVAL_AGENT]
+
+
+class TestNotificationAnswer:
+    """The one plain tool permission a notification's Allow or Deny can
+    answer (``attention_request`` on the session row), and ``answer_request``,
+    which ``POST /api/sessions/{id}/chat/respond`` calls."""
+
+    async def test_the_request_left_after_an_answer_gets_an_alert_of_its_own(
+        self, open_chat, tmp_path
+    ):
+        release = tmp_path / "release"
+        m = await open_chat(argv=_two_permissions_agent(release))
+        await m.command("prompt", text="go")
+        await m.until(lambda: "awaiting_permission" in m.attention)
+        (first,) = m.state["requests"]
+
+        # The random part keeps a late action from naming a later request.
+        assert re.fullmatch(r"r:\d+:[0-9a-f]{6}", first["id"])
+        assert m.session.to_info().attention_request == {
+            "id": first["id"],
+            "title": "git push",
+            "tool_kind": "execute",
+            "choices": ["allow_once", "reject_once"],
+        }
+
+        release.touch()
+        await m.until(lambda: len(m.state.get("requests") or []) == 2)
+        await m.until(lambda: "requests" in m.session_events)
+
+        # Two open requests: the row drops the actions, and no new alert rings.
+        assert m.session.to_info().attention_request is None
+        assert m.attention == ["awaiting_permission"]
+        (second,) = [r for r in m.state["requests"] if r["id"] != first["id"]]
+
+        answered = await m.command("respond", request_id=first["id"], option_id="reject")
+        assert answered["ok"] is True
+        await m.until(lambda: m.attention.count("awaiting_permission") == 2)
+
+        assert m.session.to_info().attention_request["id"] == second["id"]
+        with pytest.raises(session_mod.RequestGoneError):
+            m.session.answer_request(first["id"], "allow_once")
+
+        m.session.answer_request(second["id"], "allow_once")
+        await m.until(lambda: m.status == "ready" and "901" in "".join(m.texts("agent")))
+
+        assert "".join(m.texts("agent")) == "900 reject\n901 allow\n"
+        assert m.state["requests"] == []
+        assert m.attention.count("awaiting_permission") == 2
+        assert m.session.to_info().attention_request is None
+        with pytest.raises(session_mod.RequestGoneError):
+            m.session.answer_request(second["id"], "reject_once")
+
+    @pytest.mark.parametrize("case", ["folder_trust", "form", "plan_decision", "plan_approval"])
+    async def test_a_request_that_is_not_a_plain_tool_permission_gets_no_actions(
+        self, open_chat, case
+    ):
+        if case == "folder_trust":
+            m = await open_chat(trust=FakeTrust())
+        elif case == "form":
+            m = await open_chat()
+            await m.command("prompt", text="question")
+        elif case == "plan_decision":
+            # Cursor's plan card: one allow_once and one reject_once, but the
+            # choice is the user's own.
+            m = await open_chat(argv=fake_agent_argv("cursor"))
+            await m.command("prompt", text="plan")
+        else:
+            # Claude's plan approval: a mode switch, not a tool to run.
+            m = await open_chat(argv=PLAN_APPROVAL_AGENT_ARGV)
+            await m.command("prompt", text="go")
+        await m.until(lambda: "awaiting_permission" in m.attention)
+        (request,) = m.state["requests"]
+
+        assert m.session.to_info().attention_request is None
+        with pytest.raises(session_mod.ChatCommandError) as refused:
+            m.session.answer_request(request["id"], "allow_once")
+        assert not isinstance(refused.value, session_mod.RequestGoneError)
 
 
 # Asks one permission whose only options are ``allow_always`` and
@@ -6741,3 +6921,287 @@ def _agent_sends_to(m: TimelineMirror, update: dict[str, Any]) -> None:
     m.session._on_notification(
         "session/update", {"sessionId": m.state["acp_session_id"], "update": update}
     )
+
+
+# Logs each ``session/prompt`` and ``_session/steering`` request as one JSON
+# line ``{"method", "params"}`` to argv[1]. Advertises steering and takes a
+# steering request at once. The prompt ``hold`` streams "Working" and is
+# answered only by ``session/cancel``; any other prompt is echoed.
+MENTIONS_AGENT = r"""
+import json, sys
+log = open(sys.argv[1], "a", encoding="utf-8")
+pending = None
+
+def send(message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    sys.stdout.flush()
+
+def chunk(text):
+    send({"method": "session/update", "params": {"sessionId": "mentions", "update": {
+        "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method is None:
+        continue
+    params = msg.get("params") or {}
+    if method in ("session/prompt", "_session/steering"):
+        log.write(json.dumps({"method": method, "params": params}) + "\n")
+        log.flush()
+    if method == "session/cancel":
+        if pending is not None:
+            send({"id": pending, "result": {"stopReason": "cancelled"}})
+            pending = None
+        continue
+    if "id" not in msg:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": 1, "_meta": {"steering": {"supported": True}}, "agentCapabilities": {}}
+    elif method == "session/new":
+        result = {"sessionId": "mentions"}
+    elif method == "session/prompt":
+        text = " ".join(b.get("text", "") for b in params["prompt"] if b.get("type") == "text")
+        if text == "hold":
+            chunk("Working")
+            pending = msg["id"]
+            continue
+        chunk("echo " + text)
+        result = {"stopReason": "end_turn"}
+    elif method == "_session/steering":
+        result = {"outcome": "injected"}
+    else:
+        send({"id": msg["id"], "error": {"code": -32601, "message": "Method not found"}})
+        continue
+    send({"id": msg["id"], "result": result})
+"""
+
+
+def _mentions_agent(log) -> list[str]:
+    return [sys.executable, "-c", MENTIONS_AGENT, str(log)]
+
+
+def _links(params: dict[str, Any]) -> list[dict[str, Any]]:
+    return [block for block in params["prompt"] if block["type"] == "resource_link"]
+
+
+def _file_chips(item: dict[str, Any]) -> list[str]:
+    return [a["name"] for a in item["attachments"] if a["kind"] == "file"]
+
+
+class TestMentions:
+    """Files a prompt names with ``@``: checked against the session folder,
+    sent to the agent as ``resource_link`` blocks next to the text, and shown
+    as file chips on the user's message, live and after a replay."""
+
+    @pytest.fixture
+    def tree(self, tmp_path) -> Path:
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "config.json").write_text("{}")
+        (tmp_path / "docs").mkdir()
+        return tmp_path
+
+    async def test_mentions_reach_the_agent_as_resource_links_and_show_as_file_chips(
+        self, open_chat, tree
+    ):
+        log = tree / "agent.log"
+        m = await open_chat(argv=_mentions_agent(log))
+        text = "Explain @src/config.json and @docs/"
+
+        await m.command("prompt", text=text, mentions=["src/config.json", "docs/"])
+        await m.until(_turn_done(m, f"echo {text}"))
+
+        assert _params_of(log, "session/prompt")[0]["prompt"] == [
+            {"type": "text", "text": text},
+            {
+                "type": "resource_link",
+                "uri": (tree / "src" / "config.json").as_uri(),
+                "name": "config.json",
+                "title": "src/config.json",
+                "mimeType": "application/json",
+            },
+            # A folder's URI ends with "/", so a replay can tell it apart.
+            {"type": "resource_link", "uri": (tree / "docs").as_uri() + "/", "name": "docs", "title": "docs"},
+        ]
+        user = m.of_type("user")[0]
+        assert user["text"] == text
+        assert user["attachments"] == [
+            {"kind": "file", "name": "src/config.json"},
+            {"kind": "file", "name": "docs/"},
+        ]
+
+    async def test_mentions_outside_the_folder_or_missing_are_dropped(
+        self, open_chat, tree, tmp_path_factory
+    ):
+        outside = tmp_path_factory.mktemp("outside")
+        (outside / "secret.txt").write_text("x")
+        if sys.platform != "win32":
+            (tree / "escape").symlink_to(outside)
+        log = tree / "agent.log"
+        m = await open_chat(argv=_mentions_agent(log))
+        refused = [
+            "/etc/hosts",
+            str(outside / "secret.txt"),
+            "../outside/secret.txt",
+            "src/../../secret.txt",
+            "./src/config.json",
+            "escape/secret.txt",
+            "missing.txt",
+            "C:/Windows/win.ini",
+            "\\\\server\\share\\x",
+            "src/a\x00b",
+            "a" * (session_mod.MENTION_PATH_MAX + 1),
+            "",
+            42,
+        ]
+        # The same file three ways: sent once.
+        same = ["src/config.json", "src\\config.json", "src/config.json/"]
+        # Only the first MENTIONS_MAX entries of a prompt are looked at.
+        batches = [[*refused[:7], "src/config.json"], [*refused[7:], *same]]
+
+        for n, batch in enumerate(batches):
+            await m.command("prompt", text=f"look {n}", mentions=batch)
+            await m.until(_turn_done(m, f"echo look {n}"))
+
+        assert [[link["title"] for link in _links(p)] for p in _params_of(log, "session/prompt")] == [
+            ["src/config.json"],
+            ["src/config.json"],
+        ]
+        assert [_file_chips(u) for u in m.of_type("user")] == [["src/config.json"]] * 2
+
+    async def test_only_the_first_ten_mentions_are_looked_at(self, open_chat, tmp_path):
+        names = [f"f{n:02}.txt" for n in range(session_mod.MENTIONS_MAX + 2)]
+        for name in names:
+            (tmp_path / name).write_text("x")
+        log = tmp_path / "agent.log"
+        m = await open_chat(argv=_mentions_agent(log))
+
+        # A dropped entry still uses up one of the ten: no later one takes its place.
+        await m.command("prompt", text="many", mentions=["missing.txt", *names])
+        await m.until(_turn_done(m, "echo many"))
+
+        kept = names[: session_mod.MENTIONS_MAX - 1]
+        assert [link["title"] for link in _links(_params_of(log, "session/prompt")[0])] == kept
+        assert _file_chips(m.of_type("user")[0]) == kept
+
+    async def test_an_agent_without_prompt_links_gets_the_text_only(self, open_chat, tree):
+        log = tree / "agent.log"
+        m = await open_chat(argv=_mentions_agent(log), prompt_links=False)
+
+        await m.command("prompt", text="read @src/config.json", mentions=["src/config.json"])
+        await m.until(_turn_done(m, "echo read @src/config.json"))
+
+        assert _params_of(log, "session/prompt")[0]["prompt"] == [
+            {"type": "text", "text": "read @src/config.json"}
+        ]
+        assert _file_chips(m.of_type("user")[0]) == ["src/config.json"]
+
+    @pytest.mark.parametrize(
+        ("path", "guessed", "sent"),
+        [
+            ("src/app.ts", "video/mp2t", None),
+            ("dist/app.zip", "application/zip", None),
+            ("src/app.py", "text/x-python", "text/x-python"),
+            ("logo.png", "image/png", "image/png"),
+        ],
+        ids=["ts-as-video", "archive", "text", "image"],
+    )
+    def test_a_file_link_names_only_a_type_an_agent_reads(
+        self, monkeypatch, tmp_path, path, guessed, sent
+    ):
+        # The host's table answers guess_type; pinned, so each host maps the same.
+        monkeypatch.setattr(session_mod.mimetypes, "guess_type", lambda _p, strict=True: (guessed, None))
+        mention = session_mod._Mention(path=path, abs_path=str(tmp_path / path), is_dir=False)
+
+        [link] = session_mod._prompt_blocks("", [], [mention])
+
+        assert link.get("mimeType") == sent
+
+    async def test_queued_messages_keep_their_mentions_through_send_now_and_the_queue(
+        self, open_chat, tree
+    ):
+        log = tree / "agent.log"
+        m = await open_chat(argv=_mentions_agent(log))
+        await m.command("prompt", text="hold")
+        await m.until(lambda: "Working" in m.texts("agent"))
+        steered = await m.command("prompt", text="also @docs/", mentions=["docs/"])
+        queued = await m.command("prompt", text="then @src/config.json", mentions=["src/config.json"])
+
+        result = await m.command("steer", queue_id=steered["data"]["queue_id"])
+        assert result["data"] == {"steered": True}
+        await m.command("cancel")
+        await m.until(_turn_done(m, "echo then @src/config.json"))
+
+        [steering] = _params_of(log, "_session/steering")
+        assert [link["title"] for link in _links(steering)] == ["docs"]
+        prompts = _params_of(log, "session/prompt")
+        assert [[link["title"] for link in _links(p)] for p in prompts] == [[], ["src/config.json"]]
+        assert queued["data"]["queued"] is True
+        assert [(u["text"], _file_chips(u)) for u in m.of_type("user")] == [
+            ("hold", []),
+            ("also @docs/", ["docs/"]),
+            ("then @src/config.json", ["src/config.json"]),
+        ]
+
+    async def test_replayed_file_links_show_as_file_chips(self, open_chat, tree):
+        inside = (tree / "src" / "config.json").as_uri()
+        replayed = (
+            f"Explain @src/config.json\n\n[@config.json]({inside}) "
+            "[@notes.md](file:///elsewhere/notes.md)"
+        )
+        updates = [
+            {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": replayed}},
+            _agent_text("Done."),
+        ]
+
+        m = await open_chat(load_session_id="stored-1", argv=_replay_agent(updates))
+        await m.until(lambda: "Done." in m.texts("agent"))
+
+        user = m.of_type("user")[0]
+        assert user["text"] == "Explain @src/config.json"
+        # A file under the session folder by its path there; any other by its name.
+        assert user["attachments"] == [
+            {"kind": "file", "name": "src/config.json"},
+            {"kind": "file", "name": "notes.md"},
+        ]
+
+    @pytest.mark.parametrize("form", ["block", "claude", "copilot"])
+    async def test_a_replay_shows_the_file_chips_the_live_message_showed(
+        self, open_chat, tree, form
+    ):
+        """Each form an agent replays the links it was sent in: as the
+        ``resource_link`` blocks (Antigravity, OpenCode), as one
+        ``[@name](uri)`` text chunk each (Claude Code, Codex), or as
+        ``[Resource link: uri]`` lines after the text (Copilot)."""
+        (tree / "src" / "my notes.md").write_text("x")
+        log = tree / "agent.log"
+        live = await open_chat(argv=_mentions_agent(log))
+        text = "Explain @src/config.json, @src/my notes.md and @docs/"
+        await live.command(
+            "prompt", text=text, mentions=["src/config.json", "src/my notes.md", "docs/"]
+        )
+        await live.until(_turn_done(live, f"echo {text}"))
+        links = _links(_params_of(log, "session/prompt")[0])
+
+        def user_chunk(content: dict[str, Any]) -> dict[str, Any]:
+            return {"sessionUpdate": "user_message_chunk", "content": content}
+
+        if form == "block":
+            replayed = [user_chunk({"type": "text", "text": text}), *map(user_chunk, links)]
+        elif form == "claude":
+            replayed = [user_chunk({"type": "text", "text": text})] + [
+                user_chunk({"type": "text", "text": f"[@{link['name']}]({link['uri']})"})
+                for link in links
+            ]
+        else:
+            lines = "".join(f"\n[Resource link: {link['uri']}]" for link in links)
+            replayed = [user_chunk({"type": "text", "text": text + lines})]
+        m = await open_chat(
+            load_session_id="stored-1", argv=_replay_agent([*replayed, _agent_text("Done.")])
+        )
+        await m.until(lambda: "Done." in m.texts("agent"))
+
+        user = m.of_type("user")[0]
+        assert user["text"] == text
+        assert _file_chips(user) == _file_chips(live.of_type("user")[0])
+        assert _file_chips(user) == ["src/config.json", "src/my notes.md", "docs/"]

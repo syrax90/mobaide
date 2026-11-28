@@ -68,10 +68,19 @@ object ChatProtocol {
         }
     }
 
-    fun prompt(id: String, text: String, images: List<ChatImagePayload>): JsonObject = buildJsonObject {
+    /** [mentions]: paths relative to the session folder that [text] names with `@`. */
+    fun prompt(
+        id: String,
+        text: String,
+        images: List<ChatImagePayload>,
+        mentions: List<String> = emptyList(),
+    ): JsonObject = buildJsonObject {
         put("id", id)
         put("op", "prompt")
         put("text", text)
+        if (mentions.isNotEmpty()) {
+            put("mentions", buildJsonArray { mentions.forEach { add(JsonPrimitive(it)) } })
+        }
         if (images.isNotEmpty()) {
             put(
                 "images",

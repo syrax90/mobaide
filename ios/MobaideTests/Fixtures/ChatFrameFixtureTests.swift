@@ -41,6 +41,9 @@ final class ChatFrameFixtureTests: XCTestCase {
                     images: [ChatImagePayload(mime: "image/png", data: "iVBORw0KGgo=")]
                 )
             },
+            "prompt_with_mentions": {
+                .prompt(id: $0, text: "Explain @src/app.py and @docs/", images: [], mentions: ["src/app.py", "docs/"])
+            },
             "cancel": { .cancel(id: $0) },
             "set_config_select": { .setConfig(id: $0, configId: "model", value: ChatConfigValue.string("sonnet").jsonValue) },
             "set_config_boolean": { .setConfig(id: $0, configId: "fast", value: ChatConfigValue.bool(true).jsonValue) },
@@ -193,6 +196,7 @@ final class ChatFrameFixtureTests: XCTestCase {
         XCTAssertEqual(state.queue.map(\.id), ["q:14"])
         XCTAssertEqual(state.queue.map(\.text), ["Also update the README"])
         XCTAssertTrue(state.promptImages)
+        XCTAssertTrue(state.promptMentions)
         XCTAssertTrue(state.steering)
         XCTAssertTrue(state.newConversation)
     }

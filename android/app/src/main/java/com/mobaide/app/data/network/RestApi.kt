@@ -4,6 +4,8 @@ import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.network.dto.AgentSettingsResponse
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.AutoScanTemplatesResponse
+import com.mobaide.app.data.network.dto.ChatRespondRequest
+import com.mobaide.app.data.network.dto.ChatRespondResponse
 import com.mobaide.app.data.network.dto.ChatStoredSessionsResponse
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexLoginRequest
@@ -11,6 +13,7 @@ import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ForceUpdateResponse
 import com.mobaide.app.data.network.dto.FsDirsResponse
+import com.mobaide.app.data.network.dto.SessionFilesResponse
 import com.mobaide.app.data.network.dto.GitCommitContextResponse
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitCommitResponse
@@ -171,6 +174,23 @@ class RestApi(
             .addPathSegment(sessionId)
             .build()
         executeRaw(Request.Builder().url(url).delete().build())
+    }
+
+    /** `POST /api/sessions/{id}/chat/respond`: answers the chat request a notification names. */
+    suspend fun respondToChatRequest(sessionId: String, body: ChatRespondRequest) {
+        val url = baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("sessions")
+            .addPathSegment(sessionId)
+            .addPathSegment("chat")
+            .addPathSegment("respond")
+            .build()
+        val request = Request.Builder()
+            .url(url)
+            .post(json.encodeToString(body).toRequestBody(jsonMediaType))
+            .build()
+        // Cancellable: the notification action gives up after a few seconds.
+        executeCancellable<ChatRespondResponse>(request)
     }
 
     /** Authenticate the host's Codex CLI with an OpenAI API key (stdin-piped,
@@ -349,6 +369,19 @@ class RestApi(
 
     suspend fun getGitDeleteJob(workspaceName: String, jobId: String): GitDeleteJobResponse {
         val url = workspaceGitUrl(workspaceName, "delete-jobs").addPathSegment(jobId).build()
+        return executeCancellable(Request.Builder().url(url).get().build())
+    }
+
+    /** Cancellable: each keystroke after `@` supersedes the listing before it. */
+    suspend fun listSessionFiles(sessionId: String, q: String, limit: Int): SessionFilesResponse {
+        val url = baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("sessions")
+            .addPathSegment(sessionId)
+            .addPathSegment("files")
+            .addQueryParameter("q", q)
+            .addQueryParameter("limit", limit.toString())
+            .build()
         return executeCancellable(Request.Builder().url(url).get().build())
     }
 

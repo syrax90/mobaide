@@ -1416,7 +1416,7 @@ a closed tab shows nothing, because there is no background delivery to reconcile
 against.
 
 It listens on the **user-events** channel, not the agent bus. That payload is
-the slim `{session_id, reason, title?, project_name?, exit_reason?, kind?, kind_label?, agent_id}`
+the slim `{session_id, reason, title?, project_name?, exit_reason?, kind?, kind_label?, request_id?, request_tool_kind?, agent_id}`
 and the channel is account-wide, so a browser — the first client that
 routinely holds several agents — is alerted about all of them rather than
 only the one whose list is open. Consuming both channels would double-post.
@@ -1435,6 +1435,12 @@ One exception: push text never names a custom agent type. Custom kinds read
 title and workspace name as alert content. Local notifications use the custom name.
 With no title and no workspace, the label names the kind ("Codex session",
 "Terminal session"); no `kind` reads "Claude session".
+
+A permission alert names the kind of action from `request_tool_kind`. The payload
+never holds the request title. `requestTitle()` reads it from the cached session
+list when the row's `attention_request.id` equals `request_id`. If the row has not
+arrived yet, the alert waits up to 750 ms (`REQUEST_TITLE_WAIT_MS`) for it. A page
+`Notification` cannot carry actions, so the web alert has no Allow or Deny.
 
 Delivery follows the rule both mobile clients share — never alert about the
 session already on screen — with the split a browser makes possible: a hidden

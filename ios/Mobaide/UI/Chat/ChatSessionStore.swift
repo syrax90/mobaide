@@ -13,6 +13,7 @@ final class ChatSessionStore {
     private let tokenStore: TokenStore
     private let foregroundSessionTracker: ForegroundSessionTracker
     private let reviewPrompt: ReviewPromptCoordinator
+    private let listSessionFiles: SessionFilesLister?
     private var models: [String: ChatSessionModel] = [:]
     private var recency: [String] = []
     private var listedIds: Set<String> = []
@@ -23,13 +24,15 @@ final class ChatSessionStore {
         sessionManager: SessionManager,
         tokenStore: TokenStore,
         foregroundSessionTracker: ForegroundSessionTracker,
-        reviewPrompt: ReviewPromptCoordinator
+        reviewPrompt: ReviewPromptCoordinator,
+        listSessionFiles: SessionFilesLister? = nil
     ) {
         self.webSocketFactory = webSocketFactory
         self.sessionManager = sessionManager
         self.tokenStore = tokenStore
         self.foregroundSessionTracker = foregroundSessionTracker
         self.reviewPrompt = reviewPrompt
+        self.listSessionFiles = listSessionFiles
     }
 
     func start(sessions: AsyncStream<[SessionResponse]>) {
@@ -57,7 +60,8 @@ final class ChatSessionStore {
             sessionManager: sessionManager,
             tokenStore: tokenStore,
             foregroundSessionTracker: foregroundSessionTracker,
-            reviewPrompt: reviewPrompt
+            reviewPrompt: reviewPrompt,
+            listSessionFiles: listSessionFiles
         )
         models[id] = model
         while recency.count > Self.maxModels {

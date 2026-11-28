@@ -3,7 +3,7 @@ sessions and how they list, Pi's models and thinking levels as ACP config
 options, its tool calls as ACP tool content, and the bridge itself, run as
 the chat runs it (``python -I pi_bridge.py <pi>``) against a scripted Pi RPC
 child: session start, turns, steering, config changes, stored sessions,
-extension dialogs and the end of the Pi process."""
+the session cost, extension dialogs and the end of the Pi process."""
 from __future__ import annotations
 
 import asyncio
@@ -28,6 +28,9 @@ READ_TIMEOUT = 20.0
 # every command to ``FAKE_PI_LOG``. A prompt plays the turn named by its first
 # word; it has no model while ``signed_out_marker`` exists. ``at_eof`` (``slow``,
 # ``stay``, ``ignore_terminate``) is how it takes the end of its input.
+# ``get_session_stats`` answers with the next of ``stats`` (the last one
+# stays), and ``pi auth check`` reports a login of ``auth_type`` (with none,
+# it cannot tell).
 FAKE_PI = r'''
 import json
 import os
@@ -64,6 +67,14 @@ def main():
     argv = sys.argv[1:]
     if argv == ["--version"]:
         print("1.5.2")
+        return 0
+    if argv[:2] == ["auth", "check"]:
+        log({"auth_check": argv, "pid": os.getpid()})
+        provider = argv[argv.index("--provider") + 1]
+        if not SCENARIO.get("auth_type"):
+            print(json.dumps({"status": "invalid", "provider": provider, "reason": "invalid_state"}))
+            return 2
+        print(json.dumps({"status": "ready", "provider": provider, "authType": SCENARIO["auth_type"]}))
         return 0
     log({"argv": argv, "cwd": os.getcwd(), "pid": os.getpid()})
     at_eof = SCENARIO.get("at_eof")
@@ -162,6 +173,9 @@ def main():
             if held is not None:
                 emit({"type": "agent_settled"})
                 held = None
+        elif kind == "get_session_stats" and SCENARIO.get("stats"):
+            stats = SCENARIO["stats"]
+            respond(data=stats.pop(0) if len(stats) > 1 else stats[0])
         else:
             respond()
     if at_eof in ("stay", "ignore_terminate"):
@@ -737,14 +751,16 @@ class TestPromptParts:
             {"type": "image", "data": "AAAA", "mimeType": "image/jpeg"},
             {"type": "text", "text": "and this"},
             {"type": "image", "data": "BBBB"},
-            {"type": "resource_link", "uri": "file:///a"},
+            {"type": "resource_link", "uri": "file:///w/src/app.py", "name": "app.py"},
             {"type": "image"},
             "junk",
         ]
 
         text, images = pi_bridge.prompt_parts(blocks)
 
-        assert text == "Look at this\nand this"
+        # Pi takes text only: a linked file goes as the link Claude Code
+        # writes, which a replay shows as a file chip again.
+        assert text == "Look at this\nand this\n[@app.py](file:///w/src/app.py)"
         assert images == [
             {"type": "image", "data": "AAAA", "mimeType": "image/jpeg"},
             {"type": "image", "data": "BBBB", "mimeType": "image/png"},
@@ -926,6 +942,15 @@ class BridgeClient:
         assert "result" not in message, message
         return message["error"]
 
+    def with_cost(self) -> list[dict[str, Any]]:
+        return [update for update in self.of_kind("usage_update") if "cost" in update]
+
+    async def costs(self, count: int) -> list[dict[str, Any]]:
+        """The first ``count`` usage updates with a cost, once they are in."""
+        while len(self.with_cost()) < count:
+            await self._read()
+        return self.with_cost()[:count]
+
     async def update(self, kind: str) -> dict[str, Any]:
         """The next session update of ``kind`` that was not seen yet."""
         seen = len(self.updates)
@@ -995,12 +1020,13 @@ def pi_home(tmp_path) -> Path:
 
 @pytest.fixture
 async def bridge(tmp_path, pi_home):
-    """Starts the bridge in front of a fake Pi that plays ``scenario``."""
+    """Starts the bridge in front of a fake Pi that plays ``scenario``. The
+    ``session_options`` go after ``--``, as Code Mode's do."""
     fake_pi = tmp_path / "fake_pi.py"
     fake_pi.write_text(FAKE_PI, encoding="utf-8")
     clients: list[BridgeClient] = []
 
-    async def start(**scenario: Any) -> BridgeClient:
+    async def start(session_options: tuple[str, ...] = (), **scenario: Any) -> BridgeClient:
         scenario.setdefault("models", [SONNET, HAIKU, GPT])
         log_path = tmp_path / f"pi-{len(clients)}.log"
         env = {
@@ -1017,6 +1043,7 @@ async def bridge(tmp_path, pi_home):
             sys.executable,
             "-I",
             str(fake_pi),
+            *(["--", *session_options] if session_options else []),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             env=env,
@@ -1042,6 +1069,18 @@ async def _is_gone(pid: int) -> bool:
             return True
         await asyncio.sleep(0.05)
     return False
+
+
+async def _auth_check(client: BridgeClient) -> dict[str, Any]:
+    """The log record of the ``pi auth check`` the bridge ran, once that
+    ``pi`` has ended."""
+    for _ in range(100):
+        checks = [record for record in client.pi_log() if "auth_check" in record]
+        if checks:
+            assert await _is_gone(checks[0]["pid"])
+            return checks[0]
+        await asyncio.sleep(0.05)
+    raise AssertionError("The bridge ran no pi auth check")
 
 
 class TestInitialize:
@@ -1695,7 +1734,7 @@ class TestPrompt:
 
     @pytest.mark.parametrize(
         "prompt",
-        [[], [{"type": "text", "text": "  \n "}], [{"type": "resource_link", "uri": "file:///a"}]],
+        [[], [{"type": "text", "text": "  \n "}], [{"type": "audio", "data": "CCCC"}]],
         ids=["no-blocks", "blank", "nothing-pi-takes"],
     )
     async def test_an_empty_message_is_refused(self, bridge, work, prompt):
@@ -2295,6 +2334,105 @@ class TestLoad:
         assert error == {"code": -32602, "message": "sessionId is required"}
 
 
+PAID_USAGE = {
+    "sessionUpdate": "usage_update",
+    "used": 1500,
+    "size": 200000,
+    "cost": {"amount": 0.0123, "currency": "USD"},
+}
+
+
+class TestSessionCost:
+    @pytest.mark.parametrize(
+        ("model", "auth_type", "sent"),
+        [
+            (SONNET, "api_key", True),
+            ({**LLAMA, "contextWindow": 200000}, "oauth", True),
+            (SONNET, "oauth", False),
+            (SONNET, None, False),
+        ],
+        ids=["api-key", "pay-per-token-oauth", "subscription", "check-fails"],
+    )
+    async def test_the_cost_is_sent_only_for_a_login_that_pays_per_token(
+        self, bridge, work, model, auth_type, sent
+    ):
+        """Pi prices the turns of a subscription at list prices too. The
+        login is checked with the bare Pi command: ``pi auth check`` refuses
+        Code Mode's session options."""
+        client = await bridge(
+            session_options=("--tools", "+codemode"),
+            model=model,
+            turns={"list": {"events": TOOL_TURN}},
+            stats=[{"cost": 0.0123}],
+            auth_type=auth_type,
+        )
+        session_id = await client.new_session(work)
+
+        await client.turn(session_id, "list")
+        check = await _auth_check(client)
+        # A later turn: the bridge has the answer of the check by now.
+        await client.turn(session_id, "list")
+        if sent:
+            await client.costs(1)
+
+        assert client.with_cost()[:1] == ([PAID_USAGE] if sent else [])
+        assert check["auth_check"] == [
+            "auth",
+            "check",
+            "--provider",
+            model["provider"],
+            "--json",
+            "--no-refresh",
+        ]
+        # One check per provider, and only the session gets the options.
+        assert len([record for record in client.pi_log() if "auth_check" in record]) == 1
+        assert [record["argv"] for record in client.pi_log() if "argv" in record] == [
+            ["--tools", "+codemode", "--mode", "rpc"]
+        ]
+
+    async def test_a_compaction_sends_the_cost_again(self, bridge, work):
+        """Pi adds what the summary cost to the session total."""
+        client = await bridge(
+            turns={"list": {"events": TOOL_TURN}},
+            compact={
+                "events": [
+                    {"type": "compaction_start"},
+                    {"type": "compaction_end", "result": {"summary": "We listed the files."}},
+                ]
+            },
+            stats=[{"cost": 0.01}, {"cost": 0.02}],
+            auth_type="api_key",
+        )
+        session_id = await client.new_session(work)
+        await client.turn(session_id, "list")
+        await client.costs(1)
+
+        response = await client.turn(session_id, "/compact")
+
+        assert response["result"] == {"stopReason": "end_turn"}
+        assert [update["cost"]["amount"] for update in await client.costs(2)] == [0.01, 0.02]
+
+    async def test_a_continued_session_shows_its_cost_once_its_history_is_in(
+        self, bridge, work, pi_home
+    ):
+        """Before its first new turn: the chat shows the cost of the history."""
+        _write_session(pi_home / "sessions", str(work), "stored-1", _user("Fix the bug"))
+        client = await bridge(
+            session_id="stored-1", messages=STORED, stats=[{"cost": 0.42}], auth_type="api_key"
+        )
+
+        await client.result("session/load", {"sessionId": "stored-1", "cwd": str(work)})
+
+        assert await client.costs(1) == [
+            {
+                "sessionUpdate": "usage_update",
+                "used": 900,
+                "size": 200000,
+                "cost": {"amount": 0.42, "currency": "USD"},
+            }
+        ]
+
+
 class TestList:
     async def test_the_sessions_of_a_folder_newest_first(self, bridge, work, pi_home, tmp_path):
         root = pi_home / "sessions"
@@ -2439,7 +2577,9 @@ class TestDialogs:
         assert client.pi_commands("extension_ui_response") == [
             {"type": "extension_ui_response", **sent}
         ]
-        assert client.pi_log()[-1]["id"] == "d1"
+        assert [
+            record["id"] for record in client.pi_log() if record.get("type") == "extension_ui_response"
+        ] == ["d1"]
 
     async def test_a_short_choice_is_a_button_each(self, bridge, work):
         dialog = _dialog("select", title="Which branch?", options=["main", "dev", "", 5])

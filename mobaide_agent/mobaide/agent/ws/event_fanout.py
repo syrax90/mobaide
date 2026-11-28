@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _STATE_EVENTS = frozenset({"started", "stopped", "error"})
 # Events that change one field of the session row and only refresh it.
-_ROW_EVENTS = frozenset({"title", "activity"})
+_ROW_EVENTS = frozenset({"title", "activity", "requests"})
 _ATTENTION_EVENT = "attention"
 
 

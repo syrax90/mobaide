@@ -22,6 +22,7 @@ struct ChatCommand: Encodable, Equatable, Sendable {
     var after_seq: Int?
     var text: String?
     var images: [ChatImagePayload]?
+    var mentions: [String]?
     var config_id: String?
     var value: JSONValue?
     var request_id: String?
@@ -42,8 +43,15 @@ struct ChatCommand: Encodable, Equatable, Sendable {
         ChatCommand(id: id, op: "sync", epoch: epoch, after_seq: afterSeq)
     }
 
-    static func prompt(id: String, text: String, images: [ChatImagePayload]) -> ChatCommand {
-        ChatCommand(id: id, op: "prompt", text: text, images: images.isEmpty ? nil : images)
+    /// `mentions`: paths relative to the session folder that `text` names with `@`.
+    static func prompt(id: String, text: String, images: [ChatImagePayload], mentions: [String] = []) -> ChatCommand {
+        ChatCommand(
+            id: id,
+            op: "prompt",
+            text: text,
+            images: images.isEmpty ? nil : images,
+            mentions: mentions.isEmpty ? nil : mentions
+        )
     }
 
     static func cancel(id: String) -> ChatCommand {

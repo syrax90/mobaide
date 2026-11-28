@@ -76,6 +76,16 @@ struct AgentAPI: Sendable {
         )
     }
 
+    /// `POST /api/sessions/{id}/chat/respond` — answers the chat request a
+    /// notification names with its Allow or Deny option.
+    func respondToChatRequest(sessionId: String, request: ChatRespondRequest) async throws -> ChatRespondResponse {
+        try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(Self.encodePathSegment(sessionId))/chat/respond",
+            body: request
+        )
+    }
+
     func codexLogin(apiKey: String) async throws -> CodexLoginResponse {
         try await execute(method: "POST", url: "\(try await base())/api/codex/login", body: CodexLoginRequest(api_key: apiKey))
     }
@@ -266,6 +276,14 @@ struct AgentAPI: Sendable {
             url: "\(try await base())/api/sessions/\(sessionId)/git/rebase/\(step)",
             rawBody: Data()
         )
+    }
+
+    /// `GET /api/sessions/{id}/files?q=&limit=` — the agent's best matches for
+    /// an `@` mention in a chat session's folder.
+    func listSessionFiles(sessionId: String, q: String, limit: Int) async throws -> SessionFilesResponse {
+        let query = "?q=\(Self.encodeQueryValue(q))&limit=\(limit)"
+        let id = Self.encodePathSegment(sessionId)
+        return try await execute(method: "GET", url: "\(try await base())/api/sessions/\(id)/files\(query)")
     }
 
     /// `GET /api/fs/dirs?path=[&q=]` — subdirectory names for the path fields' suggestions.

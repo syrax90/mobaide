@@ -17,12 +17,22 @@ struct ChatComposer: View {
 
     @Environment(\.mobaideColors) private var colors
     @State private var pickerItems: [PhotosPickerItem] = []
+    /// The HIG minimum tap height, grown with Dynamic Type so a row is never clipped.
+    @ScaledMetric(relativeTo: .callout) private var suggestionRowHeight: CGFloat = 44
 
     private static let maxSuggestions = 6
 
+    /// Up to six rows; at large text sizes the list gives up height (down to one
+    /// row) so the field and the buttons stay above the keyboard.
+    private func rows(_ count: Int) -> CGFloat {
+        CGFloat(min(count, Self.maxSuggestions)) * suggestionRowHeight
+    }
+
     var body: some View {
         VStack(spacing: 8) {
-            if !suggestions.isEmpty {
+            if !model.mentionFiles.isEmpty {
+                mentionList
+            } else if !suggestions.isEmpty {
                 suggestionList
             }
             if !model.attachments.isEmpty || model.preparingImages > 0 {
@@ -149,7 +159,7 @@ struct ChatComposer: View {
                             Spacer(minLength: 0)
                         }
                         .padding(.horizontal, 12)
-                        .frame(minHeight: 40)
+                        .frame(minHeight: suggestionRowHeight)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -157,7 +167,60 @@ struct ChatComposer: View {
                 }
             }
         }
-        .frame(height: CGFloat(min(list.count, Self.maxSuggestions)) * 40)
+        .frame(
+            minHeight: min(rows(list.count), suggestionRowHeight),
+            idealHeight: rows(list.count),
+            maxHeight: rows(list.count)
+        )
+        .background(colors.bg2)
+        .pixelRing(colors.surface2)
+    }
+
+    // MARK: - File mentions
+
+    private var mentionList: some View {
+        let entries = model.mentionFiles
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(entries, id: \.self) { entry in
+                    let cut = entry.path.lastIndex(of: "/")
+                    let name = ChatMentions.value(
+                        path: cut.map { String(entry.path[entry.path.index(after: $0)...]) } ?? entry.path,
+                        dir: entry.dir
+                    )
+                    let folder = cut.map { String(entry.path[..<$0]) }
+                    Button {
+                        model.pickMention(entry)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text(name)
+                                .font(.callout.monospaced())
+                                .foregroundStyle(colors.accent)
+                                .lineLimit(1)
+                            if let folder {
+                                Text(folder)
+                                    .font(.caption)
+                                    .foregroundStyle(colors.textMuted)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: suggestionRowHeight)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(folder.map { "\(name), in \($0)" } ?? name)
+                    .accessibilityHint("Inserts it in the message")
+                }
+            }
+        }
+        .frame(
+            minHeight: min(rows(entries.count), suggestionRowHeight),
+            idealHeight: rows(entries.count),
+            maxHeight: rows(entries.count)
+        )
         .background(colors.bg2)
         .pixelRing(colors.surface2)
     }

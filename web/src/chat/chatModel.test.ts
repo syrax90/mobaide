@@ -259,6 +259,15 @@ describe('ChatSessionModel draft', () => {
     expect(revoked).toEqual([]);
   });
 
+  it("puts a rejected prompt's mentions back first, once each", async () => {
+    const { model } = await harness();
+    model.draftMentions = ['docs/', 'lib/util.ts'];
+
+    model.restoreDraft('explain @src/app.py and @docs/', [], ['src/app.py', 'docs/']);
+
+    expect(model.draftMentions).toEqual(['src/app.py', 'docs/', 'lib/util.ts']);
+  });
+
   it('keeps the images within the limits of one prompt and revokes the rest', async () => {
     const { model } = await harness();
     model.draftImages = [image('c'), image('d'), image('e')];

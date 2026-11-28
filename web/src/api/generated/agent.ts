@@ -747,6 +747,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/chat/respond": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Respond To Chat Request
+         * @description Answer the chat request that a session's ``attention_request`` names
+         *     with its ``allow_once`` or ``reject_once`` option, as a notification's
+         *     Allow or Deny does. The first answer wins.
+         */
+        post: operations["respond_to_chat_request_api_sessions__session_id__chat_respond_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Session Files Endpoint
+         * @description Files and folders of the session's own folder that match ``q``, best
+         *     first; ``limit`` is clamped to 1–50.
+         */
+        get: operations["list_session_files_endpoint_api_sessions__session_id__files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/git/commit": {
         parameters: {
             query?: never;
@@ -1398,6 +1441,21 @@ export interface components {
             skip_permissions: boolean;
         };
         /**
+         * AttentionRequest
+         * @description The open chat request a notification can answer with Allow or Deny
+         *     (see ``ChatSession._attention_request``).
+         */
+        AttentionRequest: {
+            /** Choices */
+            choices: string[];
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Tool Kind */
+            tool_kind: string;
+        };
+        /**
          * AutoScanFilterDraftModel
          * @description A Linear filter as a template keeps it: the fields of
          *     :class:`AutoScanFilterModel`, any of which may still be empty.
@@ -1643,6 +1701,25 @@ export interface components {
         AutoScanTemplatesResponse: {
             /** Templates */
             templates: components["schemas"]["AutoScanTemplate"][];
+        };
+        /**
+         * ChatRespondRequest
+         * @description ``POST /api/sessions/{id}/chat/respond``: answer the request
+         *     ``attention_request`` names, as a notification action does.
+         */
+        ChatRespondRequest: {
+            /**
+             * Choice
+             * @enum {string}
+             */
+            choice: "allow_once" | "reject_once";
+            /** Request Id */
+            request_id: string;
+        };
+        /** ChatRespondResponse */
+        ChatRespondResponse: {
+            /** Answered */
+            answered: boolean;
         };
         /**
          * ChatStoredSession
@@ -3199,6 +3276,30 @@ export interface components {
             total: number;
         };
         /**
+         * SessionFileEntry
+         * @description One file or folder of a session's folder, relative to it with ``/``
+         *     separators on every host; a folder has no trailing separator.
+         */
+        SessionFileEntry: {
+            /** Dir */
+            dir: boolean;
+            /** Path */
+            path: string;
+        };
+        /**
+         * SessionFilesResponse
+         * @description The best matches for an ``@`` mention, best first.
+         *
+         *     ``truncated`` means a cap on count, bytes or time stopped the listing
+         *     behind them, so a file the query should match may be missing.
+         */
+        SessionFilesResponse: {
+            /** Entries */
+            entries: components["schemas"]["SessionFileEntry"][];
+            /** Truncated */
+            truncated: boolean;
+        };
+        /**
          * SessionResponse
          * @description REST response for a single session.
          *
@@ -3211,6 +3312,7 @@ export interface components {
             activity?: string | null;
             /** Attention */
             attention?: string | null;
+            attention_request?: components["schemas"]["AttentionRequest"] | null;
             /** Command */
             command: string[];
             /** Created At */
@@ -4824,6 +4926,87 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    respond_to_chat_request_api_sessions__session_id__chat_respond_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatRespondRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatRespondResponse"];
+                };
+            };
+            /** @description No chat session with this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is not pending: answered, cancelled or old */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A notification cannot answer this request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_session_files_endpoint_api_sessions__session_id__files_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionFilesResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

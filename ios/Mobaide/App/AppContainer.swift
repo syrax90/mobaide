@@ -230,7 +230,12 @@ final class AppContainer {
             sessionManager: sessionManager,
             tokenStore: tokenStore,
             foregroundSessionTracker: foregroundSessionTracker,
-            reviewPrompt: reviewPromptCoordinator
+            reviewPrompt: reviewPromptCoordinator,
+            listSessionFiles: { [agentAPI] sessionId, query in
+                try await agentAPI.listSessionFiles(
+                    sessionId: sessionId, q: query, limit: ChatMentions.suggestionsLimit
+                ).entries
+            }
         )
         let sessionRepository = SessionRepository(
             agentAPI: agentAPI,
@@ -310,6 +315,21 @@ final class AppContainer {
             }
         )
         self.notificationService = notificationService
+        notificationService.registerCategories()
+        let permissionAnswerSender = PermissionAnswerSender(
+            agentAPI: agentAPI,
+            centralAPI: centralAPI,
+            tokenStore: tokenStore,
+            userIdentityStore: userIdentityStore,
+            deviceIdentityStore: deviceIdentityStore
+        )
+        let permissionActionHandler = PermissionActionHandler(
+            send: { action in try await permissionAnswerSender.send(action) },
+            presenter: notificationService
+        )
+        notificationService.setOnAction { action in
+            await permissionActionHandler.handle(action)
+        }
         let attentionCoordinator = AttentionCoordinator(
             eventStream: { agentEventBus.events() },
             authStates: { sessionManager.authStates() },

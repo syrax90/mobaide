@@ -54,7 +54,8 @@ const OWNER = {
    * do #678's `GitRebaseRequest` / `GitRebaseResponse` from the Changes panel
    * and the conflict resolver's `GitConflictResponse` and its three
    * `GitConflict*Request` bodies. `FsDirsResponse`, the folder listing behind
-   * the path fields' suggestions, is a plain REST body on the same footing.
+   * the path fields' suggestions, is a plain REST body on the same footing, as
+   * is `SessionFilesResponse` behind the chat composer's `@` suggestions.
    *
    * #737's voice dictation and install bodies are REST-only and follow them
    * here too, as do the transcript cleanup request and response;
@@ -170,6 +171,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/RunNowRequest.json': OWNER.generated,
   'dto/agent/RunNowResponse.json': OWNER.generated,
   'dto/agent/ScrollbackResponse.json': OWNER.unusedByClients,
+  'dto/agent/SessionFilesResponse.json': OWNER.generated,
   'dto/agent/StartScanRequest.json': OWNER.generated,
   'dto/agent/StopScanRequest.json': OWNER.generated,
   'dto/agent/TokenRequest.json': OWNER.generated,

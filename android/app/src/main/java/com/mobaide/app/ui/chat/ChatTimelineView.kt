@@ -16,6 +16,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -263,6 +265,7 @@ private fun StepsRow(row: ChatTimelineRow.Steps, onToggle: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UserBubble(item: ChatItem.User) {
     Box(modifier = Modifier.fillMaxWidth()) {
@@ -280,7 +283,11 @@ private fun UserBubble(item: ChatItem.User) {
                 }
             }
             if (item.attachments.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Wraps: a message can carry up to ten file chips named by their paths.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     item.attachments.forEach { AttachmentChip(it) }
                 }
             }
@@ -303,11 +310,11 @@ private fun AttachmentChip(attachment: ChatAttachment) {
             modifier = Modifier.size(14.dp),
         )
         Spacer(modifier = Modifier.width(4.dp))
-        Text(
+        MiddleEllipsisText(
             text = attachment.label,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
+            modifier = Modifier.weight(1f, fill = false),
         )
     }
 }

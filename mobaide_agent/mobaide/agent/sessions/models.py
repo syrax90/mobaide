@@ -350,6 +350,20 @@ class CreateSessionRequest(BaseModel):
         return self
 
 
+class AttentionRequest(BaseModel):
+    """The open chat request a notification can answer with Allow or Deny
+    (see ``ChatSession._attention_request``)."""
+
+    id: str
+    # One line, at most 120 characters.
+    title: str
+    # The ACP tool kind: ``read``, ``edit``, ``execute``, … or ``other``.
+    tool_kind: str
+    # Always ``["allow_once", "reject_once"]``: the ``choice`` values of
+    # ``POST /api/sessions/{id}/chat/respond``.
+    choices: list[str]
+
+
 class SessionResponse(BaseModel):
     """REST response for a single session.
 
@@ -371,6 +385,9 @@ class SessionResponse(BaseModel):
     # built-in kinds.
     kind_label: str | None = None
     attention: str | None = None
+    # Chat sessions only: set while ``attention`` is ``awaiting_permission``
+    # and one plain tool permission is open.
+    attention_request: AttentionRequest | None = None
     exit_reason: str | None = None
     ui: str = "terminal"
     # ``working`` | ``waiting`` | ``idle`` | null (unknown); see
@@ -383,6 +400,18 @@ class SessionResponse(BaseModel):
     @classmethod
     def from_info(cls, info: SessionInfo) -> SessionResponse:
         return cls(**session_to_wire_dict(info))
+
+
+class ChatRespondRequest(BaseModel):
+    """``POST /api/sessions/{id}/chat/respond``: answer the request
+    ``attention_request`` names, as a notification action does."""
+
+    request_id: str = Field(min_length=1, max_length=200)
+    choice: Literal["allow_once", "reject_once"]
+
+
+class ChatRespondResponse(BaseModel):
+    answered: bool
 
 
 class ScrollbackResponse(BaseModel):

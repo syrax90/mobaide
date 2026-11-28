@@ -147,6 +147,74 @@ class TestUnifiedDiff:
         assert (part["added"], part["removed"]) == (2, 3)
 
 
+class TestSplitFileLinks:
+    """A replayed user message keeps a mentioned file as the text
+    ``[@name](file://…)`` at its end; only those trailing links are split off."""
+
+    def test_trailing_links_come_off_in_order(self):
+        text = "Explain @src/app.py\n\n[@app.py](file:///w/src/app.py) [@docs](file:///w/docs)\n"
+
+        assert nz.split_file_links(text) == (
+            "Explain @src/app.py",
+            [("app.py", "file:///w/src/app.py"), ("docs", "file:///w/docs")],
+        )
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "See [@app.py](file:///w/app.py) and fix it",
+            "See [Resource link: file:///w/app.py] and fix it",
+            "[@site](https://example.com)",
+            "no links here",
+        ],
+        ids=["link-mid-text", "copilot-link-mid-text", "not-a-file-uri", "plain"],
+    )
+    def test_other_text_is_left_alone(self, text):
+        assert nz.split_file_links(text) == (text, [])
+
+    def test_copilot_links_take_their_name_from_the_uri(self):
+        text = (
+            "Explain @docs/ and @my notes.md"
+            "\n[Resource link: file:///w/docs/]\n[Resource link: file:///w/my%20notes.md]"
+        )
+
+        assert nz.split_file_links(text) == (
+            "Explain @docs/ and @my notes.md",
+            [("docs", "file:///w/docs/"), ("my notes.md", "file:///w/my%20notes.md")],
+        )
+
+    def test_names_with_brackets_come_off_whole(self):
+        # codex-acp and the Pi bridge write the name decoded.
+        text = (
+            "Fix @pages/[id].vue and @pages/[...slug]/"
+            "\n[@[id].vue](file:///w/pages/%5Bid%5D.vue)\n[@[...slug]](file:///w/pages/%5B...slug%5D/)"
+        )
+
+        assert nz.split_file_links(text) == (
+            "Fix @pages/[id].vue and @pages/[...slug]/",
+            [
+                ("[id].vue", "file:///w/pages/%5Bid%5D.vue"),
+                ("[...slug]", "file:///w/pages/%5B...slug%5D/"),
+            ],
+        )
+
+    def test_at_most_the_cap_of_links_come_off(self):
+        links = [f"[@f{n:02}](file:///w/f{n:02})" for n in range(nz.FILE_LINKS_MAX + 1)]
+
+        rest, split = nz.split_file_links("hi " + " ".join(links))
+
+        assert rest == "hi " + links[0]
+        assert [name for name, _ in split] == [f"f{n:02}" for n in range(1, nz.FILE_LINKS_MAX + 1)]
+
+    @pytest.mark.timeout(10)
+    def test_a_megabyte_of_link_targets_without_a_link_is_read_in_one_pass(self):
+        """One ``[@`` before many ``](file://``, and no link closes the text:
+        a search that tries each ``](file://`` as the name's end is quadratic."""
+        hostile = "[@" + "](file://a" * 100_000 + ")x)"
+
+        assert nz.split_file_links(hostile) == (hostile, [])
+
+
 class TestContentBlockPart:
     def test_long_text_is_marked_truncated(self):
         part = nz.content_block_part({"type": "text", "text": "x" * (nz.TEXT_PART_MAX + 1)})
@@ -1127,6 +1195,47 @@ class TestPermissionOptions:
     def test_caps_the_option_count(self):
         raw = [{"optionId": f"o{i}", "kind": "allow_once"} for i in range(20)]
         assert len(nz.permission_options(raw)) == nz.PERMISSION_OPTIONS_MAX
+
+
+class TestQuickChoices:
+    """The options a notification's Allow and Deny pick. Only one standard
+    ``allow_once`` and one ``reject_once`` among standard kinds qualify:
+    Allow must never pick an option the user would not read as "Allow once"."""
+
+    def test_maps_each_choice_to_its_single_option(self):
+        raw = [
+            {"optionId": "allow", "name": "Allow once", "kind": "allow_once"},
+            {"optionId": "always", "name": "Always allow", "kind": "allow_always"},
+            {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+        ]
+
+        assert nz.quick_choices(raw) == {"allow_once": "allow", "reject_once": "reject"}
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            # permission_options reads an unknown kind as allow_once.
+            [{"optionId": "a", "kind": "maybe"}, {"optionId": "r", "kind": "reject_once"}],
+            [
+                {"optionId": "a", "kind": "allow_once"},
+                {"optionId": "b", "kind": "allow_once"},
+                {"optionId": "r", "kind": "reject_once"},
+            ],
+            [{"optionId": "a", "kind": "allow_always"}, {"optionId": "r", "kind": "reject_once"}],
+        ],
+        ids=["unknown-kind", "two-allow-once", "no-allow-once"],
+    )
+    def test_any_other_set_of_options_gets_no_quick_choices(self, raw):
+        assert nz.quick_choices(raw) is None
+
+
+class TestAlertTitle:
+    def test_hidden_characters_cannot_make_the_command_read_differently(self):
+        # U+202E shows the text after it right to left; U+200B and U+2060
+        # take no space. The alert shows what runs.
+        title = "echo hi\u200b\u202e #txt.olleh\u202c\n&&\trm\u2060 -rf ~"
+
+        assert nz.alert_title(title) == "echo hi #txt.olleh && rm -rf ~"
 
 
 QUESTION_SCHEMA = {

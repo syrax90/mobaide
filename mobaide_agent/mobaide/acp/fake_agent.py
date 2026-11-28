@@ -199,6 +199,7 @@ JUNIE_BRAVE = [{"value": "brave-auto", "name": "Auto"}, {"value": "on", "name": 
 PI_MODELS = [
     {"value": "openai-codex/gpt-6.1-sol", "name": "GPT-6.1 Sol"},
     {"value": "openai-codex/gpt-5.6-luna", "name": "GPT-5.6 Luna"},
+    {"value": "openrouter/anthropic/claude-sonnet-5.5", "name": "Claude Sonnet 5.5"},
 ]
 PI_LEVELS = [
     {"value": v, "name": n}
@@ -1239,8 +1240,11 @@ class FakeAgent:
             # Cursor reports no usage.
             return {"stopReason": "end_turn" if ok else "cancelled"}
         if self.pi:
-            # The Pi bridge reports the context use, but no cost.
+            # The Pi bridge reports the context use, then the session cost.
+            # It sends no cost for a ChatGPT login: a subscription.
             self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 500000})
+            if not str(s["model"]).startswith("openai-codex/"):
+                self.update(sid, {"sessionUpdate": "usage_update", "used": s["used"], "size": 500000, "cost": {"amount": round(s["used"] / 1e6, 4), "currency": "USD"}})
             return {"stopReason": "end_turn" if ok else "cancelled"}
         if self.copilot or self.junie:
             # Copilot and Junie report the context use, but no cost.

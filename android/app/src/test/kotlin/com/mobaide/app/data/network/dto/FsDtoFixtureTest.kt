@@ -10,10 +10,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The Android arm of the `FsDirsResponse` golden fixture under
- * `tests/protocol_fixtures/dto/agent/`, decoded under the `RestApi` decoder
- * configuration, plus the `capabilities.fs` gate that decides whether the path
- * fields ask for it at all.
+ * The Android arm of the `FsDirsResponse` and `SessionFilesResponse` golden
+ * fixtures under `tests/protocol_fixtures/dto/agent/`, decoded under the
+ * `RestApi` decoder configuration, plus the `capabilities.fs` gate that
+ * decides whether the path fields ask for it at all.
  */
 class FsDtoFixtureTest {
 
@@ -39,6 +39,34 @@ class FsDtoFixtureTest {
         )
         assertEquals(FsDirsResponse("/var/big", listOf("a0001", "a0002"), truncated = true), decode("truncated_listing"))
         assertEquals(FsDirsResponse("C:\\", emptyList(), truncated = false), decode("empty_windows_drive_root"))
+    }
+
+    @Test
+    fun sessionFilesResponse_decodesEveryCase() {
+        val fixture: Fixture = ProtocolFixtures.load("dto/agent/SessionFilesResponse.json")
+        assertEquals("SessionFilesResponse", fixture.type)
+        val decoded = fixture.cases.associate {
+            it.name to json.decodeFromJsonElement(SessionFilesResponse.serializer(), it.wire)
+        }
+
+        assertEquals(
+            mapOf(
+                "files_and_folders_ranked" to SessionFilesResponse(
+                    listOf(
+                        SessionFileEntry("src/app.py", dir = false),
+                        SessionFileEntry("src/app", dir = true),
+                        SessionFileEntry("tests/test_app.py", dir = false),
+                    ),
+                    truncated = false,
+                ),
+                "truncated_listing" to SessionFilesResponse(
+                    listOf(SessionFileEntry("node_tools/a.js", dir = false)),
+                    truncated = true,
+                ),
+                "no_match" to SessionFilesResponse(emptyList(), truncated = false),
+            ),
+            decoded,
+        )
     }
 
     private fun info(capabilities: String) = VersionInfoResponse(

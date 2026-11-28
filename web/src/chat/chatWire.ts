@@ -380,7 +380,8 @@ const STATE_FIELDS = {
   plan: lenientArray(planEntrySchema),
   requests: lenientArray(requestSchema),
   queue: lenientArray(queuedSchema),
-  prompt_caps: z.object({ image: flag }).catch({ image: false }),
+  /** `mentions`: `prompt` takes `mentions` and the session's files can be listed. */
+  prompt_caps: z.object({ image: flag, mentions: flag }).catch({ image: false, mentions: false }),
   turn_started_at: nullableText,
   cancelling: flag,
   steering: flag,
@@ -409,7 +410,7 @@ export const INITIAL_CHAT_STATE: ChatState = {
   plan: [],
   requests: [],
   queue: [],
-  prompt_caps: { image: false },
+  prompt_caps: { image: false, mentions: false },
   turn_started_at: null,
   cancelling: false,
   steering: false,
@@ -549,7 +550,7 @@ export type FormValue = string | string[] | boolean | number;
 
 export type ChatCommand =
   | { op: 'sync'; epoch?: string; after_seq?: number }
-  | { op: 'prompt'; text: string; images?: ChatImage[] }
+  | { op: 'prompt'; text: string; images?: ChatImage[]; mentions?: string[] }
   | { op: 'cancel' }
   | { op: 'cancel_subagent'; subagent_id: string }
   | { op: 'set_config'; config_id: string; value: string | boolean }
@@ -591,8 +592,18 @@ export function syncCommand(resume: { epoch: string; seq: number } | null): Chat
     : { op: 'sync', epoch: resume.epoch, after_seq: resume.seq };
 }
 
-export function promptCommand(text: string, images: readonly ChatImage[]): ChatCommand {
-  return images.length === 0 ? { op: 'prompt', text } : { op: 'prompt', text, images: [...images] };
+/** `mentions`: paths relative to the session folder that the text names with `@`. */
+export function promptCommand(
+  text: string,
+  images: readonly ChatImage[],
+  mentions: readonly string[] = [],
+): ChatCommand {
+  return {
+    op: 'prompt',
+    text,
+    ...(images.length > 0 && { images: [...images] }),
+    ...(mentions.length > 0 && { mentions: [...mentions] }),
+  };
 }
 
 export function formResponseCommand(
