@@ -256,6 +256,27 @@ class TestWorktreeBranchWireField:
         assert SessionResponse.from_info(info).worktree_branch == "feature/x"
 
 
+class TestAttentionRequestWireField:
+    """``attention_request`` names the chat request a notification's Allow or
+    Deny answers. The agent's wire for it is the golden case every client
+    decodes."""
+
+    _FIXTURE = (
+        Path(__file__).resolve().parents[2]
+        / "tests" / "protocol_fixtures" / "dto" / "agent" / "SessionResponse.json"
+    )
+
+    def test_the_golden_chat_case_is_the_agent_s_wire(self):
+        from mobaide.agent.sessions.models import SessionResponse
+        from mobaide.core.models import session_to_wire_dict
+
+        doc = json.loads(self._FIXTURE.read_text(encoding="utf-8"))
+        wire = next(c["wire"] for c in doc["cases"] if c["name"] == "chat_attention_request")
+
+        assert SessionResponse.model_validate(wire).model_dump() == wire
+        assert session_to_wire_dict(_attention_info()).keys() == wire.keys()
+
+
 class TestCodexToOptions:
     """``CodexOptionsModel.to_options()`` must return a real ``CodexOptions``
     dataclass carrying every field verbatim — the same drift guard as the

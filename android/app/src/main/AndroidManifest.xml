@@ -99,5 +99,9 @@
                 android:value="Maintains the self-hosted agent events WebSocket to deliver session attention notifications without FCM" />
         </service>
 
+        <receiver
+            android:name=".notifications.PermissionActionReceiver"
+            android:exported="false" />
+
     </application>
 </manifest>

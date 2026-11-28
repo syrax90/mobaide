@@ -1197,6 +1197,47 @@ class TestPermissionOptions:
         assert len(nz.permission_options(raw)) == nz.PERMISSION_OPTIONS_MAX
 
 
+class TestQuickChoices:
+    """The options a notification's Allow and Deny pick. Only one standard
+    ``allow_once`` and one ``reject_once`` among standard kinds qualify:
+    Allow must never pick an option the user would not read as "Allow once"."""
+
+    def test_maps_each_choice_to_its_single_option(self):
+        raw = [
+            {"optionId": "allow", "name": "Allow once", "kind": "allow_once"},
+            {"optionId": "always", "name": "Always allow", "kind": "allow_always"},
+            {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+        ]
+
+        assert nz.quick_choices(raw) == {"allow_once": "allow", "reject_once": "reject"}
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            # permission_options reads an unknown kind as allow_once.
+            [{"optionId": "a", "kind": "maybe"}, {"optionId": "r", "kind": "reject_once"}],
+            [
+                {"optionId": "a", "kind": "allow_once"},
+                {"optionId": "b", "kind": "allow_once"},
+                {"optionId": "r", "kind": "reject_once"},
+            ],
+            [{"optionId": "a", "kind": "allow_always"}, {"optionId": "r", "kind": "reject_once"}],
+        ],
+        ids=["unknown-kind", "two-allow-once", "no-allow-once"],
+    )
+    def test_any_other_set_of_options_gets_no_quick_choices(self, raw):
+        assert nz.quick_choices(raw) is None
+
+
+class TestAlertTitle:
+    def test_hidden_characters_cannot_make_the_command_read_differently(self):
+        # U+202E shows the text after it right to left; U+200B and U+2060
+        # take no space. The alert shows what runs.
+        title = "echo hi\u200b\u202e #txt.olleh\u202c\n&&\trm\u2060 -rf ~"
+
+        assert nz.alert_title(title) == "echo hi #txt.olleh && rm -rf ~"
+
+
 QUESTION_SCHEMA = {
     "type": "object",
     "properties": {

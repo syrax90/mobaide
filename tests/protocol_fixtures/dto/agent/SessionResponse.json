@@ -163,6 +163,51 @@
         "ui": "terminal",
         "worktree_branch": "feature/x"
       }
+    },
+    {
+      "name": "chat_attention_request",
+      "wire": {
+        "session_id": "s9",
+        "state": "running",
+        "created_at": "2026-11-27T12:00:00Z",
+        "pid": 101,
+        "command": ["npx", "--yes", "@agentclientprotocol/claude-agent-acp@0.110.1"],
+        "cwd": "/home/user/proj",
+        "title": "Run the tests",
+        "project_name": "proj",
+        "kind": "claude",
+        "kind_label": null,
+        "attention": "awaiting_permission",
+        "attention_request": {
+          "id": "r:3:a1b2c3",
+          "title": "npm test",
+          "tool_kind": "execute",
+          "choices": ["allow_once", "reject_once"]
+        },
+        "exit_reason": null,
+        "ui": "chat",
+        "activity": null,
+        "worktree_branch": null
+      },
+      "decoded_canonical": {
+        "session_id": "s9",
+        "state": "running",
+        "created_at": "2026-11-27T12:00:00Z",
+        "pid": 101,
+        "command": ["npx", "--yes", "@agentclientprotocol/claude-agent-acp@0.110.1"],
+        "cwd": "/home/user/proj",
+        "title": "Run the tests",
+        "project_name": "proj",
+        "kind": "claude",
+        "attention": "awaiting_permission",
+        "attention_request": {
+          "id": "r:3:a1b2c3",
+          "title": "npm test",
+          "tool_kind": "execute",
+          "choices": ["allow_once", "reject_once"]
+        },
+        "ui": "chat"
+      }
     }
   ]
 }

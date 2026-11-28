@@ -59,6 +59,10 @@ export const sessionAttentionSchema = z.looseObject({
   kind: optionalWireString(),
   kind_label: optionalWireString(),
   agent_id: optionalWireString(),
+  /** The chat request the alert is about; never its title (see PROTOCOL.md). */
+  request_id: optionalWireString(),
+  /** That request's ACP tool kind (`execute`, `edit`, …). */
+  request_tool_kind: optionalWireString(),
 });
 
 /**

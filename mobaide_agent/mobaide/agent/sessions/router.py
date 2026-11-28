@@ -13,7 +13,12 @@ from mobaide.core import (
     SessionManager,
 )
 from mobaide.acp.agents import ChatAgentUnavailableError
-from mobaide.acp.wire import chat_request_error, delete_chat_session, list_chat_sessions
+from mobaide.acp.wire import (
+    answer_chat_request,
+    chat_request_error,
+    delete_chat_session,
+    list_chat_sessions,
+)
 from mobaide.core.models import resolve_spawn_args
 from mobaide.core.shell import resolve_default_shell
 from mobaide.linear.worktree import WorktreeCreationError
@@ -21,6 +26,8 @@ from mobaide.linear.worktree import WorktreeCreationError
 from ..auth.dependencies import get_current_user
 from ..logging import audit_event, get_logger
 from .models import (
+    ChatRespondRequest,
+    ChatRespondResponse,
     ChatStoredSessionsResponse,
     CreateSessionRequest,
     ScrollbackResponse,
@@ -339,6 +346,37 @@ async def get_scrollback(
         lines=sliced,
         total=len(buf),
     )
+
+
+@router.post(
+    "/{session_id}/chat/respond",
+    response_model=ChatRespondResponse,
+    responses={
+        404: {"description": "No chat session with this id"},
+        409: {"description": "The request is not pending: answered, cancelled or old"},
+        422: {"description": "A notification cannot answer this request"},
+    },
+)
+async def respond_to_chat_request(
+    session_id: str, body: ChatRespondRequest, request: Request
+) -> ChatRespondResponse:
+    """Answer the chat request that a session's ``attention_request`` names
+    with its ``allow_once`` or ``reject_once`` option, as a notification's
+    Allow or Deny does. The first answer wins."""
+    code, payload = await answer_chat_request(
+        _get_manager(request), session_id, body.request_id, body.choice
+    )
+    audit_event(
+        "audit.chat.request_answered",
+        actor=getattr(request.state, "username", None),
+        target=session_id,
+        outcome="ok" if code == 200 else "error",
+        status=code,
+        choice=body.choice,
+    )
+    if code != 200:
+        raise HTTPException(status_code=code, detail=payload["detail"])
+    return ChatRespondResponse(**payload)
 
 
 chat_router = APIRouter(

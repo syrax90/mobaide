@@ -159,6 +159,7 @@ from mobaide.agent.sessions.models import (
     CursorOptionsModel,
     JunieOptionsModel,
     PiOptionsModel,
+    ChatRespondRequest,
     CreateSessionRequest,
 )
 from mobaide.agent.ws.session_list import (
@@ -198,8 +199,10 @@ from mobaide.acp.wire import (
     FRAME_CHAT_COMMAND,
     LEGACY_CLIENT_NOTICE,
     is_chat_session,
+    answer_chat_request,
     delete_chat_session,
     list_chat_sessions,
+    match_chat_respond_route,
     match_chat_session_route,
     match_chat_sessions_route,
 )
@@ -460,6 +463,14 @@ def _attention_user_event(payload: object) -> dict[str, object] | None:
         value = session.get(key)
         if value is not None:
             slim[key] = value
+    # Never the request's title: it can hold the command itself, and an APNs
+    # alert built from this payload passes through Apple.
+    request = session.get("attention_request")
+    if isinstance(request, dict) and isinstance(request.get("id"), str) and request["id"]:
+        slim["request_id"] = request["id"]
+        tool_kind = request.get("tool_kind")
+        if isinstance(tool_kind, str) and tool_kind:
+            slim["request_tool_kind"] = tool_kind
     return {
         "type": "user_event",
         "kind": "session.attention",
@@ -2047,6 +2058,20 @@ class RelayClient:
                     "status": 404,
                     "body": {"detail": "Session not found"},
                 }
+
+        chat_session_id = match_chat_respond_route(path)
+        if chat_session_id is not None and method == "POST":
+            try:
+                answer = ChatRespondRequest.model_validate(body or {})
+            except ValidationError as exc:
+                return {
+                    "status": 422,
+                    "body": {"detail": _scrub_validation_errors(exc)},
+                }
+            status_code, payload = await answer_chat_request(
+                self._session_manager, chat_session_id, answer.request_id, answer.choice
+            )
+            return {"status": status_code, "body": payload}
 
         m = _re.match(r"^/api/sessions/([^/]+)/scrollback$", path)
         if m and method == "GET":

@@ -4,6 +4,8 @@ import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.network.dto.AgentSettingsResponse
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.AutoScanTemplatesResponse
+import com.mobaide.app.data.network.dto.ChatRespondRequest
+import com.mobaide.app.data.network.dto.ChatRespondResponse
 import com.mobaide.app.data.network.dto.ChatStoredSessionsResponse
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexLoginRequest
@@ -172,6 +174,23 @@ class RestApi(
             .addPathSegment(sessionId)
             .build()
         executeRaw(Request.Builder().url(url).delete().build())
+    }
+
+    /** `POST /api/sessions/{id}/chat/respond`: answers the chat request a notification names. */
+    suspend fun respondToChatRequest(sessionId: String, body: ChatRespondRequest) {
+        val url = baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("sessions")
+            .addPathSegment(sessionId)
+            .addPathSegment("chat")
+            .addPathSegment("respond")
+            .build()
+        val request = Request.Builder()
+            .url(url)
+            .post(json.encodeToString(body).toRequestBody(jsonMediaType))
+            .build()
+        // Cancellable: the notification action gives up after a few seconds.
+        executeCancellable<ChatRespondResponse>(request)
     }
 
     /** Authenticate the host's Codex CLI with an OpenAI API key (stdin-piped,

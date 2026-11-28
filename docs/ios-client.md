@@ -79,6 +79,13 @@ are deferred (CLA-120).
   session.
 - A tapped alert deep-links to the session's terminal once `.fullyConnected`
   (`DeepLinkCoordinator` stashes a `pendingRoute` on a cold start).
+- A chat permission alert with an answerable `attention_request` gets the
+  `CHAT_PERMISSION` category (`ALLOW` with `.authenticationRequired`, `DENY`).
+  `AppContainer` registers the categories at launch. A button tap runs in the
+  background: `PermissionActionHandler` calls `POST /api/sessions/{id}/chat/respond`
+  with a 20 s timeout. On success it removes the alert; on failure it posts
+  "Could not answer". For an alert from another agent, `PermissionAnswerSender`
+  mints a token with `CentralAPI.getMobileTokens` and uses it once.
 
 iOS has no foreground-service equivalent. The events socket lives while the app
 runs, plus a ~30 s `beginBackgroundTask` grace (`AppLifecycleController`). Events

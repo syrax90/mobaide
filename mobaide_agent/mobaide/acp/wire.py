@@ -6,10 +6,14 @@ PTY frame types: ``'c'`` frames (client → agent) hold one JSON command and
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from .catalog import OPEN_IN_MOBAIDE_DETAIL, ChatCatalog, ChatCatalogError
+from .session import ChatCommandError, RequestGoneError
+
+logger = logging.getLogger(__name__)
 
 FRAME_CHAT = b"a"
 FRAME_CHAT_COMMAND = b"c"
@@ -24,6 +28,7 @@ LEGACY_CLIENT_NOTICE = (
 _CHAT_SESSIONS_ROUTE = re.compile(r"^/api/chat/([a-z0-9_]{1,32})/sessions$")
 # Any id reaches the shared validation, which answers 400 for a bad one.
 _CHAT_SESSION_ROUTE = re.compile(r"^/api/chat/([a-z0-9_]{1,32})/sessions/(.+)$", re.DOTALL)
+_CHAT_RESPOND_ROUTE = re.compile(r"^/api/sessions/([^/]+)/chat/respond$")
 CHAT_RESUME_ID_PATTERN = r"^[A-Za-z0-9._:-]+$"
 CHAT_RESUME_ID_MAX = 200
 _CHAT_RESUME_ID = re.compile(CHAT_RESUME_ID_PATTERN)
@@ -62,6 +67,33 @@ def match_chat_session_route(path: str) -> tuple[str, str] | None:
     ``DELETE /api/chat/{kind}/sessions/{session_id}`` path."""
     m = _CHAT_SESSION_ROUTE.match(path)
     return (m.group(1), m.group(2)) if m else None
+
+
+def match_chat_respond_route(path: str) -> str | None:
+    """The session id of a ``POST /api/sessions/{session_id}/chat/respond`` path."""
+    m = _CHAT_RESPOND_ROUTE.match(path)
+    return m.group(1) if m else None
+
+
+async def answer_chat_request(
+    manager: Any, session_id: str, request_id: str, choice: str
+) -> tuple[int, dict[str, Any]]:
+    """Answer a pending permission request, for both transports.
+
+    404: no such chat session; 409: the request is not pending; 422: a
+    notification cannot answer it.
+    """
+    session = await manager.get_session(session_id)
+    if session is None or not is_chat_session(session):
+        return 404, {"detail": "Chat session not found"}
+    try:
+        session.answer_request(request_id, choice)
+    except RequestGoneError as exc:
+        return 409, {"detail": str(exc)}
+    except ChatCommandError as exc:
+        return 422, {"detail": str(exc)}
+    logger.info("chat.request_answered session=%s choice=%s", session_id, choice)
+    return 200, {"answered": True}
 
 
 async def list_chat_sessions(

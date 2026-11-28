@@ -83,7 +83,7 @@ class FakeSender:
     closed: bool = False
 
     async def send(self, *, token, title, body, session_id, agent_id,
-                   environment) -> PushResult:
+                   environment, request_id=None) -> PushResult:
         self.sent.append(
             {
                 "token": token,
@@ -92,6 +92,7 @@ class FakeSender:
                 "session_id": session_id,
                 "agent_id": agent_id,
                 "environment": environment,
+                "request_id": request_id,
             }
         )
         return self.results.get(
@@ -232,6 +233,54 @@ class TestPushDispatcher:
 
         assert [(s["title"], s["body"]) for s in sender.sent] == [
             ("Turn failed", f"{label} hit an error — tap to see what happened"),
+        ]
+
+    @pytest.mark.parametrize(
+        "overrides,body,request_id",
+        [
+            (
+                {"request_id": "r:3:a1b2c3", "request_tool_kind": "execute"},
+                "Fix the bug wants to run a command",
+                "r:3:a1b2c3",
+            ),
+            # A kind this server does not know keeps the plain words.
+            (
+                {"request_id": "r:3:a1b2c3", "request_tool_kind": "think"},
+                "Fix the bug is waiting for your approval",
+                "r:3:a1b2c3",
+            ),
+            # No request to answer: no actions, and the kind alone changes nothing.
+            (
+                {"request_tool_kind": "execute"},
+                "Fix the bug is waiting for your approval",
+                None,
+            ),
+            # Only a permission alert carries the request its actions answer.
+            (
+                {
+                    "reason": "turn_finished",
+                    "request_id": "r:3:a1b2c3",
+                    "request_tool_kind": "execute",
+                },
+                "Fix the bug finished its turn — tap to continue",
+                None,
+            ),
+        ],
+        ids=["answerable", "unknown-kind", "no-request", "not-a-permission"],
+    )
+    async def test_a_permission_alert_names_the_request_its_actions_answer(
+        self, db, user_id, overrides, body, request_id
+    ):
+        await _register_device(db, user_id, "dev-1", token="tok-1")
+        sender = FakeSender()
+        dispatcher = PushDispatcher(db, sender)
+
+        await dispatcher._send_attention(
+            user_id, _attention_payload(**overrides), frozenset()
+        )
+
+        assert [(s["body"], s["request_id"]) for s in sender.sent] == [
+            (body, request_id)
         ]
 
     async def test_excluded_device_is_skipped_and_the_rest_still_push(

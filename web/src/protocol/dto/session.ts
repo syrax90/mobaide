@@ -14,6 +14,17 @@ import { openSessionKind, optionalWireNumber, optionalWireString } from '../wire
 export const sessionKindSchema = z.string();
 
 /**
+ * The open chat request a notification can answer (`attention_request`). The
+ * web alert shows its `title`; browsers give a page notification no actions.
+ */
+export const attentionRequestSchema = z.looseObject({
+  id: z.string(),
+  title: z.string(),
+  tool_kind: z.string(),
+  choices: z.array(z.string()),
+});
+
+/**
  * The single-session wire dict (`session_to_wire_dict`), carried by the
  * `sessions.changed` / `session.updated` / `session.attention` envelopes and by
  * the REST session list.
@@ -44,6 +55,11 @@ export const sessionResponseSchema = z.looseObject({
   activity: optionalWireString(),
   /** Local branch of the worktree the agent made for the session; absent otherwise. */
   worktree_branch: optionalWireString(),
+  /**
+   * Chat sessions waiting on one plain tool permission; absent otherwise.
+   * A malformed value reads as absent rather than dropping the row.
+   */
+  attention_request: attentionRequestSchema.optional().catch(undefined),
 });
 
 export type SessionResponse = z.infer<typeof sessionResponseSchema>;

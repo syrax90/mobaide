@@ -128,6 +128,10 @@ data class SessionResponse(
     // Local branch of the worktree the agent made for this session; null when
     // the session does not run in one. The stop dialog offers removing both.
     val worktree_branch: String? = null,
+    // Chat sessions: the one open request a notification can answer, while
+    // attention is "awaiting_permission"; null otherwise.
+    @Serializable(with = LenientAttentionRequest::class)
+    val attention_request: AttentionRequest? = null,
 ) {
     val isChat: Boolean get() = ui == UI_CHAT
 
@@ -136,6 +140,41 @@ data class SessionResponse(
         const val UI_TERMINAL = "terminal"
     }
 }
+
+/** The open chat request a notification can answer with Allow or Deny. */
+@Serializable
+data class AttentionRequest(
+    val id: String,
+    // One line, at most 120 characters: what the agent asks to do.
+    val title: String = "",
+    // The ACP tool kind ("execute", "edit", …), or "other".
+    val tool_kind: String = "other",
+    val choices: List<String> = emptyList(),
+) {
+    /** A newer agent that offers other choices gets a plain alert from this build. */
+    val isAnswerable: Boolean
+        get() = ChatRespondRequest.ALLOW in choices && ChatRespondRequest.DENY in choices
+}
+
+/** A malformed value reads as null: the alert goes without actions, the row stays. */
+object LenientAttentionRequest : LenientObjectSerializer<AttentionRequest>(AttentionRequest.serializer())
+
+/** `POST /api/sessions/{id}/chat/respond` body. */
+@Serializable
+data class ChatRespondRequest(
+    val request_id: String,
+    val choice: String,
+) {
+    companion object {
+        const val ALLOW = "allow_once"
+        const val DENY = "reject_once"
+    }
+}
+
+@Serializable
+data class ChatRespondResponse(
+    val answered: Boolean = false,
+)
 
 @Serializable
 data class CreateSessionRequest(

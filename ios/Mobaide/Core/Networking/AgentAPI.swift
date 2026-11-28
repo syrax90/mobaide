@@ -76,6 +76,16 @@ struct AgentAPI: Sendable {
         )
     }
 
+    /// `POST /api/sessions/{id}/chat/respond` — answers the chat request a
+    /// notification names with its Allow or Deny option.
+    func respondToChatRequest(sessionId: String, request: ChatRespondRequest) async throws -> ChatRespondResponse {
+        try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(Self.encodePathSegment(sessionId))/chat/respond",
+            body: request
+        )
+    }
+
     func codexLogin(apiKey: String) async throws -> CodexLoginResponse {
         try await execute(method: "POST", url: "\(try await base())/api/codex/login", body: CodexLoginRequest(api_key: apiKey))
     }
