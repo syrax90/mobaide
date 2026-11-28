@@ -28,7 +28,9 @@
     { "name": "sign_in_submit", "command": { "id": "c-15", "op": "sign_in", "action": "submit", "value": "ab12-cd34" } },
     { "name": "sign_in_cancel", "command": { "id": "c-16", "op": "sign_in", "action": "cancel" } },
     { "name": "new_conversation", "command": { "id": "c-17", "op": "new_conversation" } },
-    { "name": "cancel_subagent", "command": { "id": "c-18", "op": "cancel_subagent", "subagent_id": "sess-7f2a-agent-1" } }
+    { "name": "cancel_subagent", "command": { "id": "c-18", "op": "cancel_subagent", "subagent_id": "sess-7f2a-agent-1" } },
+    { "name": "fork_chat", "command": { "id": "c-20", "op": "fork" } },
+    { "name": "fork_at_answer", "command": { "id": "c-21", "op": "fork", "item_id": "m:4" } }
   ],
   "server": [
     {
@@ -422,6 +424,46 @@
           { "type": "state", "seq": 59, "patch": { "prompt_suggestions": [{ "text": "Run the tests and fix what breaks" }] } },
           { "type": "state", "seq": 60, "patch": { "status": "running", "turn_started_at": "2026-11-07T12:06:00+00:00", "prompt_suggestions": [] } }
         ]
+      }
+    },
+    {
+      "name": "events_fork",
+      "frame": {
+        "t": "events",
+        "epoch": "9f3a1c2b7d4e",
+        "seq": 62,
+        "events": [
+          { "type": "state", "seq": 61, "patch": { "fork": { "chat": true, "at_answer": true } } },
+          { "type": "item", "seq": 62, "item": { "id": "m:4", "type": "agent", "text": "Fixed: the token is now checked before the redirect.", "fork_point": true } }
+        ]
+      }
+    },
+    {
+      "name": "result_fork",
+      "frame": {
+        "t": "result",
+        "id": "c-21",
+        "ok": true,
+        "data": {
+          "session_id": "5e0c7a9b21f4",
+          "session": {
+            "session_id": "5e0c7a9b21f4",
+            "state": "running",
+            "created_at": "2026-11-27T12:00:00+00:00",
+            "pid": 4242,
+            "command": ["node", "/home/user/.local/state/mobaide/acp-adapters/claude-agent-acp/dist/index.js"],
+            "cwd": "/home/user/proj",
+            "title": null,
+            "project_name": "proj",
+            "kind": "claude",
+            "kind_label": null,
+            "attention": null,
+            "exit_reason": null,
+            "ui": "chat",
+            "activity": null,
+            "worktree_branch": null
+          }
+        }
       }
     },
     { "name": "result_ok", "frame": { "t": "result", "id": "c-3", "ok": true, "data": { "queued": true, "queue_id": "q:14" } } },

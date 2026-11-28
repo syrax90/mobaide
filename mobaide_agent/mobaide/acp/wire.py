@@ -11,6 +11,11 @@ import re
 from typing import Any
 
 from .catalog import OPEN_IN_MOBAIDE_DETAIL, ChatCatalog, ChatCatalogError
+# Re-exported for the create routes; defined below this module so that
+# ``session`` (which this module imports) can check a forked session's id.
+from .normalize import CHAT_RESUME_ID_MAX as CHAT_RESUME_ID_MAX
+from .normalize import CHAT_RESUME_ID_PATTERN as CHAT_RESUME_ID_PATTERN
+from .normalize import is_valid_chat_resume_id as is_valid_chat_resume_id
 from .session import ChatCommandError, RequestGoneError
 
 logger = logging.getLogger(__name__)
@@ -29,13 +34,6 @@ _CHAT_SESSIONS_ROUTE = re.compile(r"^/api/chat/([a-z0-9_]{1,32})/sessions$")
 # Any id reaches the shared validation, which answers 400 for a bad one.
 _CHAT_SESSION_ROUTE = re.compile(r"^/api/chat/([a-z0-9_]{1,32})/sessions/(.+)$", re.DOTALL)
 _CHAT_RESPOND_ROUTE = re.compile(r"^/api/sessions/([^/]+)/chat/respond$")
-CHAT_RESUME_ID_PATTERN = r"^[A-Za-z0-9._:-]+$"
-CHAT_RESUME_ID_MAX = 200
-_CHAT_RESUME_ID = re.compile(CHAT_RESUME_ID_PATTERN)
-
-
-def is_valid_chat_resume_id(value: str) -> bool:
-    return len(value) <= CHAT_RESUME_ID_MAX and _CHAT_RESUME_ID.fullmatch(value) is not None
 
 
 def is_chat_session(session: Any) -> bool:

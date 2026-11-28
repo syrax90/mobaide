@@ -8,6 +8,7 @@ import {
   encodeChatCommand,
   formResponseCommand,
   promptCommand,
+  parseForkResult,
   syncCommand,
   type ChatCommand,
   type ChatFrame,
@@ -61,6 +62,8 @@ const BUILDERS: Readonly<Record<string, () => ChatCommand>> = {
   sign_in_cancel: () => ({ op: 'sign_in', action: 'cancel' }),
   new_conversation: () => ({ op: 'new_conversation' }),
   cancel_subagent: () => ({ op: 'cancel_subagent', subagent_id: 'sess-7f2a-agent-1' }),
+  fork_chat: () => ({ op: 'fork' }),
+  fork_at_answer: () => ({ op: 'fork', item_id: 'm:4' }),
 };
 
 function agentBytes(frame: unknown): Uint8Array {
@@ -387,6 +390,47 @@ describe('chat frame golden fixtures', () => {
     expect(started.seq).toBe(60);
     expect(started.state.status).toBe('running');
     expect(started.state.prompt_suggestions).toEqual([]);
+  });
+
+  it('decodes the fork support, a fork point and the fork result', () => {
+    let timeline = applySnapshot(INITIAL_CHAT_TIMELINE, decodeServer('snapshot_full') as SnapshotFrame).timeline;
+    // The snapshot is from an agent without fork: it offers none.
+    expect(timeline.state.fork).toEqual({ chat: false, at_answer: false });
+    const older = timeline.items[timeline.positions.get('m:3') ?? -1];
+    expect(older?.type === 'agent' ? older.fork_point : null).toBeUndefined();
+    for (const name of [
+      'events_batch',
+      'events_remove',
+      'events_sign_in',
+      'events_background_cleared',
+      'events_limit_wait',
+      'events_limit_wait_cleared',
+      'events_subagent_running',
+      'events_subagent_done',
+      'events_prompt_suggestions',
+    ]) {
+      timeline = applyEvents(timeline, decodeServer(name) as EventsFrame).timeline;
+    }
+
+    const { timeline: forkable, sync } = applyEvents(timeline, decodeServer('events_fork') as EventsFrame);
+
+    expect(sync).toBeUndefined();
+    expect(forkable.seq).toBe(62);
+    expect(forkable.state.fork).toEqual({ chat: true, at_answer: true });
+    expect(forkable.items[forkable.positions.get('m:4') ?? -1]).toMatchObject({ type: 'agent', fork_point: true });
+
+    const result = decodeServer('result_fork');
+    if (result.t !== 'result') throw new Error('result_fork is not a result');
+    const forked = parseForkResult(result.data);
+    expect(forked?.sessionId).toBe('5e0c7a9b21f4');
+    expect(forked?.session).toMatchObject({ session_id: '5e0c7a9b21f4', ui: 'chat', kind: 'claude' });
+    // A row of another session is not the new one's: the client opens the id alone.
+    const row = (result.data as { session: Record<string, unknown> }).session;
+    expect(parseForkResult({ session_id: '5e0c7a9b21f4', session: { ...row, session_id: 'other' } })).toEqual({
+      sessionId: '5e0c7a9b21f4',
+      session: null,
+    });
+    expect(parseForkResult({ session: row })).toBeNull();
   });
 
   it('reads an agent that does not say mentions as one without them', () => {

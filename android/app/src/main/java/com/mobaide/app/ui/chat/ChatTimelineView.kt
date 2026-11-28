@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.automirrored.outlined.CallSplit
 import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.Badge
@@ -83,12 +84,14 @@ import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import com.mobaide.app.ui.common.pixel.PixelButton
 import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import com.mobaide.app.ui.common.pixel.PixelFab
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.theme.pixel
 
 const val CHAT_TIMELINE_TAG = "chat_timeline"
 const val CHAT_STEPS_ROW_TAG = "chat_steps_row"
+const val CHAT_FORK_BUTTON_TAG = "chat_fork_button"
 
 /**
  * The conversation, newest at the bottom. Laid out reversed so the list stays
@@ -103,8 +106,12 @@ fun ChatTimeline(
     modifier: Modifier = Modifier,
     focusView: Boolean = false,
     onStopSubagent: (String) -> Unit = {},
+    /** Offers **Fork from here** on the answers marked `fork_point`; null offers none. */
+    onFork: ((itemId: String) -> Unit)? = null,
 ) {
     val items = ui.items
+    val forkEnabled = ui.canFork
+    val forkingItemId = ui.forkingItemId
     val streamingId = ui.streamingItemId
     val waitingTools = ui.waitingToolIds
     val running = ui.running
@@ -159,7 +166,13 @@ fun ChatTimeline(
                 ) {
                     when (val item = row.item) {
                         is ChatItem.User -> UserBubble(item)
-                        is ChatItem.Agent -> AgentMessage(item, streaming = item.id == streamingId)
+                        is ChatItem.Agent -> AgentMessage(
+                            item,
+                            streaming = item.id == streamingId,
+                            onFork = onFork?.takeIf { item.forkPoint },
+                            forkEnabled = forkEnabled,
+                            forking = item.id == forkingItemId,
+                        )
                         is ChatItem.Thought -> ThoughtRow(item, streaming = item.id == streamingId)
                         is ChatItem.Tool -> ChatToolCard(item, waitingForApproval = item.id in waitingTools)
                         is ChatItem.Subagent -> ChatSubagentCard(item, subagentContext)
@@ -307,7 +320,13 @@ private fun AttachmentChip(attachment: ChatAttachment) {
 }
 
 @Composable
-private fun AgentMessage(item: ChatItem.Agent, streaming: Boolean) {
+private fun AgentMessage(
+    item: ChatItem.Agent,
+    streaming: Boolean,
+    onFork: ((itemId: String) -> Unit)? = null,
+    forkEnabled: Boolean = true,
+    forking: Boolean = false,
+) {
     Column(modifier = Modifier.fillMaxWidth()) {
         if (item.text.isNotEmpty()) {
             SelectionContainer {
@@ -316,6 +335,27 @@ private fun AgentMessage(item: ChatItem.Agent, streaming: Boolean) {
         }
         if (streaming) {
             PixelBlinkCursor(height = 14.dp, modifier = Modifier.padding(top = 4.dp))
+        }
+        if (onFork != null) {
+            // A button, not a long-press menu: a long press selects the text.
+            PixelTextButton(
+                onClick = { onFork(item.id) },
+                enabled = forkEnabled,
+                modifier = Modifier.testTag(CHAT_FORK_BUTTON_TAG),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.CallSplit,
+                    contentDescription = null,
+                    tint = if (forkEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.pixel.gray,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (forking) "Forking…" else "Fork from here",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (forkEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.pixel.gray,
+                )
+            }
         }
     }
 }

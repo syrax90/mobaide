@@ -24,11 +24,21 @@ interface ChatTimelineViewProps {
   /** The kind label ("Claude Code"), until the agent names itself. */
   kindLabel: string;
   onRestart: () => void;
+  /** Offers **Fork from here** on the answers marked `fork_point`; undefined offers none. */
+  onFork?: (itemId: string) => void;
+  forkDisabled?: boolean;
   /** Floats over the timeline: the connection pill. */
   children?: ReactNode;
 }
 
-export function ChatTimelineView({ model, kindLabel, onRestart, children }: ChatTimelineViewProps) {
+export function ChatTimelineView({
+  model,
+  kindLabel,
+  onRestart,
+  onFork,
+  forkDisabled = false,
+  children,
+}: ChatTimelineViewProps) {
   const items = useStore(model.store, (state) => state.timeline.items);
   const loaded = useStore(model.store, (state) => state.timeline.loaded);
   const truncated = useStore(model.store, (state) => state.timeline.truncated);
@@ -38,6 +48,7 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
   const agent = useStore(model.store, (state) => state.timeline.state.agent);
   const cwd = useStore(model.store, (state) => state.timeline.state.cwd);
   const hasCommands = useStore(model.store, (state) => state.timeline.state.commands.length > 0);
+  const forkingItemId = useStore(model.store, (state) => state.forkingItemId);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -223,6 +234,9 @@ export function ChatTimelineView({ model, kindLabel, onRestart, children }: Chat
                 restarting={item.id === lastErrorId && restarting}
                 onRestart={onRestart}
                 subagents={item.type === 'subagent' ? subagents : undefined}
+                onFork={item.type === 'agent' && item.fork_point === true ? onFork : undefined}
+                forkDisabled={item.type === 'agent' && item.fork_point === true && forkDisabled}
+                forking={item.id === forkingItemId}
               />
             </div>
           );

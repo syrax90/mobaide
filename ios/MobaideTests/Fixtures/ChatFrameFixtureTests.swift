@@ -65,6 +65,8 @@ final class ChatFrameFixtureTests: XCTestCase {
             "sign_in_cancel": { .signInCancel(id: $0) },
             "new_conversation": { .newConversation(id: $0) },
             "cancel_subagent": { .cancelSubagent(id: $0, subagentId: "sess-7f2a-agent-1") },
+            "fork_chat": { .fork(id: $0, itemId: nil) },
+            "fork_at_answer": { .fork(id: $0, itemId: "m:4") },
         ]
     }
 
@@ -413,6 +415,47 @@ final class ChatFrameFixtureTests: XCTestCase {
         XCTAssertEqual(timeline.seq, 60)
         XCTAssertEqual(timeline.state.status, "running")
         XCTAssertEqual(timeline.state.promptSuggestions, [])
+    }
+
+    func testForkEventsOfferTheForksAndMarkTheAnswerAndTheResultNamesTheNewSession() throws {
+        var timeline = try loaded()
+        // The snapshot is from an agent without fork: it offers none.
+        XCTAssertEqual(timeline.state.fork, ChatForkSupport())
+        XCTAssertEqual(timeline.items.first { $0.id == "m:3" }?.forkPoint, false)
+        for name in [
+            "events_batch", "events_remove", "events_sign_in", "events_background_cleared",
+            "events_limit_wait", "events_limit_wait_cleared", "events_subagent_running", "events_subagent_done",
+            "events_prompt_suggestions",
+        ] {
+            _ = timeline.apply(try server(name))
+        }
+
+        let result = timeline.apply(try server("events_fork"))
+
+        XCTAssertNil(result.sync)
+        XCTAssertEqual(timeline.seq, 62)
+        XCTAssertTrue(timeline.state.fork.chat)
+        XCTAssertTrue(timeline.state.fork.atAnswer)
+        let answer = try XCTUnwrap(timeline.items.first { $0.id == "m:4" })
+        XCTAssertEqual(answer.body, .agent(text: "Fixed: the token is now checked before the redirect."))
+        XCTAssertTrue(answer.forkPoint)
+
+        guard case .result(let frame) = try server("result_fork") else { return XCTFail("result_fork is not a result") }
+        let forked = try XCTUnwrap(ChatForkResult(data: frame.data))
+        XCTAssertEqual(forked.sessionId, "5e0c7a9b21f4")
+        XCTAssertEqual(forked.session?.session_id, "5e0c7a9b21f4")
+        XCTAssertEqual(forked.session?.isChat, true)
+        // A row of another session is not the new one's: the client opens the id alone.
+        guard case .object(var fields)? = frame.data, case .object(var row)? = fields["session"] else {
+            return XCTFail("result_fork has no session row")
+        }
+        row["session_id"] = .string("other")
+        fields["session"] = .object(row)
+        let other = try XCTUnwrap(ChatForkResult(data: .object(fields)))
+        XCTAssertEqual(other.sessionId, "5e0c7a9b21f4")
+        XCTAssertNil(other.session)
+        fields["session_id"] = nil
+        XCTAssertNil(ChatForkResult(data: .object(fields)))
     }
 
     func testResultsDecode() throws {

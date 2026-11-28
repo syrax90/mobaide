@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import uuid
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -37,6 +40,7 @@ from .models import (
 )
 from .opencode_launcher import OpenCodeLauncher, OpenCodeOptions
 from .pi_launcher import PiLauncher, PiOptions
+from .workspaces_config import WorkspaceConfig
 from .workspaces_store import WorkspacesStore, safe_path_exists
 from .pty_backend import PtyBackend, create_pty_backend
 from .session import TerminalSession
@@ -236,8 +240,6 @@ class SessionManager:
             or config.pi_options
         )
         if config.chat_resume_id and options is not None and getattr(options, "worktree", False):
-            from dataclasses import replace
-
             options = replace(options, worktree=False)
         if config.chat_launch_target is not None:
             target = config.chat_launch_target
@@ -253,6 +255,9 @@ class SessionManager:
                 raise ValueError("cwd is required for a session without a workspace")
             target = AdHocLaunch(cwd=config.cwd)
         plan = await spec.prepare(target, options)
+        if config.chat_initial_config is not None:
+            # A fork goes on with the settings of the chat it came from.
+            plan.initial_config = list(config.chat_initial_config)
         if config.trust_folder:
             plan.trust = None
         if config.chat_path_append:
@@ -284,6 +289,7 @@ class SessionManager:
                 agent_title=spec.display_name,
                 load_session_id=config.chat_resume_id,
                 attention_dedupe=self._attention_dedupe,
+                fork_opener=functools.partial(self._open_chat_fork, config, target),
             )
             await session.start()
             self._sessions[config.session_id] = session
@@ -296,6 +302,55 @@ class SessionManager:
             )
         await self._after_create(session)
         return session
+
+    async def _open_chat_fork(
+        self,
+        source: SessionConfig,
+        target: object,
+        acp_session_id: str,
+        answer: str | None,
+        initial_config: list[Any],
+    ) -> dict[str, Any]:
+        """Open the fork ``acp_session_id`` of the chat ``source`` as a new
+        chat session, the way Continue a session opens a stored one: the same
+        agent, workspace and options, in the folder the source runs in (its
+        worktree, never a new one). Returns the new session's row."""
+        cwd = source.cwd
+        if cwd is None:
+            raise ValueError("The chat has no folder")
+        launch = (
+            replace(target, path=cwd) if isinstance(target, WorkspaceConfig) else AdHocLaunch(cwd=cwd)
+        )
+        fork = SessionConfig(
+            session_id=uuid.uuid4().hex[:12],
+            command=[],
+            cwd=cwd,
+            project_name=source.project_name,
+            claude_options=source.claude_options,
+            codex_options=source.codex_options,
+            antigravity_options=source.antigravity_options,
+            opencode_options=source.opencode_options,
+            copilot_options=source.copilot_options,
+            cursor_options=source.cursor_options,
+            junie_options=source.junie_options,
+            pi_options=source.pi_options,
+            kind=source.kind,
+            kind_label=source.kind_label,
+            worktree_branch=source.worktree_branch,
+            worktree_workspace=source.worktree_workspace,
+            attention_quiet_seconds=source.attention_quiet_seconds,
+            ui="chat",
+            chat_resume_id=acp_session_id,
+            chat_launch_target=launch,
+            # The source chat opened this folder already.
+            trust_folder=True,
+            chat_path_append=source.chat_path_append,
+            chat_initial_config=initial_config,
+            chat_fork_answer=answer,
+            chat_title_prefix="Fork: ",
+        )
+        session = await self.create_session(fork)
+        return self._session_dto_factory(session.to_info())
 
     async def _after_create(self, session: TerminalSession | ChatSession) -> None:
         # Eager hook (e.g. attach SessionEventFanout) so headless sessions

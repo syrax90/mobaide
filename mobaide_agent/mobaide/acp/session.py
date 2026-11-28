@@ -13,6 +13,7 @@ import asyncio
 import base64
 import binascii
 import collections
+import functools
 import logging
 import math
 import mimetypes
@@ -20,7 +21,7 @@ import os
 import re
 import secrets
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +35,7 @@ from mobaide import __version__
 from mobaide.core.attention_dedupe import SharedTurnDedupe, real_cwd
 from mobaide.core.attention_gate import AttentionGate, HookKind, is_subagent_call
 from mobaide.core.hook_settings import chat_hook_settings
+from mobaide.core.interrupt_watch import INTERRUPT_MARKER
 from mobaide.core.models import (
     SessionConfig,
     SessionEvent,
@@ -43,6 +45,7 @@ from mobaide.core.models import (
 )
 
 from . import cursor_ext as cx
+from . import fork as fk
 from . import normalize as nz
 from . import subagents as sa
 from . import wake as wk
@@ -52,6 +55,7 @@ from .presence import PresenceHold
 from .rpc import (
     CANCEL_REQUEST_METHOD,
     ERR_AUTH_REQUIRED,
+    ERR_INVALID_PARAMS,
     ERR_METHOD_NOT_FOUND,
     AcpConnection,
     AcpProcessError,
@@ -61,6 +65,11 @@ from .signin import SignInError, SignInFlow
 from .timeline import ChatTimeline
 
 logger = logging.getLogger(__name__)
+
+# Opens a forked conversation as a new chat session: (ACP session id of the
+# fork, fingerprint of the answer it should end with, config to apply) → the
+# new session's row, as ``sessions.changed`` sends it.
+ForkOpener = Callable[[str, str | None, list[ConfigIntent]], Awaitable[dict[str, Any]]]
 
 EVENT_QUEUE_MAXSIZE = 256
 INITIALIZE_TIMEOUT = 120.0
@@ -144,6 +153,8 @@ CLIENT_CAPABILITIES: dict[str, Any] = {
     "elicitation": {"form": {}},
 }
 
+FORK_BUSY = "Wait for the turn to end, or stop it, then fork the chat."
+
 STOP_REASON_TEXT = {
     "cancelled": "Stopped",
     "max_tokens": "Stopped: the response reached the token limit",
@@ -225,6 +236,7 @@ class ChatSession:
         agent_title: str,
         load_session_id: str | None = None,
         attention_dedupe: SharedTurnDedupe | None = None,
+        fork_opener: ForkOpener | None = None,
     ) -> None:
         self._config = config
         self._plan = plan
@@ -296,7 +308,9 @@ class ChatSession:
         self._turn_reopened = False
         self._timeline = ChatTimeline(self._emit_frame, on_status=self._on_timeline_status)
         self._timeline.state["cwd"] = plan.cwd
-        self._title: str | None = plan.title
+        # A fork reads apart from its source; a new conversation in it drops this.
+        self._title_prefix = config.chat_title_prefix or ""
+        self._title: str | None = self._with_prefix(plan.title)
         self._attention: str | None = None
         # The request a notification could answer when the attention was last
         # raised: a different one raises it again (_follow_attention_request).
@@ -399,6 +413,18 @@ class ChatSession:
         # The slash commands the agent itself lists.
         self._agent_commands: set[str] = set()
         self._timeline.state["commands"] = self._with_own_commands([])
+        self._fork_opener = fork_opener
+        # ACP ``messageId`` of each agent item of this epoch: names a fork point.
+        self._acp_message_ids: dict[str, str] = {}
+        # A ``fork`` command runs: messages sent meanwhile wait in the queue.
+        self._forking = False
+        # A ``session/fork`` that outlived its command: its copy is closed when it comes.
+        self._late_fork: asyncio.Future[Any] | None = None
+        # The answer that ended the chat before a turn it did not send: that
+        # turn has no user message, so it must not mark this one as its own.
+        self._external_floor_id: str | None = None
+        # This chat opens a fork: the fingerprint of the answer its replay must end with.
+        self._fork_answer: str | None = config.chat_fork_answer
 
     @property
     def state(self) -> SessionState:
@@ -625,7 +651,7 @@ class ChatSession:
             except ChatCommandError as exc:
                 self._send_result(cmd_id, ok=False, error=str(exc))
                 return
-        if op in ("set_config", "restart", "new_conversation", "steer", "sign_in"):
+        if op in ("set_config", "restart", "new_conversation", "steer", "sign_in", "fork"):
             # These wait on the agent; running them aside keeps a later
             # cancel or prompt from queueing behind them.
             task = asyncio.create_task(self._run_command(op, cmd, cmd_id))
@@ -667,6 +693,8 @@ class ChatSession:
             return await self._cmd_sign_in(cmd)
         if op == "cancel_subagent":
             return self._cmd_cancel_subagent(cmd)
+        if op == "fork":
+            return await self._cmd_fork(cmd)
         raise ChatCommandError(f"Unknown command: {op}")
 
     async def _spawn(self) -> None:
@@ -742,7 +770,16 @@ class ChatSession:
             # An agent that starts to advertise steering gets ``_session/steering``.
             self._steer_by_prompt = self._plan.steer_by_prompt and not advertised
             self._steering = advertised or self._steer_by_prompt
+            # The fork opens in a new process with ``session/load``, and the
+            # copy in this process is closed at once.
+            can_fork = (
+                self._fork_opener is not None
+                and bool(self._agent_caps.get("loadSession"))
+                and self._session_cap("fork")
+                and self._session_cap("close")
+            )
             tl.patch_state(
+                fork={"chat": can_fork, "at_answer": can_fork and self._plan.fork_at_answer},
                 agent={
                     "name": str(info.get("name") or ""),
                     "title": str(info.get("title") or self._agent_title),
@@ -791,6 +828,8 @@ class ChatSession:
                 self._acp_session_id = sid
             self._close_streaming_items()
             tl.patch_state(acp_session_id=self._acp_session_id)
+            if load_id:
+                self._check_fork_replay()
             setup_result = result if isinstance(result, dict) else {}
             self._apply_setup_result(setup_result)
             await self._hold_presence()
@@ -1173,6 +1212,7 @@ class ChatSession:
             not self._ready.is_set()
             or self._own_turn_running()
             or self._external_turn
+            or self._forking
             or bool(self._queue)
         )
         if not busy:
@@ -1187,6 +1227,7 @@ class ChatSession:
             self._ready.is_set()
             and not self._own_turn_running()
             and not self._external_turn
+            and not self._forking
             and self._start_next_prompt()
         ):
             return None
@@ -1203,6 +1244,7 @@ class ChatSession:
             and self._ready.is_set()
             and not self._own_turn_running()
             and not self._external_turn
+            and not self._forking
         ):
             self._start_next_prompt()
 
@@ -1442,6 +1484,8 @@ class ChatSession:
             # A new conversation or a restart took over: its bootstrap sends
             # the queue, never this process.
             return
+        if stop_reason == "end_turn":
+            self._mark_fork_point()
         alive = self._conn is not None and self._conn.alive
         # An error answering the user's own Stop is not news to them.
         cancelling = bool(tl.state.get("cancelling"))
@@ -1927,6 +1971,10 @@ class ChatSession:
         the launch choices keeps those instead."""
         if self._pending_config:
             return
+        self._pending_config = self._current_config()
+
+    def _current_config(self) -> list[ConfigIntent]:
+        """The values in use, as the launch choices of a new agent process."""
         restored = [
             ConfigIntent(
                 opt["value"],
@@ -1952,7 +2000,7 @@ class ChatSession:
             and not (i.category and i.category in covered_categories)
             and not (i.option_id and i.option_id in covered_ids)
         ]
-        self._pending_config = restored
+        return restored
 
     async def _restart(self) -> None:
         self._cancel_forced = False
@@ -1972,11 +2020,15 @@ class ChatSession:
         if can_load:
             # The reload replays the conversation, plan included.
             self._timeline.reset()
+            self._acp_message_ids.clear()
             # The reset dropped the "open in another app" notice: re-check.
             self._presence_conflict = False
             self._close_streaming_items()
             self._drop_consoles()
             self._timeline.patch_state(plan=[])
+        else:
+            # A new session: the answers shown are not in it.
+            self._forget_fork_points()
         self._drop_start_error()
         self._timeline.patch_state(
             status="starting", error=None, requests=self._public_requests(), urgent=True
@@ -2002,6 +2054,8 @@ class ChatSession:
             self._bootstrap_task is not None and not self._bootstrap_task.done()
         ):
             raise ChatCommandError("The agent is already starting")
+        if self._forking:
+            raise ChatCommandError("Wait for the fork to open, then try again.")
         # Set before the first await: a second request (double tap, another
         # client) must not spawn a second adapter that nothing would close.
         self._restarting = True
@@ -2099,9 +2153,12 @@ class ChatSession:
         self._last_thought_message_id = None
         self._last_user_message_id = None
         self._timeline.reset()
+        self._acp_message_ids.clear()
         self._start_error_item = None
         self._close_streaming_items()
         self._drop_consoles()
+        # The new conversation is no copy of anything.
+        self._title_prefix = ""
         self._set_title(self._plan.title)
         self._timeline.patch_state(
             status="starting",
@@ -2140,6 +2197,201 @@ class ChatSession:
         self._bootstrap_task = asyncio.create_task(
             self._bootstrap(load_id=None),
             name=f"chat-bootstrap-{self.session_id}",
+        )
+
+    async def _cmd_fork(self, cmd: dict[str, Any]) -> dict[str, Any]:
+        """Copy the conversation into a new chat session: all of it, or up to
+        the answer ``item_id`` names. This chat stays as it is.
+
+        The copy ``session/fork`` opens on this chat's connection is closed at
+        once: two processes must never write one conversation."""
+        fork_state = self._timeline.state.get("fork") or {}
+        if not fork_state.get("chat"):
+            raise ChatCommandError(f"{self._agent_title} cannot fork a chat")
+        item_id = cmd.get("item_id")
+        if item_id is not None and not isinstance(item_id, str):
+            raise ChatCommandError("Invalid item id")
+        if self._stopping:
+            raise ChatCommandError("The session is closing")
+        status = self._timeline.state.get("status")
+        if status in ("error", "stopped"):
+            raise ChatCommandError("The agent is not running. Use Restart to start it again.")
+        if self._forking:
+            raise ChatCommandError("The fork is already being made")
+        if self._late_fork is not None and not self._late_fork.done():
+            raise ChatCommandError("The last fork is still being made. Try again in a moment.")
+        if self._own_turn_running() or self._external_turn or status == "running":
+            raise ChatCommandError(FORK_BUSY)
+        if self._restarting or not self._ready.is_set():
+            raise ChatCommandError("Wait for the chat to start, then try again.")
+        conn = self._require_conn()
+        source = self._acp_session_id
+        meta: dict[str, Any] | None = None
+        answer: str | None = None
+        if item_id is not None:
+            if not fork_state.get("at_answer"):
+                raise ChatCommandError(f"{self._agent_title} can only fork the whole chat")
+            item = self._timeline.get(item_id)
+            message_id = self._acp_message_ids.get(item_id)
+            if item is None or message_id is None or not item.get("fork_point"):
+                raise ChatCommandError(fk.STALE_POINT)
+            answer = fk.answer_fingerprint(item.get("text") or "")
+            meta = fk.fork_point_meta(message_id, answer, self._answer_occurrence(item_id, answer))
+        elif not self._has_turns and self._load_session_id is None:
+            raise ChatCommandError("Send a message first: there is nothing to fork yet.")
+        params: dict[str, Any] = {"sessionId": source, "cwd": self._plan.cwd, "mcpServers": []}
+        if self._plan.additional_dirs and self._session_cap("additionalDirectories"):
+            params["additionalDirectories"] = list(self._plan.additional_dirs)
+        if meta is not None:
+            params["_meta"] = meta
+        self._forking = True
+        try:
+            started = time.monotonic()
+            # The client waits for the result: past FORK_TIMEOUT it gets an
+            # error, and the copy the agent still makes is closed when it comes.
+            request = asyncio.ensure_future(conn.request("session/fork", params, fk.FORK_LATE_TIMEOUT))
+            try:
+                result = await asyncio.wait_for(asyncio.shield(request), fk.FORK_TIMEOUT)
+            except AcpRpcError as exc:
+                if meta is not None and exc.code == ERR_INVALID_PARAMS:
+                    raise ChatCommandError(fk.STALE_POINT) from None
+                raise ChatCommandError(self._describe_rpc_error(exc)) from None
+            except AcpProcessError as exc:
+                raise ChatCommandError(str(exc) or "The agent stopped") from None
+            except (TimeoutError, asyncio.CancelledError) as exc:
+                self._late_fork = request
+                request.add_done_callback(functools.partial(self._close_late_fork, conn))
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                raise ChatCommandError(
+                    "The agent did not make the fork in time. A copy may still appear in Continue a session in New session."
+                ) from None
+            fork_id = result.get("sessionId") if isinstance(result, dict) else None
+            if not isinstance(fork_id, str) or not nz.is_valid_chat_resume_id(fork_id) or fork_id == source:
+                raise ChatCommandError("The agent did not return the forked session")
+            forked = time.monotonic()
+            await self._close_fork_copy(conn, fork_id)
+            logger.info(
+                "chat.forked session=%s at_answer=%s fork_ms=%d close_ms=%d",
+                self.session_id,
+                meta is not None,
+                (forked - started) * 1000,
+                (time.monotonic() - forked) * 1000,
+            )
+            assert self._fork_opener is not None
+            # Shielded: a Stop of this chat must not cancel the new one halfway
+            # (a spawned adapter the session manager never registered).
+            opening = asyncio.ensure_future(self._fork_opener(fork_id, answer, self._current_config()))
+            opening.add_done_callback(_retrieve_exception)
+            try:
+                row = await asyncio.shield(opening)
+            except Exception as exc:
+                logger.warning("chat.fork_open_failed session=%s: %s", self.session_id, exc)
+                detail = str(exc).strip().rstrip(".") or "The new chat did not open"
+                raise ChatCommandError(
+                    f"{detail}. {self._agent_title} saved the copy on your PC: "
+                    "open it with Continue a session in New session."
+                ) from None
+            # The row too: the client opens the chat before its session list
+            # may have the new session.
+            return {"session_id": row.get("session_id"), "session": row}
+        finally:
+            self._forking = False
+            self._start_queue_if_idle()
+
+    async def _close_fork_copy(self, conn: AcpConnection, fork_id: str) -> None:
+        try:
+            await conn.request("session/close", {"sessionId": fork_id}, CLOSE_TIMEOUT)
+        except (AcpRpcError, AcpProcessError, TimeoutError) as exc:
+            logger.warning("chat.fork_close_failed session=%s: %s", self.session_id, exc)
+
+    def _close_late_fork(self, conn: AcpConnection, request: asyncio.Future[Any]) -> None:
+        """Close the copy of a ``session/fork`` that answered after its command gave up."""
+        if self._late_fork is request:
+            self._late_fork = None
+        if request.cancelled() or request.exception() is not None:
+            return
+        result = request.result()
+        fork_id = result.get("sessionId") if isinstance(result, dict) else None
+        if not isinstance(fork_id, str) or not fork_id or not conn.alive or self._stopping:
+            return
+        logger.info("chat.fork_late_close session=%s", self.session_id)
+        self._run_aside(self._close_fork_copy(conn, fork_id))
+
+    def _answer_occurrence(self, item_id: str, fingerprint: str) -> int:
+        """How many agent messages up to ``item_id`` have its text, itself included."""
+        count = 0
+        for item in self._timeline.items():
+            if item.get("type") == "agent" and fk.answer_fingerprint(item.get("text") or "") == fingerprint:
+                count += 1
+            if item["id"] == item_id:
+                break
+        return max(count, 1)
+
+    def _turn_answer(self) -> dict[str, Any] | None:
+        """The agent message that ends the turn so far: the last item of the
+        main flow since the user's message, when it is an agent message. A
+        message that more work follows is not an answer (Focus view folds it)."""
+        for item in self._timeline.items_reversed():
+            kind = item.get("type")
+            if kind == "agent":
+                return item
+            if kind == "user":
+                return None
+            if kind == "tool":
+                owner = item.get("subagent_id")
+                if isinstance(owner, str) and item["id"].startswith(f"{owner}:"):
+                    # A subagent's own tool call, shown in its card.
+                    continue
+                return None
+            if kind == "thought" or (kind == "subagent" and item.get("parent_subagent_id") is None):
+                return None
+        return None
+
+    def _mark_fork_point(self, *, unless: str | None = None) -> None:
+        """Offer the answer that ended a turn as a fork point; ``unless`` is
+        an answer that ended an earlier turn."""
+        if not (self._timeline.state.get("fork") or {}).get("at_answer"):
+            return
+        item = self._turn_answer()
+        if (
+            item is None
+            or item["id"] == unless
+            or item["id"] not in self._acp_message_ids
+            or item.get("fork_point")
+        ):
+            return
+        item["fork_point"] = True
+        self._timeline.touch(item["id"])
+
+    def _forget_fork_points(self) -> None:
+        """The agent session changed under the items shown: none of them is
+        in the new one."""
+        self._acp_message_ids.clear()
+        for item in self._timeline.items():
+            if item.pop("fork_point", None) is not None:
+                self._timeline.touch(item["id"])
+
+    def _check_fork_replay(self) -> None:
+        """A fork that does not end with the chosen answer says so: an agent
+        that ignored the fork point copied more of the conversation."""
+        expected, self._fork_answer = self._fork_answer, None
+        if expected is None:
+            return
+        last = next(
+            (item for item in self._timeline.items_reversed() if item.get("type") == "agent"), None
+        )
+        if last is not None and fk.answer_fingerprint(last.get("text") or "") == expected:
+            return
+        logger.warning("chat.fork_mismatch session=%s", self.session_id)
+        self._timeline.upsert(
+            {
+                "id": self._next_id("n"),
+                "type": "notice",
+                "severity": "warning",
+                "title": "The fork may hold more of the conversation than you chose",
+                "text": "It does not end with the answer you picked. Read its last messages before you go on.",
+            }
         )
 
     async def _cmd_sign_in(self, cmd: dict[str, Any]) -> dict[str, Any]:
@@ -2297,7 +2549,7 @@ class ChatSession:
         if kind == "session_info_update":
             busy = nz.thread_busy(update)
             if busy is not None:
-                self._on_agent_busy(busy)
+                self._on_agent_busy(busy, finished=nz.thread_idle(update))
         if kind == "agent_message_chunk":
             self._append_message("agent", update)
         elif kind == "agent_thought_chunk":
@@ -2375,10 +2627,12 @@ class ChatSession:
                 if item is not None:
                     tl.append_text(item["id"], part["text"])
 
-    def _on_agent_busy(self, busy: bool, *, self_started: bool = False) -> None:
+    def _on_agent_busy(self, busy: bool, *, self_started: bool = False, finished: bool = False) -> None:
         """A turn this session did not start (another client of a shared
         host, or with ``self_started`` the agent itself): show it as running,
-        and hold queued messages until it ends."""
+        and hold queued messages until it ends. ``finished``: the turn ended
+        by itself (not a Stop, an error or a watchdog), so its answer is a
+        fork point."""
         if not self._ready.is_set():
             # Joining a session while another app's turn runs.
             self._busy_before_ready = busy
@@ -2390,6 +2644,8 @@ class ChatSession:
             if not self_started:
                 # The user went on from another app: no continue may follow.
                 self._cancel_limit_wait()
+            before = self._turn_answer()
+            self._external_floor_id = before["id"] if before is not None else None
             self._external_turn = True
             self._self_turn = self_started
             self._close_streaming_items()
@@ -2411,6 +2667,9 @@ class ChatSession:
                 urgent=True,
             )
         elif not busy and self._external_turn:
+            if finished and not tl.state.get("cancelling"):
+                self._mark_fork_point(unless=self._external_floor_id)
+            self._external_floor_id = None
             self._external_turn = False
             self._disarm_cancel_watchdog()
             self._close_streaming_items()
@@ -2465,7 +2724,7 @@ class ChatSession:
         self._foreground_idle = False
         # The next queued message starts now and reports its own end.
         queued = any(not q.steering for q in self._queue)
-        self._on_agent_busy(False)
+        self._on_agent_busy(False, finished=True)
         if not queued and self._timeline.state.get("status") == "ready":
             self._alert_turn_done()
 
@@ -2649,6 +2908,9 @@ class ChatSession:
         if not self._replaying:
             return
         self._replaying = False
+        if not self._busy_before_ready:
+            # The replay's last turn has ended (not one another app runs now).
+            self._mark_fork_point()
         for child in self._subagents.children():
             if child.running:
                 child.state = "unknown"
@@ -2764,6 +3026,8 @@ class ChatSession:
         tl.upsert({"id": item_id, "type": role, "text": text})
         if role == "agent":
             self._current_agent_item, self._last_agent_message_id = item_id, message_id
+            if message_id is not None:
+                self._acp_message_ids[item_id] = message_id
         else:
             self._current_thought_item, self._last_thought_message_id = item_id, message_id
 
@@ -2792,6 +3056,10 @@ class ChatSession:
             item = None
         self._last_user_message_id = message_id
         if item is None:
+            interrupted = part["type"] == "text" and part["text"].startswith(INTERRUPT_MARKER)
+            if self._replaying and not interrupted:
+                # A replayed turn ends where the next message starts.
+                self._mark_fork_point()
             self._current_agent_item = self._current_thought_item = None
             item = {"id": self._next_id("u"), "type": "user", "text": "", "attachments": []}
             self._current_user_item = item["id"]
@@ -3401,9 +3669,15 @@ class ChatSession:
         if not self._cancel_forced:
             self._set_attention("ended", exit_reason="process_exited")
 
+    def _with_prefix(self, title: str | None) -> str | None:
+        prefix = self._title_prefix
+        if title is None or not prefix or title.startswith(prefix):
+            return title
+        return prefix + title[: max(0, 200 - len(prefix))]
+
     def _set_title(self, title: str | None) -> None:
         if title is not None:
-            title = " ".join(title.split())[:200]
+            title = self._with_prefix(" ".join(title.split())[:200])
         self._timeline.patch_state(title=title)
         if title != self._title:
             self._title = title
@@ -3507,7 +3781,7 @@ class ChatSession:
             return
         gate.handle(kind, payload)
         if kind is HookKind.STOP and self_turn:
-            self._on_agent_busy(False)
+            self._on_agent_busy(False, finished=True)
 
     def _fail_self_turn(self) -> None:
         """A turn the agent started by itself ended on an error (a rate
@@ -3612,6 +3886,11 @@ class ChatSession:
 
 _OUTPUT_ONLY_KEYS = frozenset({"sessionUpdate", "toolCallId", "_meta"})
 _CONTENT_ONLY_KEYS = frozenset({"sessionUpdate", "toolCallId", "content"})
+
+
+def _retrieve_exception(future: asyncio.Future[Any]) -> None:
+    if not future.cancelled():
+        future.exception()
 
 
 def _release_acquired(future: asyncio.Future[PresenceHold | None]) -> None:

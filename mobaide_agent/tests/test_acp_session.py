@@ -3,6 +3,7 @@
 message queue, cancel, permission and form requests, config changes, a
 crash with restart, a sandbox mode that every Restart must apply again,
 a new conversation in the same chat (``new_conversation`` and ``/clear``),
+a fork of the chat into a new one (whole, or up to a chosen answer),
 opening a stored session, the adapter install on first
 use, Send now (steering), command output (and how often it is re-sent),
 signing in from the chat (``sign_in`` and ``/login``),
@@ -38,6 +39,7 @@ import orjson
 import psutil
 import pytest
 
+from mobaide.acp import fork as fk
 from mobaide.acp import session as session_mod
 from mobaide.acp import signin
 from mobaide.acp.agents import (
@@ -57,6 +59,7 @@ from mobaide.acp.agents import (
     pi_sign_in_methods,
     resolve_antigravity_config,
 )
+from mobaide.acp.fork import STALE_POINT, answer_fingerprint
 from mobaide.acp.install import AdapterInstallError
 from mobaide.acp.presence import ConversationPresence
 from mobaide.acp.rpc import AcpConnection, AcpRpcError
@@ -558,6 +561,9 @@ async def open_chat(tmp_path):
         settle: bool = True,
         kind: SessionKind = SessionKind.CLAUDE,
         attention_dedupe: SharedTurnDedupe | None = None,
+        fork_opener: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+        fork_answer: str | None = None,
+        title_prefix: str | None = None,
         **plan_fields: Any,
     ) -> TimelineMirror:
         config = SessionConfig(
@@ -566,6 +572,8 @@ async def open_chat(tmp_path):
             cwd=str(tmp_path),
             ui="chat",
             kind=kind,
+            chat_fork_answer=fork_answer,
+            chat_title_prefix=title_prefix,
         )
         plan = ChatLaunchPlan(
             argv=argv or fake_agent_argv(), env=dict(os.environ), cwd=str(tmp_path), **plan_fields
@@ -576,6 +584,7 @@ async def open_chat(tmp_path):
             agent_title="Claude Code",
             load_session_id=load_session_id,
             attention_dedupe=attention_dedupe,
+            fork_opener=fork_opener,
         )
         sessions.append(session)
         await session.start()
@@ -2196,6 +2205,296 @@ class TestNewConversation:
         assert m.texts("user") == ["/clear"]
 
 
+class _ForkOpener:
+    """Stands in for ``SessionManager._open_chat_fork``: opens the forked ACP
+    session as a new chat, with the config it is given, the way Continue a
+    session opens a stored one. After ``hold()`` the next fork waits for
+    ``release()`` before it opens."""
+
+    def __init__(self, open_chat) -> None:
+        self._open_chat = open_chat
+        self.calls: list[tuple[str, str | None, list[ConfigIntent]]] = []
+        self.opened: list[TimelineMirror] = []
+        self.entered = asyncio.Event()
+        self._gate: asyncio.Future[None] | None = None
+
+    def hold(self) -> None:
+        self._gate = asyncio.get_running_loop().create_future()
+
+    def release(self) -> None:
+        assert self._gate is not None
+        self._gate.set_result(None)
+
+    async def __call__(
+        self, acp_session_id: str, answer: str | None, initial_config: list[ConfigIntent]
+    ) -> dict[str, Any]:
+        self.calls.append((acp_session_id, answer, initial_config))
+        self.entered.set()
+        if self._gate is not None:
+            await self._gate
+        mirror = await self._open_chat(
+            load_session_id=acp_session_id,
+            fork_opener=self,
+            fork_answer=answer,
+            title_prefix="Fork: ",
+            initial_config=list(initial_config),
+            fork_at_answer=True,
+        )
+        self.opened.append(mirror)
+        return {"session_id": mirror.session.session_id, "ui": "chat"}
+
+
+def _fork_points(m: TimelineMirror) -> list[dict[str, Any]]:
+    return [item for item in m.of_type("agent") if item.get("fork_point")]
+
+
+def _record_requests(monkeypatch) -> list[tuple[str, Any]]:
+    """Every request the chats send their agents from now on, as (method, params)."""
+    sent: list[tuple[str, Any]] = []
+    request = AcpConnection.request
+
+    async def record(conn, method, params, timeout=None, **options):
+        sent.append((method, params))
+        return await request(conn, method, params, timeout, **options)
+
+    monkeypatch.setattr(AcpConnection, "request", record)
+    return sent
+
+
+class TestFork:
+    MISMATCH = "The fork may hold more of the conversation than you chose"
+
+    @pytest.fixture(autouse=True)
+    def _fork_store(self, tmp_path, monkeypatch):
+        # The fake agent saves a fork there; the new chat's own process loads it.
+        monkeypatch.setenv("MOBAIDE_FAKE_ACP_STORE", str(tmp_path / "forks"))
+        return tmp_path / "forks"
+
+    async def test_a_fork_at_an_answer_opens_a_new_chat_that_ends_with_it(self, open_chat, monkeypatch):
+        """The new chat holds the turns up to the chosen answer, with the
+        settings in use and a title that reads apart from its source. The chat
+        it came from stays as it is, and the copy in its process is closed."""
+        opener = _ForkOpener(open_chat)
+        m = await open_chat(fork_opener=opener, fork_at_answer=True)
+        assert m.state["fork"] == {"chat": True, "at_answer": True}
+        assert (await m.command("set_config", config_id="model", value="fast"))["ok"] is True
+        for turns, text in enumerate(["same", "same", "other"], start=1):
+            await m.command("prompt", text=text)
+            await m.until(lambda: m.status == "ready" and len(_fork_points(m)) == turns)
+        sent = _record_requests(monkeypatch)
+        chosen = _fork_points(m)[1]
+
+        result = await m.command("fork", item_id=chosen["id"])
+
+        assert result["ok"] is True
+        [(fork_id, answer, _config)] = opener.calls
+        [fork] = opener.opened
+        assert result["data"] == {
+            "session_id": fork.session.session_id,
+            "session": {"session_id": fork.session.session_id, "ui": "chat"},
+        }
+        [params] = [params for method, params in sent if method == "session/fork"]
+        assert params["sessionId"] == m.state["acp_session_id"]
+        point = params["_meta"]["jetbrains"]["air"]["fork"]
+        # Two answers have this text: the second one is meant.
+        assert point["messageFingerprint"] == answer == answer_fingerprint("You said: same")
+        assert point["messageOccurrence"] == 2
+        assert ("session/close", {"sessionId": fork_id}) in sent
+
+        assert fork.texts("user") == ["same", "same"]
+        assert [bool(item.get("fork_point")) for item in fork.of_type("agent")] == [True, True]
+        assert self.MISMATCH not in _notices(fork)
+        assert {o["id"]: o["value"] for o in fork.state["config"]}["model"] == "fast"
+        assert m.texts("user") == ["same", "same", "other"]
+        assert m.status == "ready"
+        # The agent sends the fork's title in its replay.
+        assert (m.state["title"], fork.state["title"]) == ("same", "Fork: same")
+        assert fork.session.to_info().title == "Fork: same"
+
+        old_epoch = fork.epoch
+        assert (await fork.command("new_conversation"))["ok"] is True
+        await fork.until(lambda: fork.epoch != old_epoch and fork.status == "ready")
+        await fork.command("prompt", text="next")
+        await fork.until(_turn_done(fork, "You said: next"))
+        assert fork.state["title"] == "next"
+        assert fork.session.to_info().title == "next"
+
+    async def test_a_message_sent_while_the_fork_opens_waits_and_then_goes_to_this_chat(
+        self, open_chat
+    ):
+        """The fork copies the chat as it was. A message sent meanwhile is
+        queued and sent here after; a new conversation must not replace the
+        session the fork is made from."""
+        opener = _ForkOpener(open_chat)
+        opener.hold()
+        m = await open_chat(fork_opener=opener)
+        await m.command("prompt", text="hi")
+        await m.until(_turn_done(m, "You said: hi"))
+
+        await m.session.handle_command(b'{"id": "f1", "op": "fork"}')
+        await asyncio.wait_for(opener.entered.wait(), 20)
+        sent = await m.command("prompt", text="also this")
+        refused = await m.command("new_conversation")
+
+        assert sent["data"]["queued"] is True
+        assert [q["text"] for q in m.session.timeline.state["queue"]] == ["also this"]
+        assert refused["ok"] is False
+        assert refused["error"] == "Wait for the fork to open, then try again."
+
+        opener.release()
+        await m.until(lambda: "f1" in m.results)
+        assert m.results["f1"]["ok"] is True
+        await m.until(_turn_done(m, "You said: also this"))
+        assert m.texts("user") == ["hi", "also this"]
+        [fork] = opener.opened
+        assert fork.texts("user") == ["hi"]
+
+    async def test_a_fork_made_after_the_command_timed_out_is_closed_and_blocks_another_until_then(
+        self, open_chat, monkeypatch
+    ):
+        """The agent still makes a fork the client gave up on: its copy is
+        closed in this chat's process when it comes, and no new chat opens.
+        Until then another fork is refused."""
+        opener = _ForkOpener(open_chat)
+        m = await open_chat(fork_opener=opener)
+        await m.command("prompt", text="hi")
+        await m.until(_turn_done(m, "You said: hi"))
+        request = AcpConnection.request
+        sent: list[tuple[AcpConnection, str, Any]] = []
+        made: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        resume = asyncio.get_running_loop().create_future()
+        closed = asyncio.Event()
+
+        async def hold_the_first_fork(conn, method, params, timeout=None, **options):
+            sent.append((conn, method, params))
+            result = await request(conn, method, params, timeout, **options)
+            if method == "session/fork" and not made.done():
+                made.set_result(result["sessionId"])
+                await resume
+            elif method == "session/close":
+                closed.set()
+            return result
+
+        monkeypatch.setattr(AcpConnection, "request", hold_the_first_fork)
+        fork_timeout = fk.FORK_TIMEOUT
+        monkeypatch.setattr(fk, "FORK_TIMEOUT", 0.01)
+
+        late = await m.command("fork")
+        refused = await m.command("fork")
+
+        assert late["ok"] is False
+        assert late["error"] == (
+            "The agent did not make the fork in time. A copy may still appear in Continue a session in New session."
+        )
+        assert refused["ok"] is False
+        assert refused["error"] == "The last fork is still being made. Try again in a moment."
+        assert [method for _, method, _ in sent if method.startswith("session/")] == ["session/fork"]
+
+        fork_id = await asyncio.wait_for(made, 20)
+        resume.set_result(None)
+        await asyncio.wait_for(closed.wait(), 20)
+
+        [(fork_conn, _, _)] = [entry for entry in sent if entry[1] == "session/fork"]
+        [(close_conn, _, close_params)] = [entry for entry in sent if entry[1] == "session/close"]
+        assert close_params == {"sessionId": fork_id}
+        assert close_conn is fork_conn
+        assert opener.calls == []
+        assert m.status == "ready"
+
+        monkeypatch.setattr(fk, "FORK_TIMEOUT", fork_timeout)
+        assert (await m.command("fork"))["ok"] is True
+        assert len(opener.opened) == 1
+
+    @pytest.mark.parametrize("case", ["nothing_yet", "turn_running", "stopped_answer", "unknown_item"])
+    async def test_a_fork_that_cannot_be_made_is_refused_before_the_agent_is_asked(
+        self, open_chat, monkeypatch, case
+    ):
+        opener = _ForkOpener(open_chat)
+        m = await open_chat(fork_opener=opener, fork_at_answer=True)
+        fields: dict[str, Any] = {}
+        if case == "turn_running":
+            await m.command("prompt", text="slow")
+            await m.until(lambda: m.status == "running")
+        elif case == "stopped_answer":
+            # Only a turn that ended by itself has a final answer.
+            await m.command("prompt", text="slow")
+            await m.until(lambda: m.status == "running" and bool(m.texts("agent")))
+            await m.command("cancel")
+            await m.until(lambda: m.status == "ready")
+            [partial] = m.of_type("agent")
+            assert not partial.get("fork_point")
+            fields = {"item_id": partial["id"]}
+        elif case == "unknown_item":
+            await m.command("prompt", text="hi")
+            await m.until(_turn_done(m, "You said: hi"))
+            fields = {"item_id": "m:999"}
+        sent = _record_requests(monkeypatch)
+
+        result = await m.command("fork", **fields)
+
+        expected = {
+            "nothing_yet": "Send a message first: there is nothing to fork yet.",
+            "turn_running": session_mod.FORK_BUSY,
+            "stopped_answer": STALE_POINT,
+            "unknown_item": STALE_POINT,
+        }[case]
+        assert result["ok"] is False
+        assert result["error"] == expected
+        assert [method for method, _ in sent if method == "session/fork"] == []
+        assert opener.calls == []
+
+    @pytest.mark.parametrize(
+        ("argv", "fork_at_answer", "expected", "error"),
+        [
+            (None, False, {"chat": True, "at_answer": False}, "Claude Code can only fork the whole chat"),
+            (MINI_AGENT_ARGV, True, {"chat": False, "at_answer": False}, "Claude Code cannot fork a chat"),
+        ],
+        ids=["agent-that-copies-the-whole-chat", "agent-without-fork"],
+    )
+    async def test_the_state_offers_only_the_forks_the_agent_can_make(
+        self, open_chat, argv, fork_at_answer, expected, error
+    ):
+        m = await open_chat(argv=argv, fork_opener=_ForkOpener(open_chat), fork_at_answer=fork_at_answer)
+        await m.command("prompt", text="hi")
+        await m.until(lambda: m.status == "ready" and bool(m.texts("agent")))
+
+        assert m.state["fork"] == expected
+        assert _fork_points(m) == []
+        result = await m.command("fork", item_id=m.of_type("agent")[-1]["id"])
+        assert result["error"] == error
+
+    async def test_a_replay_offers_the_answer_of_each_finished_turn_but_not_of_a_stopped_one(
+        self, open_chat, _fork_store
+    ):
+        """Claude Code replays a turn the user stopped as its partial answer
+        and then a marker message: that answer is not a fork point."""
+        turns = [
+            {"user": "Fix the login", "messages": [{"id": "a1", "text": "Looking at login.py"}]},
+            {"user": "[Request interrupted by user]", "messages": []},
+            {"user": "Go on", "messages": [{"id": "a2", "text": "Fixed the null check."}]},
+            {"user": "Thanks", "messages": [{"id": "a3", "text": "Glad to help."}]},
+        ]
+        _fork_store.mkdir()
+        (_fork_store / "fork-stored.json").write_bytes(orjson.dumps({"turns": turns}))
+
+        m = await open_chat(
+            load_session_id="fork-stored", fork_opener=_ForkOpener(open_chat), fork_at_answer=True
+        )
+
+        assert {item["text"]: bool(item.get("fork_point")) for item in m.of_type("agent")} == {
+            "Looking at login.py": False,
+            "Fixed the null check.": True,
+            "Glad to help.": True,
+        }
+
+    async def test_a_fork_that_does_not_end_with_the_chosen_answer_says_so(self, open_chat):
+        """An agent that ignored the fork point copied more than the user chose."""
+        m = await open_chat(load_session_id="conv-1", fork_answer=answer_fingerprint("An earlier answer"))
+
+        notices = [n for n in m.of_type("notice") if n["title"] == self.MISMATCH]
+        assert [n["severity"] for n in notices] == ["warning"]
+
+
 class TestSyncAndStop:
     async def test_sync_replays_missed_events_or_sends_a_snapshot(self, open_chat):
         m = await open_chat()
@@ -2565,6 +2864,28 @@ class TestExternalTurns:
         assert cancelled["data"] == {"cancelled": True}
         await m.until(lambda: m.status == "ready" and m.state["cancelling"] is False)
         assert "This answer is for a message typed into Codex on the PC." not in m.texts("agent")
+
+    async def test_the_answer_of_the_other_turn_is_a_fork_point_unless_stopped_here(self, open_chat):
+        """The other turn ends by itself (``threadStatus`` idle): its answer
+        is a final one. After Stop in this chat, its answer is not."""
+        m = await open_chat(
+            argv=fake_agent_argv("codex"), fork_opener=_ForkOpener(open_chat), fork_at_answer=True
+        )
+        assert m.state["fork"] == {"chat": True, "at_answer": True}
+        own = "Sure. Watch for a message from your PC next."
+        other = "This answer is for a message typed into Codex on the PC."
+        await self._external_turn_running(m)
+
+        await m.until(lambda: m.status == "ready" and other in m.texts("agent"))
+
+        assert [item["text"] for item in _fork_points(m)] == [own, other]
+
+        await m.command("prompt", text="external")
+        await m.until(lambda: m.status == "running" and len(m.of_type("agent")) == 4)
+        assert (await m.command("cancel"))["data"] == {"cancelled": True}
+        await m.until(lambda: m.status == "ready" and m.state["cancelling"] is False)
+
+        assert [item["text"] for item in _fork_points(m)] == [own, other, own]
 
     async def test_a_stop_the_other_app_never_answers_frees_the_chat(self, open_chat, monkeypatch):
         """Its app-server went away: no idle status ever comes."""

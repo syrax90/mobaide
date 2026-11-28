@@ -15,6 +15,10 @@ struct ChatScreen: View {
     @State private var drawerDrag: CGFloat?
     @State private var pendingStop: SessionResponse?
     @State private var confirmNewConversation = false
+    @State private var forkRequest: ChatForkRequest?
+    /// This screen sent a fork: its result opens the new chat. A result from
+    /// an earlier visit (the model outlives the screen) only says so.
+    @State private var awaitingFork = false
     @State private var showTemplates = false
     @State private var showSaveTemplate = false
     @State private var templateName = ""
@@ -102,8 +106,10 @@ struct ChatScreen: View {
                 ChatTimelineView(
                     model: model,
                     agentLabel: model.state.agent?.displayName ?? kindLabel,
-                    focusView: focusView
+                    focusView: focusView,
+                    onFork: { forkRequest = ChatForkRequest(itemId: $0) }
                 )
+                    .equatable()
                     .overlay(alignment: .leading) { edgePanStrip }
                 // The timeline gives up its height first; inside the dock,
                 // the request card gives way next (see `dock`).
@@ -173,6 +179,17 @@ struct ChatScreen: View {
             Button("Cancel", role: .cancel) {}
         }
         .modifier(NewConversationConfirm(isPresented: $confirmNewConversation, message: newConversationMessage, confirm: { model.newConversation() }))
+        .modifier(ChatForkConfirm(request: $forkRequest) { request in
+            awaitingFork = true
+            model.fork(itemId: request.itemId)
+        })
+        .onChange(of: model.forking) { _, forking in
+            if !forking, model.openedFork == nil { awaitingFork = false }
+        }
+        .onChange(of: model.openedFork?.sessionId, initial: true) { _, id in
+            guard id != nil else { return }
+            openFork()
+        }
         .stopSessionConfirm(pending: $pendingStop, sessions: panel.sessions) { session in
             SessionDisplay.dialogLabel(session, customTypeNames: panel.customTypeNames)
         } onStop: { session, force, removeWorktree in
@@ -229,6 +246,8 @@ struct ChatScreen: View {
             }
         }
         .onAppear {
+            // A fork that finished while a child screen was on top.
+            openFork()
             model.setAppActive(scenePhase != .background)
             if !countedVisible {
                 countedVisible = true
@@ -303,6 +322,15 @@ struct ChatScreen: View {
                         }
                         .disabled(!model.canStartNew)
                         .accessibilityHint("Clears the chat and keeps the folder and settings")
+                    }
+                    if model.offersForkChat {
+                        Button {
+                            forkRequest = ChatForkRequest(itemId: nil)
+                        } label: {
+                            Label("Fork chat", systemImage: "arrow.triangle.branch")
+                        }
+                        .disabled(!model.canForkChat)
+                        .accessibilityHint("Copies the conversation into a new chat; this one stays")
                     }
                     Button {
                         showSessionInfo = true
@@ -523,6 +551,26 @@ struct ChatScreen: View {
         }
     }
 
+    /// Opens the chat this screen forked, as switching sessions does: the row
+    /// first, as after a create, so the new screen does not read it as ended.
+    private func openFork() {
+        guard router.path.last == .sessionDetail(sessionId: sessionId), let forked = model.takeOpenedFork() else {
+            return
+        }
+        if let row = forked.session {
+            container.sessionRepository.noteCreatedSession(row)
+        }
+        guard awaitingFork else {
+            model.message = ToastMessage(text: "Forked the chat. Open it from Sessions.", tone: .ok)
+            return
+        }
+        awaitingFork = false
+        // The chat the user goes on in, as after a create.
+        container.preferencesStore.setLastUsedSessionId(forked.sessionId)
+        drawerOpen = false
+        router.replaceLast(with: .sessionDetail(sessionId: forked.sessionId))
+    }
+
     private func checkSessionStillExists() {
         let repository = container.sessionRepository
         let isListed = repository.currentSessions.contains { $0.session_id == sessionId }
@@ -627,6 +675,7 @@ enum ChatStatusLine {
     static func text(for model: ChatSessionModel, now: Date?) -> (text: String, tone: PixelTone?) {
         if model.sessionClosed { return ("Session closed", nil) }
         if !model.isLive { return ("Reconnecting…", nil) }
+        if model.forking { return ("Forking the chat…", nil) }
         if !model.state.requests.isEmpty { return ("Waiting for you", .accent) }
         switch model.phase {
         case .starting: return ("Starting…", nil)
@@ -763,13 +812,47 @@ private struct ChatSessionInfoSheet: View {
     }
 }
 
+/// The fork the dialog asks about: up to the answer `itemId`, or (nil) the whole chat.
+struct ChatForkRequest: Identifiable, Equatable {
+    let itemId: String?
+
+    var id: String { itemId ?? "chat" }
+}
+
+/// Confirms `fork`, as on Android and web. The chat's confirms are alerts, not
+/// confirmation dialogs: iOS 26 shows those as a popover anchored to the whole
+/// screen, which points at an unrelated message.
+private struct ChatForkConfirm: ViewModifier {
+    @Binding var request: ChatForkRequest?
+    let confirm: (ChatForkRequest) -> Void
+
+    private var isPresented: Binding<Bool> {
+        Binding(get: { request != nil }, set: { if !$0 { request = nil } })
+    }
+
+    func body(content: Content) -> some View {
+        content.alert(
+            request?.itemId == nil ? "Fork this chat?" : "Fork from here?",
+            isPresented: isPresented,
+            presenting: request
+        ) { request in
+            Button("Fork") { confirm(request) }
+            Button("Cancel", role: .cancel) {}
+        } message: { request in
+            Text(request.itemId == nil
+                ? "Start a new chat with a copy of this conversation? This chat stays as it is. Both chats work in the same folder."
+                : "Start a new chat with the conversation up to this answer? This chat stays as it is. Files on your PC are not changed back.")
+        }
+    }
+}
+
 private struct NewConversationConfirm: ViewModifier {
     @Binding var isPresented: Bool
     let message: String
     let confirm: () -> Void
 
     func body(content: Content) -> some View {
-        content.confirmationDialog("Start a new conversation?", isPresented: $isPresented, titleVisibility: .visible) {
+        content.alert("Start a new conversation?", isPresented: $isPresented) {
             Button("New conversation", action: confirm)
             Button("Cancel", role: .cancel) {}
         } message: {

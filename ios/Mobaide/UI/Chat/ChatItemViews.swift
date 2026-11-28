@@ -10,12 +10,19 @@ struct ChatItemRow: View, Equatable {
     let expanded: Bool
     let waitingForApproval: Bool
     let canRestart: Bool
+    /// An answer the chat can fork at: shows **Fork from here** under it.
+    var forkable = false
+    var forkEnabled = true
+    var forkingHere = false
     let onToggle: () -> Void
     let onRestart: () -> Void
+    var onFork: () -> Void = {}
 
     nonisolated static func == (lhs: ChatItemRow, rhs: ChatItemRow) -> Bool {
         lhs.item == rhs.item && lhs.streaming == rhs.streaming && lhs.expanded == rhs.expanded
             && lhs.waitingForApproval == rhs.waitingForApproval && lhs.canRestart == rhs.canRestart
+            && lhs.forkable == rhs.forkable && lhs.forkEnabled == rhs.forkEnabled
+            && lhs.forkingHere == rhs.forkingHere
     }
 
     var body: some View {
@@ -23,7 +30,14 @@ struct ChatItemRow: View, Equatable {
         case .user(let text, let attachments):
             ChatUserBubble(text: text, attachments: attachments)
         case .agent(let text):
-            ChatAgentText(id: item.id, text: text, streaming: streaming)
+            ChatAgentText(
+                id: item.id,
+                text: text,
+                streaming: streaming,
+                onFork: forkable ? onFork : nil,
+                forkEnabled: forkEnabled,
+                forking: forkingHere
+            )
         case .thought(let text):
             ChatThoughtRow(id: item.id, text: text, streaming: streaming, expanded: expanded, onToggle: onToggle)
         case .tool(let tool):
@@ -163,6 +177,11 @@ struct ChatAgentText: View {
     let id: String
     let text: String
     let streaming: Bool
+    var onFork: (() -> Void)?
+    var forkEnabled = true
+    var forking = false
+
+    @Environment(\.mobaideColors) private var colors
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -172,6 +191,19 @@ struct ChatAgentText: View {
             if streaming {
                 PixelLoadingBlock(width: 8, height: 14)
                     .accessibilityLabel("Writing")
+            }
+            if let onFork {
+                // A button, not a context menu: a long press selects the text.
+                Button(action: onFork) {
+                    Label(forking ? "Forking…" : "Fork from here", systemImage: "arrow.triangle.branch")
+                        .font(.footnote)
+                        .foregroundStyle(forkEnabled ? colors.textMuted : colors.gray)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!forkEnabled)
+                .accessibilityIdentifier("chat-fork-button")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

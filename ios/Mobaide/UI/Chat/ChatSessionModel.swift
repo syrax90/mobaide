@@ -99,6 +99,12 @@ final class ChatSessionModel {
     private(set) var restarting = false
     /// A `new_conversation` this client sent has no result yet.
     private(set) var startingNew = false
+    /// A `fork` this client sent has no result yet.
+    private(set) var forking = false
+    /// The answer that fork keeps the chat up to; nil for the whole chat.
+    private(set) var forkingItemId: String?
+    /// The chat this screen forked, until the screen opens it.
+    private(set) var openedFork: ChatForkResult?
     /// Subagents with a Stop in flight, until their item changes or the stop fails.
     private(set) var stoppingSubagents: Set<String> = []
     /// Rows the user expanded; kept here so a row scrolled out of the lazy
@@ -162,6 +168,7 @@ final class ChatSessionModel {
         case cancelSubagent(subagentId: String)
         case restart
         case newConversation
+        case fork
 
         var configId: String? {
             if case .setConfig(let configId) = self { return configId }
@@ -570,6 +577,19 @@ final class ChatSessionModel {
             if !result.ok {
                 message = ToastMessage(text: result.error ?? "Could not start a new conversation", tone: .danger)
             }
+        case .fork:
+            forking = false
+            forkingItemId = nil
+            guard result.ok else {
+                reviewPrompt.noteError()
+                message = ToastMessage(text: result.error ?? "Could not fork the chat", tone: .danger)
+                return
+            }
+            guard let forked = ChatForkResult(data: result.data) else {
+                message = ToastMessage(text: "Could not open the forked chat", tone: .danger)
+                return
+            }
+            openedFork = forked
         case .signIn(let requestId):
             // The request stays across its stages, so the spinner ends with the result.
             answering[requestId] = nil
@@ -605,6 +625,8 @@ final class ChatSessionModel {
         configOverrides = [:]
         restarting = false
         startingNew = false
+        forking = false
+        forkingItemId = nil
         stoppingSubagents = []
         pending = pending.filter { _, command in
             if case .prompt = command { return true }
@@ -628,6 +650,9 @@ final class ChatSessionModel {
             restarting = false
         case .newConversation:
             startingNew = false
+        case .fork:
+            forking = false
+            forkingItemId = nil
         case .cancelSubagent(let subagentId):
             stoppingSubagents.remove(subagentId)
         case .cancel:
@@ -834,6 +859,45 @@ final class ChatSessionModel {
         }
         startingNew = true
         enqueue(.newConversation(id: nextCommandId()), pending: .newConversation)
+    }
+
+    /// **Fork chat** in the `⋯` menu; `canFork` says whether a fork can be sent now.
+    var offersForkChat: Bool { state.fork.chat && !sessionClosed }
+
+    /// **Fork from here** on the answers marked `fork_point`.
+    var offersForkAtAnswer: Bool { state.fork.atAnswer && !sessionClosed }
+
+    /// The agent refuses a fork while a turn runs or the chat starts: the
+    /// control says so by being disabled.
+    var canFork: Bool { isLive && !sessionClosed && !restarting && !startingNew && !forking && phase == .ready }
+
+    /// A whole-chat fork also needs a conversation to copy.
+    var canForkChat: Bool {
+        canFork && items.contains { item in
+            switch item.body {
+            case .user, .agent: return true
+            default: return false
+            }
+        }
+    }
+
+    /// Copies the conversation into a new chat: all of it, or up to the answer `itemId`.
+    func fork(itemId: String?) {
+        guard canFork, offersForkChat, itemId == nil || offersForkAtAnswer else {
+            if !forking {
+                message = ToastMessage(text: "Could not fork the chat now. Try again.", tone: .danger)
+            }
+            return
+        }
+        forking = true
+        forkingItemId = itemId
+        enqueue(.fork(id: nextCommandId(), itemId: itemId), pending: .fork)
+    }
+
+    /// The forked chat to open, once: the screen that opens it takes it.
+    func takeOpenedFork() -> ChatForkResult? {
+        defer { openedFork = nil }
+        return openedFork
     }
 
     func toggleExpanded(_ id: String) {

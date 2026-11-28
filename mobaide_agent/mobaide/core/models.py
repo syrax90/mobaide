@@ -173,6 +173,15 @@ class SessionConfig:
     # Chat sessions only, set in the agent: a folder to add at the end of the
     # agent's PATH (Auto Scan's ``gh``).
     chat_path_append: str | None = None
+    # Chat sessions only, set in the agent for a fork (``chat_resume_id``):
+    # the config values of the chat it was forked from, in place of the
+    # launch choices (a list of ``ConfigIntent``), and the fingerprint of the
+    # answer its replay must end with.
+    chat_initial_config: list[Any] | None = None
+    chat_fork_answer: str | None = None
+    # Put before the chat's title (a fork's "Fork: "), so it reads apart from its
+    # source: at the start, as lists cut long titles at the end.
+    chat_title_prefix: str | None = None
 
 
 @dataclass

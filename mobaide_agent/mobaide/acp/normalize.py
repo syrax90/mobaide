@@ -38,6 +38,11 @@ PLAN_MAX = 100
 PROMPT_SUGGESTIONS_MAX = 3
 PROMPT_SUGGESTION_TEXT_MAX = 2000
 CONFIG_OPTIONS_MAX = 40
+# An agent's own session id, as a client or the agent names it (``session/fork``
+# answers, ``chat_resume_id``): a path part on the PC, so no ``/``.
+CHAT_RESUME_ID_PATTERN = r"^[A-Za-z0-9._:-]+$"
+CHAT_RESUME_ID_MAX = 200
+_CHAT_RESUME_ID = re.compile(CHAT_RESUME_ID_PATTERN)
 CONFIG_VALUES_MAX = 200
 FORM_FIELDS_MAX = 20
 FORM_OPTIONS_MAX = 50
@@ -1139,13 +1144,27 @@ def terminal_meta(update: Mapping[str, Any]) -> tuple[str | None, bool, int | No
     return text, replaces, code if isinstance(code, int) and not isinstance(code, bool) else None, exited
 
 
-def thread_busy(update: Mapping[str, Any]) -> bool | None:
-    """Whether the agent reports its session busy (Codex sends its thread
-    status in ``session_info_update._meta``); None when it says nothing."""
+def is_valid_chat_resume_id(value: str) -> bool:
+    return len(value) <= CHAT_RESUME_ID_MAX and _CHAT_RESUME_ID.fullmatch(value) is not None
+
+
+def _thread_status_kind(update: Mapping[str, Any]) -> Any:
     meta = update.get("_meta")
     codex = meta.get("codex") if isinstance(meta, Mapping) else None
     status = codex.get("threadStatus") if isinstance(codex, Mapping) else None
-    kind = status.get("type") if isinstance(status, Mapping) else None
+    return status.get("type") if isinstance(status, Mapping) else None
+
+
+def thread_idle(update: Mapping[str, Any]) -> bool:
+    """The thread went idle: its turn ended normally (not ``systemError``,
+    and not only ``notLoaded`` on this app-server)."""
+    return _thread_status_kind(update) == "idle"
+
+
+def thread_busy(update: Mapping[str, Any]) -> bool | None:
+    """Whether the agent reports its session busy (Codex sends its thread
+    status in ``session_info_update._meta``); None when it says nothing."""
+    kind = _thread_status_kind(update)
     if kind == "active":
         return True
     if kind in ("idle", "notLoaded", "systemError"):

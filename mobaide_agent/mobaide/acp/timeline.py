@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import orjson
@@ -94,6 +94,9 @@ def default_state() -> dict[str, Any]:
         "new_conversation": True,
         # The prompts the agent predicts the user sends next (``[{text}]``).
         "prompt_suggestions": [],
+        # The agent takes ``fork``: of the whole chat, and at an answer marked
+        # ``fork_point``.
+        "fork": {"chat": False, "at_answer": False},
     }
 
 
@@ -149,6 +152,10 @@ class ChatTimeline:
 
     def items(self) -> list[dict[str, Any]]:
         return list(self._items.values())
+
+    def items_reversed(self) -> Iterator[dict[str, Any]]:
+        """Newest first, without a copy; the timeline must not change meanwhile."""
+        return reversed(self._items.values())
 
     def upsert(self, item: dict[str, Any], *, urgent: bool = False) -> None:
         item_id = item["id"]

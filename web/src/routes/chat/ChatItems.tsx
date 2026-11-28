@@ -831,6 +831,11 @@ export interface ChatItemViewProps {
   onRestart: () => void;
   /** Renders `subagent` items as cards; without it they are skipped. */
   subagents?: SubagentContext;
+  /** An answer the chat can fork at: shows **Fork from here** under it. */
+  onFork?: (itemId: string) => void;
+  forkDisabled?: boolean;
+  /** A fork up to this answer is being made. */
+  forking?: boolean;
 }
 
 export const ChatItemView = memo(function ChatItemView({
@@ -841,13 +846,30 @@ export const ChatItemView = memo(function ChatItemView({
   restarting,
   onRestart,
   subagents,
+  onFork,
+  forkDisabled = false,
+  forking = false,
 }: ChatItemViewProps) {
   switch (item.type) {
     case 'user':
       return <UserBubble item={item} />;
     case 'agent':
       return (
-        <Markdown className={streaming ? 'chat-agent chat-agent-live' : 'chat-agent'} text={item.text} />
+        <>
+          <Markdown className={streaming ? 'chat-agent chat-agent-live' : 'chat-agent'} text={item.text} />
+          {onFork !== undefined && (
+            <button
+              type="button"
+              className="chat-link-button chat-fork-button"
+              disabled={forkDisabled}
+              onClick={() => {
+                onFork(item.id);
+              }}
+            >
+              {forking ? 'Forking…' : 'Fork from here'}
+            </button>
+          )}
+        </>
       );
     case 'thought':
       return <ThoughtRow text={item.text} streaming={streaming} />;

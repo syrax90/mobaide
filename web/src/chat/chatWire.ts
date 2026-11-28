@@ -14,6 +14,7 @@
  * advances `seq`, an unknown tool kind renders as `other`.
  */
 import { z } from 'zod';
+import { sessionResponseSchema, type SessionResponse } from '../protocol/dto/session';
 import { decodeTerminalState } from '../protocol/dto/terminalState';
 
 export const CHAT_FRAME_TYPE = {
@@ -145,7 +146,13 @@ const userItemSchema = z.object({
   attachments: lenientArray(attachmentSchema),
   at: z.string().nullable().optional().catch(null),
 });
-const agentItemSchema = z.object({ id: z.string(), type: z.literal('agent'), text });
+const agentItemSchema = z.object({
+  id: z.string(),
+  type: z.literal('agent'),
+  text,
+  /** The final answer of a finished turn: `fork` can keep the chat up to it. Absent = false. */
+  fork_point: z.boolean().optional().catch(undefined),
+});
 const thoughtItemSchema = z.object({ id: z.string(), type: z.literal('thought'), text });
 const toolItemSchema = z.object({
   id: z.string(),
@@ -346,6 +353,12 @@ const limitWaitSchema = z
   .catch(null);
 export type ChatLimitWait = NonNullable<z.infer<typeof limitWaitSchema>>;
 
+/** Which forks the agent takes; an older agent leaves the key out. */
+const forkSchema = z
+  .object({ chat: flag, at_answer: flag })
+  .catch({ chat: false, at_answer: false });
+export type ChatForkSupport = z.infer<typeof forkSchema>;
+
 /** A prompt the agent predicts the user sends next. */
 const promptSuggestionSchema = z.object({ text: z.string().refine((text) => text.trim() !== '') });
 
@@ -378,6 +391,7 @@ const STATE_FIELDS = {
   new_conversation: flag,
   /** Most likely first; `[]` when the agent predicts nothing. */
   prompt_suggestions: lenientArray(promptSuggestionSchema),
+  fork: forkSchema,
 };
 
 type StateFields = typeof STATE_FIELDS;
@@ -404,6 +418,7 @@ export const INITIAL_CHAT_STATE: ChatState = {
   limit_wait: null,
   new_conversation: false,
   prompt_suggestions: [],
+  fork: { chat: false, at_answer: false },
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -550,9 +565,26 @@ export type ChatCommand =
   | { op: 'steer'; queue_id: string }
   | { op: 'restart' }
   | { op: 'new_conversation' }
+  | { op: 'fork'; item_id?: string }
   | { op: 'sign_in'; action: 'start'; method: string }
   | { op: 'sign_in'; action: 'submit'; value: string }
   | { op: 'sign_in'; action: 'cancel' };
+
+export interface ForkResult {
+  sessionId: string;
+  /** The new session's row, so it can open before the session list has it. */
+  session: SessionResponse | null;
+}
+
+/** The `data` of a successful `fork`, or `null` when it names no session. */
+export function parseForkResult(data: unknown): ForkResult | null {
+  if (!isRecord(data) || typeof data.session_id !== 'string' || data.session_id === '') return null;
+  const session = sessionResponseSchema.safeParse(data.session);
+  return {
+    sessionId: data.session_id,
+    session: session.success && session.data.session_id === data.session_id ? session.data : null,
+  };
+}
 
 export function syncCommand(resume: { epoch: string; seq: number } | null): ChatCommand {
   return resume === null

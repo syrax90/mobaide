@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.CallSplit
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.AddComment
@@ -114,6 +115,9 @@ import kotlinx.coroutines.launch
 /** The bottom item counts as "at the latest" within this many pixels of its edge. */
 private const val AT_BOTTOM_SLOP_PX = 48
 
+/** The fork the dialog asks about: up to the answer [itemId], or (null) the whole chat. */
+private data class ForkRequest(val itemId: String?)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
@@ -157,8 +161,10 @@ fun ChatScreen(
     var stopTarget by remember { mutableStateOf<SessionResponse?>(null) }
     var closeSelf by remember { mutableStateOf(false) }
     var confirmNewConversation by remember { mutableStateOf(false) }
+    var forkRequest by remember { mutableStateOf<ForkRequest?>(null) }
 
     LaunchedEffect(viewModel) { viewModel.sessionEnded.collect { onSessionEnded() } }
+    LaunchedEffect(viewModel) { viewModel.openSession.collect { onSwitchSession(it) } }
     LaunchedEffect(viewModel) { viewModel.messages.collect { snackbarHostState.showSnackbar(it) } }
     LaunchedEffect(panelViewModel) {
         panelViewModel.events.collect { event ->
@@ -241,9 +247,11 @@ fun ChatScreen(
             value = System.currentTimeMillis()
         }
     }
-    val statusLine = remember(ui.live, ui.state, ui.sessionClosed, now) {
+    val statusLine = remember(ui.live, ui.state, ui.sessionClosed, ui.forking, now) {
         if (ui.sessionClosed) {
             ChatStatusLine("Session closed", ChatStatusTone.Muted)
+        } else if (ui.forking && ui.live) {
+            ChatStatusLine("Forking the chat…", ChatStatusTone.Muted)
         } else {
             chatStatusLine(ui.live, ui.state, now)
         }
@@ -334,6 +342,19 @@ fun ChatScreen(
                                         },
                                     )
                                 }
+                                if (ui.offersForkChat) {
+                                    DropdownMenuItem(
+                                        text = { Text("Fork chat") },
+                                        leadingIcon = {
+                                            Icon(Icons.AutoMirrored.Outlined.CallSplit, contentDescription = null)
+                                        },
+                                        enabled = ui.canForkChat,
+                                        onClick = {
+                                            closeMenu()
+                                            forkRequest = ForkRequest(itemId = null)
+                                        },
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Focus view") },
                                     leadingIcon = { Icon(Icons.Outlined.CenterFocusStrong, contentDescription = null) },
@@ -404,6 +425,11 @@ fun ChatScreen(
                                 onRestart = viewModel::restart,
                                 focusView = focusView,
                                 onStopSubagent = viewModel::stopSubagent,
+                                onFork = if (ui.offersForkAtAnswer) {
+                                    { itemId -> forkRequest = ForkRequest(itemId) }
+                                } else {
+                                    null
+                                },
                             )
                         }
                     }
@@ -562,6 +588,17 @@ fun ChatScreen(
                 viewModel.newConversation()
             },
             onDismiss = { confirmNewConversation = false },
+        )
+    }
+
+    forkRequest?.let { request ->
+        ForkDialog(
+            atAnswer = request.itemId != null,
+            onConfirm = {
+                forkRequest = null
+                viewModel.fork(request.itemId)
+            },
+            onDismiss = { forkRequest = null },
         )
     }
 

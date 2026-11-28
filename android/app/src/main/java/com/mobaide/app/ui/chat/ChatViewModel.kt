@@ -134,6 +134,7 @@ class ChatViewModel @Inject constructor(
         data class StopSubagent(val subagentId: String) : PendingCommand
         data object Restart : PendingCommand
         data object NewConversation : PendingCommand
+        data object Fork : PendingCommand
     }
 
     private class ConfigOverride(val value: JsonPrimitive, var confirmed: Boolean = false)
@@ -164,6 +165,11 @@ class ChatViewModel @Inject constructor(
     val messages: Flow<String> = _messages.receiveAsFlow()
 
     private val _sessionEnded = Channel<Unit>(Channel.BUFFERED)
+
+    private val _openSession = Channel<String>(Channel.BUFFERED)
+
+    /** A session this screen made (a fork) and should open now. */
+    val openSession: Flow<String> = _openSession.receiveAsFlow()
 
     /** Fires once when the agent proves this session never existed while on screen. */
     val sessionEnded: Flow<Unit> = _sessionEnded.receiveAsFlow()
@@ -309,6 +315,8 @@ class ChatViewModel @Inject constructor(
                 config = ui.state.config,
                 restarting = false,
                 startingNew = false,
+                forking = false,
+                forkingItemId = null,
                 queueBusy = emptySet(),
                 stoppingSubagents = emptyMap(),
             )
@@ -461,6 +469,24 @@ class ChatViewModel @Inject constructor(
             PendingCommand.NewConversation -> {
                 _ui.update { it.copy(startingNew = false) }
                 if (!result.ok) _messages.trySend(result.error ?: "Could not start a new conversation")
+            }
+            PendingCommand.Fork -> {
+                _ui.update { it.copy(forking = false, forkingItemId = null) }
+                val forked = if (result.ok) ChatProtocol.forkResult(result.data) else null
+                when {
+                    !result.ok -> {
+                        reviewPromptCoordinator.noteError()
+                        _messages.trySend(result.error ?: "Could not fork the chat")
+                    }
+                    forked == null -> _messages.trySend("Could not open the forked chat")
+                    else -> {
+                        // Seeded first: a synced list without the new row reads as "session ended".
+                        forked.session?.let(sessionRepository::noteCreatedSession)
+                        // The chat the user goes on in, as after a create.
+                        viewModelScope.launch { preferencesStore.setLastUsedSessionId(forked.sessionId) }
+                        _openSession.trySend(forked.sessionId)
+                    }
+                }
             }
         }
     }
@@ -616,6 +642,22 @@ class ChatViewModel @Inject constructor(
         }
         pending[id] = PendingCommand.NewConversation
         _ui.update { it.copy(startingNew = true) }
+    }
+
+    /** Copy the conversation into a new chat: all of it, or up to the answer [itemId]. */
+    fun fork(itemId: String?) {
+        val ui = _ui.value
+        if (!ui.canFork || !ui.offersForkChat || (itemId != null && !ui.offersForkAtAnswer)) {
+            if (!ui.forking) _messages.trySend("Could not fork the chat now. Try again.")
+            return
+        }
+        val id = nextCommandId()
+        if (!send(ChatProtocol.fork(id, itemId))) {
+            _messages.trySend("Not connected. Try again.")
+            return
+        }
+        pending[id] = PendingCommand.Fork
+        _ui.update { it.copy(forking = true, forkingItemId = itemId) }
     }
 
     fun dequeue(queueId: String) = sendQueueCommand(queueId, "Could not remove the message") { id ->

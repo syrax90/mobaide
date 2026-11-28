@@ -7,10 +7,19 @@ private let chatBottomId = "chat-bottom"
 /// different heights cross the visible edge while the last row grows. The 1pt
 /// sentinel row only updates plain bookkeeping: a state write at the edge
 /// would flip it back.
-struct ChatTimelineView: View {
+struct ChatTimelineView: View, Equatable {
     let model: ChatSessionModel
     let agentLabel: String
     var focusView = false
+    /// Offers **Fork from here** on the answers marked `fork_point`.
+    var onFork: ((String) -> Void)?
+
+    /// `onFork` is left out: it is rebuilt on each parent pass and only sets
+    /// the parent's state, so an older copy does the same. Comparing it would
+    /// recompute the timeline on every drawer drag frame.
+    nonisolated static func == (lhs: ChatTimelineView, rhs: ChatTimelineView) -> Bool {
+        lhs.model === rhs.model && lhs.agentLabel == rhs.agentLabel && lhs.focusView == rhs.focusView
+    }
 
     @Environment(\.mobaideColors) private var colors
     @State private var following = true
@@ -88,8 +97,12 @@ struct ChatTimelineView: View {
                             expanded: model.expandedItems.contains(item.id),
                             waitingForApproval: waiting.contains(item.id),
                             canRestart: canRestart && item.id == lastErrorId,
+                            forkable: item.forkPoint && model.offersForkAtAnswer && onFork != nil,
+                            forkEnabled: model.canFork,
+                            forkingHere: model.forkingItemId == item.id,
                             onToggle: { model.toggleExpanded(item.id) },
-                            onRestart: { model.restart() }
+                            onRestart: { model.restart() },
+                            onFork: { onFork?(item.id) }
                         )
                         .equatable()
                         .chatNestedStep(nested, rule: colors.surface2)
