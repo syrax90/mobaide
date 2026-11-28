@@ -17,7 +17,7 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mobaide.core.git_exec import GIT_ARGV_PREFIX, CmdResult, git_binary, git_env, run_capped
 
@@ -62,6 +62,9 @@ class _Index:
     entries: tuple[_Entry, ...]
     truncated: bool
     built_at: float
+    # Paths the disk check dropped: gone, or led out of the folder. Filled
+    # by the ranking workers; a set add is atomic under the GIL.
+    dropped: set[str] = field(default_factory=set)
 
 
 # Touched only on the event loop: lookups in list_session_files, stores in
@@ -90,7 +93,7 @@ async def list_session_files(
         index = await asyncio.wait_for(_index_for(cwd), timeout=REPLY_TIMEOUT_SECONDS)
         loop = asyncio.get_running_loop()
         entries = await asyncio.wait_for(
-            loop.run_in_executor(_rank_executor, _best, cwd, index.entries, needle, count),
+            loop.run_in_executor(_rank_executor, _best, cwd, index, needle, count),
             timeout=REPLY_TIMEOUT_SECONDS,
         )
     # Before OSError: TimeoutError subclasses it.
@@ -255,24 +258,37 @@ def _parent_dirs(files: list[str]) -> list[str]:
     return list(dirs)
 
 
-# Ranked entries looked at beyond ``limit``, for the ones the disk check drops.
+# Ranked entries looked at beyond ``limit`` in the first pass; each further
+# pass doubles the window, until the answer is full or the budget is spent.
 _SPARE_CHECKS = 32
+CHECK_BUDGET_SECONDS = 0.5
 
 
-def _best(
-    cwd: str, entries: tuple[_Entry, ...], needle: str, limit: int
-) -> list[tuple[str, bool]]:
+def _best(cwd: str, index: _Index, needle: str, limit: int) -> list[tuple[str, bool]]:
     """The ``limit`` best entries that still exist inside ``cwd``: the listing
     is up to 30 s old, and ``--cached`` names tracked files deleted from the
-    work tree. A symlink that leads out of the folder is left out too."""
+    work tree. A symlink that leads out of the folder is left out too. Dropped
+    paths are kept with the listing, so later keystrokes skip them unchecked."""
     real_root = os.path.normcase(os.path.realpath(cwd))
+    deadline = time.monotonic() + CHECK_BUDGET_SECONDS
     kept: list[tuple[str, bool]] = []
-    for path, is_dir in rank(entries, needle, limit + _SPARE_CHECKS):
-        if _inside(cwd, real_root, path):
+    seen = 0
+    window = limit + _SPARE_CHECKS
+    while True:
+        ranked = rank(index.entries, needle, window)
+        for path, is_dir in ranked[seen:]:
+            if path in index.dropped:
+                continue
+            if not _inside(cwd, real_root, path):
+                index.dropped.add(path)
+                continue
             kept.append((path, is_dir))
             if len(kept) == limit:
-                break
-    return kept
+                return kept
+        if len(ranked) < window or time.monotonic() >= deadline:
+            return kept
+        seen = len(ranked)
+        window *= 2
 
 
 def _inside(cwd: str, real_root: str, path: str) -> bool:

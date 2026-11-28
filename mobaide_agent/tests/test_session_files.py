@@ -234,14 +234,19 @@ class TestSlowGit:
 
 @requires_git
 class TestOnDiskCheck:
-    async def test_a_file_deleted_after_the_listing_was_kept_is_left_out(self, tmp_path):
-        root = _files(tmp_path, "notes.txt", "notes-old.txt")
-        await list_session_files(root, "notes", 50)
-        os.remove(os.path.join(root, "notes-old.txt"))
+    async def test_files_deleted_after_the_listing_are_left_out_however_many_rank_first(
+        self, tmp_path
+    ):
+        # More gone files than one look-ahead window must not hide the rest.
+        gone = [f"a{n:03}.txt" for n in range(60)]
+        root = _files(tmp_path, *gone, "z-existing.txt")
+        await list_session_files(root, None, 1)
+        for name in gone:
+            os.remove(os.path.join(root, name))
 
-        listing = await list_session_files(root, "notes", 50)
+        listing = await list_session_files(root, None, 20)
 
-        assert _pairs(listing) == [("notes.txt", False)]
+        assert _pairs(listing) == [("z-existing.txt", False)]
 
     @posix_only
     @pytest.mark.parametrize("lister", ["git", "walk"])
