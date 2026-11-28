@@ -76,6 +76,7 @@ import com.mobaide.app.data.chat.ChatConfigOption
 import com.mobaide.app.data.chat.ChatRequest
 import com.mobaide.app.data.chat.ChatUsage
 import com.mobaide.app.data.chat.ChatStatus
+import com.mobaide.app.data.network.dto.SessionFileEntry
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.ui.common.dismissKeyboardOnTap
 import com.mobaide.app.ui.common.pixel.PixelButton
@@ -133,6 +134,7 @@ fun ChatScreen(
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val composer by viewModel.composer.collectAsStateWithLifecycle()
+    val mentionFiles by viewModel.mentionFiles.collectAsStateWithLifecycle()
     val header by viewModel.header.collectAsStateWithLifecycle()
     val git by viewModel.git.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
@@ -418,10 +420,12 @@ fun ChatScreen(
                 ChatDockArea(
                     ui = ui,
                     composer = composer,
+                    mentionFiles = mentionFiles,
                     kindLabel = header.kindLabel,
                     micButton = voice.micButton,
                     dictationBar = voice.dictationBar,
                     onComposerChange = viewModel::updateComposer,
+                    onPickMention = viewModel::pickMention,
                     onPickConfig = { pickerOptionId = it.id },
                     onOpenSettings = { showSettings = true },
                     onAttach = {
@@ -579,10 +583,12 @@ fun ChatScreen(
 private fun ChatDockArea(
     ui: ChatUiState,
     composer: TextFieldValue,
+    mentionFiles: List<SessionFileEntry>,
     kindLabel: String,
     micButton: (@Composable () -> Unit)?,
     dictationBar: (@Composable () -> Unit)?,
     onComposerChange: (TextFieldValue) -> Unit,
+    onPickMention: (SessionFileEntry) -> Unit,
     onPickConfig: (ChatConfigOption) -> Unit,
     onOpenSettings: () -> Unit,
     onAttach: () -> Unit,
@@ -659,7 +665,9 @@ private fun ChatDockArea(
                     limitWait = ui.state.limitWait,
                 )
             }
-            if (suggestions != null) {
+            if (mentionFiles.isNotEmpty()) {
+                MentionSuggestions(entries = mentionFiles, onPick = onPickMention)
+            } else if (suggestions != null) {
                 SlashSuggestions(
                     suggestions = suggestions,
                     onPick = { command ->

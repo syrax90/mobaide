@@ -230,7 +230,12 @@ final class AppContainer {
             sessionManager: sessionManager,
             tokenStore: tokenStore,
             foregroundSessionTracker: foregroundSessionTracker,
-            reviewPrompt: reviewPromptCoordinator
+            reviewPrompt: reviewPromptCoordinator,
+            listSessionFiles: { [agentAPI] sessionId, query in
+                try await agentAPI.listSessionFiles(
+                    sessionId: sessionId, q: query, limit: ChatMentions.suggestionsLimit
+                ).entries
+            }
         )
         let sessionRepository = SessionRepository(
             agentAPI: agentAPI,

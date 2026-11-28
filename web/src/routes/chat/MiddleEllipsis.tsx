@@ -19,7 +19,8 @@ export function MiddleEllipsis({ text, className }: { text: string; className?: 
       className={className === undefined ? 'mid-ellipsis' : `mid-ellipsis ${className}`}
       title={text}
     >
-      <span className="mid-ellipsis-head">{text.slice(0, start)}</span>
+      {/* An empty head would give the flex box no text baseline. */}
+      {start > 0 && <span className="mid-ellipsis-head">{text.slice(0, start)}</span>}
       <span className="mid-ellipsis-tail">{text.slice(start)}</span>
     </span>
   );

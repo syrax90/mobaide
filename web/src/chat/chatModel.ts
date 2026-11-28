@@ -121,6 +121,8 @@ export class ChatSessionModel {
   readonly store: UseBoundStore<StoreApi<ChatViewState>>;
   /** The composer's unsent text, kept across remounts of the screen. */
   draft = '';
+  /** The files picked from the `@` suggestions for the draft, as their tokens name them. */
+  draftMentions: readonly string[] = [];
 
   private readonly channel: ChatSessionChannel;
   private readonly scheduler: Scheduler;
@@ -247,8 +249,12 @@ export class ChatSessionModel {
     this.patch({ gone: true });
   }
 
-  prompt(text: string, images: readonly ChatImage[]): Promise<ChatResult> {
-    return this.command(promptCommand(text, images));
+  prompt(
+    text: string,
+    images: readonly ChatImage[],
+    mentions: readonly string[] = [],
+  ): Promise<ChatResult> {
+    return this.command(promptCommand(text, images, mentions));
   }
 
   cancel(): Promise<ChatResult> {
@@ -368,9 +374,14 @@ export class ChatSessionModel {
    * the composer is on screen: its text goes before what the user typed
    * since, and its images before theirs, within the limits of one prompt.
    */
-  restoreDraft(text: string, images: readonly PreparedImage[]): void {
+  restoreDraft(
+    text: string,
+    images: readonly PreparedImage[],
+    mentions: readonly string[] = [],
+  ): void {
     if (this.draft.trim() === '') this.draft = text;
     else if (text !== '') this.draft = `${text}\n${this.draft}`;
+    this.draftMentions = [...new Set([...mentions, ...this.draftMentions])];
     let total = 0;
     const kept: PreparedImage[] = [];
     for (const image of [...images, ...this.draftImages]) {

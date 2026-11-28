@@ -66,13 +66,20 @@ final class ChatSessionModel {
     }
 
     var composerText = "" {
-        didSet { spendSuggestionIfDrafting() }
+        didSet {
+            spendSuggestionIfDrafting()
+            refreshMentions()
+        }
     }
     /// The suggestion the user used or typed over: it does not come back when
     /// the composer is empty again.
     private(set) var spentPromptSuggestion: String?
     /// The composer's selection in character offsets (iOS 18+); nil inserts at the end.
-    var composerSelection: Range<Int>?
+    var composerSelection: Range<Int>? {
+        didSet { refreshMentions() }
+    }
+    /// The agent's matches for the `@` token at the cursor; empty when none applies.
+    private(set) var mentionFiles: [SessionFileEntry] = []
     private(set) var composerCursorRequest = 0
     private(set) var attachments: [ChatComposerImage] = [] {
         didSet { spendSuggestionIfDrafting() }
@@ -97,6 +104,13 @@ final class ChatSessionModel {
     /// Rows the user expanded; kept here so a row scrolled out of the lazy
     /// list comes back the way it was left.
     private(set) var expandedItems: Set<String> = []
+
+    /// The `@` token (start, query) the last listing was asked for, so cursor moves do not ask again.
+    @ObservationIgnored private var mentionRequest: (start: Int, query: String)?
+    @ObservationIgnored private var mentionTask: Task<Void, Never>?
+    /// Files picked from the `@` suggestions for the draft, as their tokens name them.
+    @ObservationIgnored private var pickedMentions: [String] = []
+    @ObservationIgnored private let listSessionFiles: SessionFilesLister?
 
     @ObservationIgnored private var timeline = ChatTimeline()
     @ObservationIgnored private let clientId = String(UUID().uuidString.prefix(8)).lowercased()
@@ -138,7 +152,7 @@ final class ChatSessionModel {
     }
 
     private enum PendingCommand {
-        case prompt(text: String, images: [ChatComposerImage])
+        case prompt(text: String, images: [ChatComposerImage], mentions: [String])
         case setConfig(configId: String)
         case respond(requestId: String)
         case signIn(requestId: String)
@@ -161,7 +175,8 @@ final class ChatSessionModel {
         sessionManager: SessionManager,
         tokenStore: TokenStore,
         foregroundSessionTracker: ForegroundSessionTracker,
-        reviewPrompt: ReviewPromptCoordinator
+        reviewPrompt: ReviewPromptCoordinator,
+        listSessionFiles: SessionFilesLister? = nil
     ) {
         self.sessionId = sessionId
         self.webSocketFactory = webSocketFactory
@@ -169,6 +184,7 @@ final class ChatSessionModel {
         self.tokenStore = tokenStore
         self.foregroundSessionTracker = foregroundSessionTracker
         self.reviewPrompt = reviewPrompt
+        self.listSessionFiles = listSessionFiles
         (outbound, outboundContinuation) = AsyncStream.makeStream(of: Outbound.self)
     }
 
@@ -505,9 +521,9 @@ final class ChatSessionModel {
     private func handleResult(_ result: ChatResultFrame) {
         guard let id = result.id, let command = takePending(id) else { return }
         switch command {
-        case .prompt(let text, let images):
+        case .prompt(let text, let images, let mentions):
             guard !result.ok else { return }
-            restoreDraft(text: text, images: images)
+            restoreDraft(text: text, images: images, mentions: mentions)
             message = ToastMessage(text: result.error ?? "The message was not sent", tone: .danger)
         case .setConfig(let configId):
             guard !result.ok else { return }
@@ -599,8 +615,8 @@ final class ChatSessionModel {
     private func sendFailed(_ commandId: String?, promptNotice: String = "Not sent. Check the connection.") {
         guard let commandId, let command = takePending(commandId) else { return }
         switch command {
-        case .prompt(let text, let images):
-            restoreDraft(text: text, images: images)
+        case .prompt(let text, let images, let mentions):
+            restoreDraft(text: text, images: images, mentions: mentions)
             message = ToastMessage(text: promptNotice, tone: .danger)
         case .setConfig(let configId):
             configOverrides[configId] = nil
@@ -654,13 +670,14 @@ final class ChatSessionModel {
         deadlines = [:]
     }
 
-    private func restoreDraft(text: String, images: [ChatComposerImage]) {
+    private func restoreDraft(text: String, images: [ChatComposerImage], mentions: [String]) {
         if composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             composerText = text
         } else if !text.isEmpty {
             composerText = text + "\n" + composerText
         }
         composerSelection = nil
+        pickedMentions = mentions + pickedMentions.filter { !mentions.contains($0) }
         var total = 0
         attachments = (images + attachments).prefix(Self.maxImages).filter { image in
             total += image.payload.data.utf8.count
@@ -694,12 +711,17 @@ final class ChatSessionModel {
             return
         }
         let images = attachments
+        let mentions = ChatMentions.inText(text, picked: pickedMentions)
+        pickedMentions = []
         composerText = ""
         composerSelection = nil
         attachments = []
         followRequests &+= 1
         let id = nextCommandId()
-        enqueue(.prompt(id: id, text: text, images: images.map(\.payload)), pending: .prompt(text: text, images: images))
+        enqueue(
+            .prompt(id: id, text: text, images: images.map(\.payload), mentions: mentions),
+            pending: .prompt(text: text, images: images, mentions: mentions)
+        )
     }
 
     func stop() {
@@ -834,6 +856,57 @@ final class ChatSessionModel {
         if #available(iOS 18.0, *) {
             composerSelection = result.cursor..<result.cursor
             composerCursorRequest += 1
+        }
+    }
+
+    /// Replaces the `@` token at the cursor with `entry`; a folder keeps the list open inside it.
+    func pickMention(_ entry: SessionFileEntry) {
+        guard let token = ChatMentions.token(
+            in: composerText, cursor: mentionCursor ?? composerText.count, picked: pickedMentions
+        ) else { return }
+        let value = ChatMentions.value(path: entry.path, dir: entry.dir)
+        let result = ChatMentions.insert(value, replacing: token, in: composerText)
+        pickedMentions.removeAll { $0 == value }
+        pickedMentions.append(value)
+        composerSelection = nil
+        composerText = result.text
+        if #available(iOS 18.0, *) {
+            composerSelection = result.cursor..<result.cursor
+            composerCursorRequest += 1
+        }
+    }
+
+    /// The cursor for the `@` token: the end of the text where the selection
+    /// is unknown (before iOS 18); nil while a range is selected.
+    private var mentionCursor: Int? {
+        guard let selection = composerSelection else { return composerText.count }
+        return selection.isEmpty ? selection.upperBound : nil
+    }
+
+    /// Asks the agent for matches when the cursor sits in an `@` token, after a short pause.
+    private func refreshMentions() {
+        guard listSessionFiles != nil, state.promptMentions, isLive, !sessionClosed,
+              let cursor = mentionCursor,
+              let token = ChatMentions.token(in: composerText, cursor: cursor, picked: pickedMentions)
+        else {
+            mentionTask?.cancel()
+            mentionTask = nil
+            mentionRequest = nil
+            if !mentionFiles.isEmpty { mentionFiles = [] }
+            return
+        }
+        if let last = mentionRequest, last.start == token.start, last.query == token.query { return }
+        // Another token: the list of the last one does not apply to it.
+        if mentionRequest?.start != token.start, !mentionFiles.isEmpty { mentionFiles = [] }
+        mentionRequest = (token.start, token.query)
+        mentionTask?.cancel()
+        mentionTask = Task { [weak self, sessionId, listSessionFiles] in
+            try? await Task.sleep(for: ChatMentions.debounce)
+            guard !Task.isCancelled, let listSessionFiles else { return }
+            // No suggestions is the whole failure mode: the user types the path.
+            let entries = (try? await listSessionFiles(sessionId, token.query)) ?? []
+            guard !Task.isCancelled else { return }
+            self?.mentionFiles = entries
         }
     }
 

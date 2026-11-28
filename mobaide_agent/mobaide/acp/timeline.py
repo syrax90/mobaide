@@ -81,7 +81,9 @@ def default_state() -> dict[str, Any]:
         "plan": [],
         "requests": [],
         "queue": [],
-        "prompt_caps": {"image": False},
+        # ``mentions``: the ``prompt`` command takes ``mentions`` and the
+        # session's files are listed for ``@`` suggestions.
+        "prompt_caps": {"image": False, "mentions": True},
         "turn_started_at": None,
         "cancelling": False,
         "steering": False,

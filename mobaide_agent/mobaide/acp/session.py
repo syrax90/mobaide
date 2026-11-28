@@ -15,13 +15,18 @@ import binascii
 import collections
 import logging
 import math
+import mimetypes
 import os
+import re
 import secrets
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import orjson
 
@@ -69,6 +74,12 @@ IMAGE_B64_MAX = 1_500_000
 # One 'c' frame must stay under the relay's 4 MiB frame limit.
 IMAGES_B64_TOTAL_MAX = 3_500_000
 IMAGE_MIMES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+# Files a prompt mentions with ``@``: each one goes to the agent as a
+# ``resource_link`` next to the text, which keeps the ``@path`` too.
+MENTIONS_MAX = 10
+MENTION_PATH_MAX = 4096
+_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
+_LINK_MIMES = frozenset({"application/pdf", "application/json"})
 QUEUE_MAX = 10
 CANCEL_GRACE = 15.0
 # How long closing a session on a shared host waits for its own turn to stop.
@@ -156,6 +167,16 @@ class _PendingRequest:
     quick: dict[str, str] | None = None
 
 
+@dataclass(frozen=True)
+class _Mention:
+    # Relative to the session folder, ``/`` separators, no trailing one.
+    path: str
+    # Under the session folder as the agent was given it (not resolved), so
+    # an agent that checks the project root sees its own prefix.
+    abs_path: str
+    is_dir: bool
+
+
 @dataclass
 class _QueuedPrompt:
     key: str
@@ -170,6 +191,7 @@ class _QueuedPrompt:
     not_before: float | None = None
     # Mobaide sent it, not the user: it does not reset the automatic-continue count.
     auto: bool = False
+    mentions: Sequence[_Mention] = ()
 
 
 @dataclass
@@ -726,7 +748,7 @@ class ChatSession:
                     "title": str(info.get("title") or self._agent_title),
                     "version": str(info.get("version") or ""),
                 },
-                prompt_caps={"image": bool(prompt_caps.get("image"))},
+                prompt_caps={"image": bool(prompt_caps.get("image")), "mentions": True},
                 steering=self._steering,
             )
             if not await self._ensure_trusted():
@@ -1078,6 +1100,7 @@ class ChatSession:
         text = cmd.get("text")
         text = text.strip() if isinstance(text, str) else ""
         images = self._validated_images(cmd.get("images"))
+        mentions = self._validated_mentions(cmd.get("mentions"))
         if not text and not images:
             raise ChatCommandError("The message is empty")
         if len(text) > PROMPT_TEXT_MAX:
@@ -1091,7 +1114,7 @@ class ChatSession:
             raise ChatCommandError("The agent is not running. Use Restart to start it again.")
         # The user is back: their message goes out now, not a continue later.
         self._cancel_limit_wait()
-        key = self._enqueue_or_send(text, images)
+        key = self._enqueue_or_send(text, images, mentions)
         return {"queued": key is not None, "queue_id": key}
 
     def _validated_images(self, raw: Any) -> list[dict[str, str]]:
@@ -1122,7 +1145,30 @@ class ChatSession:
             raise ChatCommandError("The images are too large together")
         return images
 
-    def _enqueue_or_send(self, text: str, images: list[dict[str, str]]) -> str | None:
+    def _validated_mentions(self, raw: Any) -> list[_Mention]:
+        """The mentioned paths that exist inside the session folder; any
+        other one is dropped, as the text still names it."""
+        if raw is None:
+            return []
+        if not isinstance(raw, list):
+            raise ChatCommandError("Invalid mentions")
+        if self._real_cwd is None:
+            self._real_cwd = real_cwd(self._plan.cwd)
+        root = self._real_cwd
+        if root is None:
+            return []
+        mentions: list[_Mention] = []
+        # Sliced first: each entry costs filesystem calls on the event loop,
+        # so a long list must not get checked in full.
+        for entry in raw[:MENTIONS_MAX]:
+            mention = _resolve_mention(self._plan.cwd, root, entry)
+            if mention is not None and all(m.path != mention.path for m in mentions):
+                mentions.append(mention)
+        return mentions
+
+    def _enqueue_or_send(
+        self, text: str, images: list[dict[str, str]], mentions: Sequence[_Mention] = ()
+    ) -> str | None:
         busy = (
             not self._ready.is_set()
             or self._own_turn_running()
@@ -1130,12 +1176,12 @@ class ChatSession:
             or bool(self._queue)
         )
         if not busy:
-            self._start_prompt(text, images)
+            self._start_prompt(text, images, mentions=mentions)
             return None
         if len(self._queue) >= QUEUE_MAX:
             raise ChatCommandError("Too many queued messages")
         key = self._next_id("q")
-        self._queue.append(_QueuedPrompt(key, text, images))
+        self._queue.append(_QueuedPrompt(key, text, images, mentions=mentions))
         self._publish_queue()
         if (
             self._ready.is_set()
@@ -1172,7 +1218,7 @@ class ChatSession:
             return False
         self._queue.remove(nxt)
         self._publish_queue()
-        self._start_prompt(nxt.text, nxt.images, mode=nxt.mode, auto=nxt.auto)
+        self._start_prompt(nxt.text, nxt.images, mentions=nxt.mentions, mode=nxt.mode, auto=nxt.auto)
         return True
 
     def _start_prompt(
@@ -1180,13 +1226,14 @@ class ChatSession:
         text: str,
         images: list[dict[str, str]],
         *,
+        mentions: Sequence[_Mention] = (),
         mode: str | None = None,
         auto: bool = False,
     ) -> None:
         self._note_prompt_source(auto)
         self._close_streaming_items()
-        self._show_user_message(text, images)
-        blocks = _prompt_blocks(text, images)
+        self._show_user_message(text, images, mentions)
+        blocks = self._prompt_blocks(text, images, mentions)
         self._clear_attention()
         if self._gate is not None:
             # The quiet window of the turn before must not alert during this
@@ -1209,7 +1256,8 @@ class ChatSession:
         self._turn_stop = None
         self._turn_reopened = False
         self._turn_task = asyncio.create_task(
-            self._run_turn(blocks, text, images, mode), name=f"chat-turn-{self.session_id}"
+            self._run_turn(blocks, text, images, mode, mentions=mentions),
+            name=f"chat-turn-{self.session_id}",
         )
 
     def _note_prompt_source(self, auto: bool) -> None:
@@ -1218,16 +1266,27 @@ class ChatSession:
             self._cancel_limit_wait()
         self._auto_continues = self._auto_continues + 1 if auto else 0
 
-    def _show_user_message(self, text: str, images: list[dict[str, str]]) -> None:
+    def _show_user_message(
+        self, text: str, images: list[dict[str, str]], mentions: Sequence[_Mention] = ()
+    ) -> None:
+        attachments: list[dict[str, Any]] = [{"kind": "image", "mime": img["mime"]} for img in images]
+        attachments += [
+            {"kind": "file", "name": m.path + "/" if m.is_dir else m.path} for m in mentions
+        ]
         self._timeline.upsert(
             {
                 "id": self._next_id("u"),
                 "type": "user",
                 "text": text,
-                "attachments": [{"kind": "image", "mime": img["mime"]} for img in images],
+                "attachments": attachments,
                 "at": _now_iso(),
             }
         )
+
+    def _prompt_blocks(
+        self, text: str, images: list[dict[str, str]], mentions: Sequence[_Mention]
+    ) -> list[dict[str, Any]]:
+        return _prompt_blocks(text, images, mentions if self._plan.prompt_links else ())
 
     async def _switch_mode(self, mode: str) -> None:
         """Put the agent in ``mode`` for the message about to be sent."""
@@ -1250,6 +1309,7 @@ class ChatSession:
         mode: str | None = None,
         *,
         request: asyncio.Future[Any] | None = None,
+        mentions: Sequence[_Mention] = (),
     ) -> None:
         """``request``: the steering prompt's answer, already on its way."""
         tl = self._timeline
@@ -1324,7 +1384,7 @@ class ChatSession:
                 if self._ready.is_set():
                     # Not while a new conversation replaces this one.
                     self._auth_retry.append(
-                        _QueuedPrompt(self._next_id("q"), text, images, mode=mode)
+                        _QueuedPrompt(self._next_id("q"), text, images, mode=mode, mentions=mentions)
                     )
                     del self._auth_retry[:-QUEUE_MAX]
                 self._sign_in.offer()
@@ -1350,7 +1410,9 @@ class ChatSession:
             self._ready.clear()
             tl.patch_state(status="starting", turn_started_at=None, cancelling=False, urgent=True)
             # Sent once the reloaded conversation is open (bootstrap drains the queue).
-            self._queue.insert(0, _QueuedPrompt(self._next_id("q"), text, images, mode=mode))
+            self._queue.insert(
+                0, _QueuedPrompt(self._next_id("q"), text, images, mode=mode, mentions=mentions)
+            )
             self._publish_queue()
             self._reload_notice = True
             # A task of its own: the reload cancels a running turn, this one.
@@ -1705,7 +1767,9 @@ class ChatSession:
             self._external_turn = False
             self._queue.remove(queued)
             self._publish_queue()
-            self._start_prompt(queued.text, queued.images, mode=queued.mode, auto=queued.auto)
+            self._start_prompt(
+                queued.text, queued.images, mentions=queued.mentions, mode=queued.mode, auto=queued.auto
+            )
             return {"steered": True}
         if self._steer_by_prompt and self._own_turn_running():
             return await self._steer_with_prompt(queued)
@@ -1720,7 +1784,7 @@ class ChatSession:
                 STEER_METHOD,
                 {
                     "sessionId": self._acp_session_id,
-                    "prompt": _prompt_blocks(queued.text, queued.images),
+                    "prompt": self._prompt_blocks(queued.text, queued.images, queued.mentions),
                     "_meta": {"steering": {"idleBehavior": "promptRequired"}},
                 },
                 STEER_TIMEOUT,
@@ -1742,7 +1806,7 @@ class ChatSession:
                 self._publish_queue()
             self._timeline.patch_state(prompt_suggestions=[])
             self._close_streaming_items()
-            self._show_user_message(queued.text, queued.images)
+            self._show_user_message(queued.text, queued.images, queued.mentions)
             return {"steered": True}
         # The turn ended meanwhile: the message stays first in the queue.
         self._start_queue_if_idle()
@@ -1774,7 +1838,10 @@ class ChatSession:
         request = asyncio.ensure_future(
             conn.request(
                 "session/prompt",
-                {"sessionId": self._acp_session_id, "prompt": _prompt_blocks(queued.text, queued.images)},
+                {
+                    "sessionId": self._acp_session_id,
+                    "prompt": self._prompt_blocks(queued.text, queued.images, queued.mentions),
+                },
             )
         )
         # Until the new prompt owns the turn, the session still reads as busy:
@@ -1821,9 +1888,11 @@ class ChatSession:
             self._publish_queue()
         self._note_prompt_source(queued.auto)
         self._close_streaming_items()
-        self._show_user_message(queued.text, queued.images)
+        self._show_user_message(queued.text, queued.images, queued.mentions)
         self._turn_task = asyncio.create_task(
-            self._run_turn([], queued.text, queued.images, request=request),
+            self._run_turn(
+                [], queued.text, queued.images, request=request, mentions=queued.mentions
+            ),
             name=f"chat-turn-{self.session_id}",
         )
         if self._cancel_watchdog is not None:
@@ -2728,13 +2797,40 @@ class ChatSession:
             self._current_user_item = item["id"]
             tl.upsert(item)
         if part["type"] == "text":
-            tl.append_text(item["id"], part["text"])
+            # Claude Code, Codex, Copilot and the Pi bridge keep a linked
+            # file as text (see split_file_links): it shows as a file chip again.
+            text, links = nz.split_file_links(part["text"])
+            if text:
+                tl.append_text(item["id"], text)
+            if links:
+                item["attachments"] = [
+                    *item["attachments"],
+                    *({"kind": "file", "name": self._file_link_label(uri, name)} for name, uri in links),
+                ]
+                tl.touch(item["id"])
         elif part["type"] == "image":
             item["attachments"] = [*item["attachments"], {"kind": "image", "mime": part["mime"]}]
             tl.touch(item["id"])
         elif part["type"] in ("link", "resource"):
-            item["attachments"] = [*item["attachments"], {"kind": "file", "name": part.get("name")}]
+            name = part.get("name")
+            if part.get("uri", "").startswith("file://"):
+                name = self._file_link_label(part["uri"], name)
+            item["attachments"] = [*item["attachments"], {"kind": "file", "name": name}]
             tl.touch(item["id"])
+
+    def _file_link_label(self, uri: str, name: str | None) -> str | None:
+        """The path of a linked file relative to the session folder, as the
+        live message showed it (a folder's URI and label end with ``/``); its
+        name when it lies elsewhere."""
+        try:
+            path = url2pathname(urlsplit(uri).path)
+            rel = os.path.relpath(path, self._plan.cwd)
+        # Windows url2pathname raises OSError for a malformed URI (3.12, 3.13).
+        except (OSError, ValueError):
+            return name
+        if rel == os.curdir or rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            return name
+        return rel.replace(os.sep, "/") + ("/" if uri.endswith("/") else "")
 
     def _apply_tool_update(
         self, update: dict[str, Any], *, create: bool, subagent: sa.Subagent | None = None
@@ -3557,10 +3653,52 @@ def _usage_limit_reset(exc: AcpRpcError) -> tuple[float, str | None] | None:
     return resets_at, limit_type if isinstance(limit_type, str) and limit_type else None
 
 
-def _prompt_blocks(text: str, images: list[dict[str, str]]) -> list[dict[str, Any]]:
+def _prompt_blocks(
+    text: str, images: list[dict[str, str]], mentions: Sequence[_Mention] = ()
+) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     if text:
         blocks.append({"type": "text", "text": text})
     for img in images:
         blocks.append({"type": "image", "mimeType": img["mime"], "data": img["data"]})
+    for mention in mentions:
+        uri = Path(mention.abs_path).as_uri()
+        link: dict[str, Any] = {
+            "type": "resource_link",
+            # A folder's URI ends with "/", so a replay can tell it apart.
+            "uri": uri + "/" if mention.is_dir else uri,
+            "name": mention.path.rsplit("/", 1)[-1],
+            "title": mention.path,
+        }
+        if not mention.is_dir:
+            # Only a type the host's table gets right: it maps ``.ts`` to
+            # video/mp2t on many hosts. Without one an agent reads text.
+            mime, _ = mimetypes.guess_type(mention.path)
+            if mime and (mime.startswith(("text/", "image/")) or mime in _LINK_MIMES):
+                link["mimeType"] = mime
+        blocks.append(link)
     return blocks
+
+
+def _resolve_mention(cwd: str, real_root: str, raw: Any) -> _Mention | None:
+    """``raw`` as a mention of a path that exists inside the session folder
+    ``cwd`` (real path ``real_root``), or None: absolute paths, ``..``, and
+    symlinks that lead out of the folder are refused."""
+    if not isinstance(raw, str) or not raw or len(raw) > MENTION_PATH_MAX or "\0" in raw:
+        return None
+    if raw.startswith(("/", "\\")) or _DRIVE_PREFIX.match(raw) or os.path.isabs(raw):
+        return None
+    rel = raw.replace("\\", "/").rstrip("/")
+    parts = rel.split("/")
+    if not rel or any(part in ("", ".", "..") for part in parts):
+        return None
+    joined = os.path.normpath(os.path.join(cwd, *parts))
+    try:
+        real = os.path.realpath(joined)
+        root = os.path.normcase(real_root)
+        if not os.path.exists(real) or os.path.commonpath([root, os.path.normcase(real)]) != root:
+            return None
+        is_dir = os.path.isdir(real)
+    except (OSError, ValueError):
+        return None
+    return _Mention(path=rel, abs_path=joined, is_dir=is_dir)

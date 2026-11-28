@@ -751,14 +751,16 @@ class TestPromptParts:
             {"type": "image", "data": "AAAA", "mimeType": "image/jpeg"},
             {"type": "text", "text": "and this"},
             {"type": "image", "data": "BBBB"},
-            {"type": "resource_link", "uri": "file:///a"},
+            {"type": "resource_link", "uri": "file:///w/src/app.py", "name": "app.py"},
             {"type": "image"},
             "junk",
         ]
 
         text, images = pi_bridge.prompt_parts(blocks)
 
-        assert text == "Look at this\nand this"
+        # Pi takes text only: a linked file goes as the link Claude Code
+        # writes, which a replay shows as a file chip again.
+        assert text == "Look at this\nand this\n[@app.py](file:///w/src/app.py)"
         assert images == [
             {"type": "image", "data": "AAAA", "mimeType": "image/jpeg"},
             {"type": "image", "data": "BBBB", "mimeType": "image/png"},
@@ -1732,7 +1734,7 @@ class TestPrompt:
 
     @pytest.mark.parametrize(
         "prompt",
-        [[], [{"type": "text", "text": "  \n "}], [{"type": "resource_link", "uri": "file:///a"}]],
+        [[], [{"type": "text", "text": "  \n "}], [{"type": "audio", "data": "CCCC"}]],
         ids=["no-blocks", "blank", "nothing-pi-takes"],
     )
     async def test_an_empty_message_is_refused(self, bridge, work, prompt):

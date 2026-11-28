@@ -4920,6 +4920,12 @@ body:has(dialog[open]) {
   white-space: nowrap;
 }
 
+/* A path chip: a path wider than the bubble loses its middle, as on Android and iOS. */
+.chat-badge-file {
+  max-width: 100%;
+  min-width: 0;
+}
+
 /* Inside the conversation every text is in the reading face, never the pixel one. */
 .chat-timeline .chat-badge {
   font-family: var(--font-body);
@@ -6524,6 +6530,25 @@ body:has(dialog[open]) {
   flex: none;
   font-family: var(--font-code);
   font-size: 0.9rem;
+}
+
+/* A long file name shrinks with an ellipsis instead of pushing out of the list;
+   the folder after it takes what is left and loses its middle. */
+.chat-suggestion-file .chat-suggestion-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-suggestion-file .chat-suggestion-name:not(:last-child) {
+  max-width: 75%;
+}
+
+.chat-suggestion-file .chat-suggestion-description {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .chat-suggestion-description {

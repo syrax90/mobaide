@@ -189,6 +189,7 @@ enum FixtureRegistry {
         "FirstAgentPairedPayload": runner(FirstAgentPairedPayload.self),
         // FsDto.swift
         "FsDirsResponse": runner(FsDirsResponse.self),
+        "SessionFilesResponse": runner(SessionFilesResponse.self),
         // VersionDto.swift
         "VersionInfoResponse": runner(VersionInfoResponse.self),
         // VoiceDto.swift

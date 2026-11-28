@@ -44,6 +44,8 @@ const BUILDERS: Readonly<Record<string, () => ChatCommand>> = {
   prompt_text: () => promptCommand('Fix the failing test', []),
   prompt_with_image: () =>
     promptCommand('What is on this screen?', [{ mime: 'image/png', data: 'iVBORw0KGgo=' }]),
+  prompt_with_mentions: () =>
+    promptCommand('Explain @src/app.py and @docs/', [], ['src/app.py', 'docs/']),
   cancel: () => ({ op: 'cancel' }),
   set_config_select: () => ({ op: 'set_config', config_id: 'model', value: 'sonnet' }),
   set_config_boolean: () => ({ op: 'set_config', config_id: 'fast', value: true }),
@@ -135,7 +137,7 @@ describe('chat frame golden fixtures', () => {
       'integer',
     ]);
     expect(state.queue).toEqual([{ id: 'q:14', text: 'Also update the README', images: 0 }]);
-    expect(state.prompt_caps.image).toBe(true);
+    expect(state.prompt_caps).toEqual({ image: true, mentions: true });
     expect(state.steering).toBe(true);
     expect(state.new_conversation).toBe(true);
     const tool = frame.items[3];
@@ -385,6 +387,13 @@ describe('chat frame golden fixtures', () => {
     expect(started.seq).toBe(60);
     expect(started.state.status).toBe('running');
     expect(started.state.prompt_suggestions).toEqual([]);
+  });
+
+  it('reads an agent that does not say mentions as one without them', () => {
+    // An agent from before `@` mentions has no files route and ignores `mentions`.
+    const patch = normalizeStatePatch({ prompt_caps: { image: true } });
+
+    expect(patch.prompt_caps).toEqual({ image: true, mentions: false });
   });
 
   it('drops a blank suggested prompt', () => {

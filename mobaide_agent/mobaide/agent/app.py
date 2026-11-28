@@ -99,6 +99,7 @@ from .autoscan.models import AUTOSCAN_CAPABILITIES
 from .autoscan.templates import TEMPLATES_FILE_NAME, AutoScanTemplatesStore
 from .fs.models import FS_CAPABILITIES
 from .fs.router import router as fs_router
+from .fs.router import session_files_router
 from .update_check import (
     PERIODIC_POLL_INTERVAL_SECONDS,
     run_https_update_check,
@@ -1029,6 +1030,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(hooks_router)
     app.include_router(workspaces_router)
     app.include_router(fs_router)
+    app.include_router(session_files_router)
     app.include_router(git_router)
     app.include_router(session_git_router)
     app.include_router(ws_session_io_router)

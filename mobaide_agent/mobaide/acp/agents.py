@@ -285,6 +285,10 @@ class ChatLaunchPlan:
     # (it answers the running prompt ``end_turn`` and goes on with the same
     # reply), though ``initialize`` does not say so. Send now then uses that.
     steer_by_prompt: bool = False
+    # Files the user mentions with ``@`` go out as ACP ``resource_link``
+    # blocks next to the text. Off for an agent that mishandles them: it then
+    # gets the ``@path`` in the text only.
+    prompt_links: bool = True
 
 
 class ChatAgentSpec(Protocol):
